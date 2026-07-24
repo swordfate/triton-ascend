@@ -76,11 +76,35 @@ finalizeDiscreteEventReport() / finalizeScheduledReport()
 
 `HIVMAnalysis.cpp` 最显著的特征是大面积的 `#ifdef TRITONSIM_HAS_BISHENGIR_HIVM` 条件编译。这不是代码质量问题，而是一个精心设计的**双模式架构**。
 
-### 2.1 背景：bishengir 是闭源的外部编译器
+### 2.1 背景：HIVM dialect 源码存在，但默认不编译
 
-NPUIR 中的 `hivm.hir.*` ops 属于 bishengir 的 HIVM dialect。这个 dialect 的头文件（`bishengir/Dialect/HIVM/IR/HIVM.h`）和链接库只有在华为内部开发环境中才能获得。开源版本的 triton-ascend **不包含 bishengir**。
+NPUIR 中的 `hivm.hir.*` ops 属于 HIVM dialect。HIVM dialect 的定义**是开源的**，在 AscendNPU-IR 子仓库中：
 
-### 2.2 模式 A：有 bishengir（内部构建）—— `populateTypedHivmOp()`
+```
+third_party/ascend/AscendNPU-IR/bishengir/include/bishengir/Dialect/HIVM/IR/
+├── HIVM.h                  ← 主入口 header
+├── HIVMBase.td             ← dialect 声明 + 枚举（PIPE, AddressSpace, CoreType 等）
+├── HIVMOps.td              ← 核心 op（vadd, vbrc, load, store, pointer_cast 等）
+├── HIVMSynchronizationOps.td ← set_flag, wait_flag, pipe_barrier, sync_block_set/wait
+├── HIVMVectorOps.td        ← 向量 op
+├── HIVMDMAOps.td           ← DMA op
+├── HIVMAttrs.td            ← 自定义属性
+├── HIVMTraits.td / HIVMTraits.h
+└── HIVMInterfaces.td / HIVMInterfaces.h
+```
+
+那为什么还有 `TRITONSIM_HAS_BISHENGIR_HIVM` 这个宏？因为**有源码不代表编译进去了**。
+
+`pip install -e .` 构建 triton-ascend 时，CMake 并**不会**编译 AscendNPU-IR 里的 HIVM dialect 库并链接到 costmodel。这个宏在开源构建系统中**从未被定义过**——它需要由上层构建系统（华为内部 CI）手动传入 `-DTRITONSIM_HAS_BISHENGIR_HIVM=ON`。
+
+typed 路径需要的不只是头文件，还需要：
+1. HIVM dialect 的 tablegen 生成产物（`.h.inc` 文件）
+2. HIVM dialect 的 C++ 实现编译成的 `.so`/`.a`
+3. 在 `MLIRContext` 中调用 `registry.insert<mlir::hivm::HIVMDialect>()`
+
+这三步在开源 `pip install -e .` 中都不会发生，所以 typed 路径在开源构建中是**死代码**。
+
+### 2.2 模式 A：Typed 路径（HIVM dialect 库已链接）—— `populateTypedHivmOp()`
 
 ```cpp
 // HIVMAnalysis.cpp:617-781
@@ -100,7 +124,7 @@ static bool populateTypedHivmOp(mlir::Operation *op, ParsedOp &parsed) {
 
 当 bishengir HIVM dialect 可用时，`hivm::LoadOp`、`hivm::SetFlagOp` 等都有完整的 C++ 类型定义。可以通过 `llvm::dyn_cast` 做精确的类型匹配，通过 Op interface 读取 pipe、core type、event ID 等信息。**解析质量最高，不需要任何字符串解析。**
 
-### 2.3 模式 B：无 bishengir（开源构建）—— `populateGenericHivmOp()`
+### 2.3 模式 B：Generic 路径（HIVM dialect 未链接，开源构建默认）—— `populateGenericHivmOp()`
 
 ```cpp
 // HIVMAnalysis.cpp:844-907
@@ -122,7 +146,9 @@ static bool populateGenericHivmOp(mlir::Operation *op, ParsedOp &parsed) {
 }
 ```
 
-在没有 bishengir 时，ops 被 MLIR parser 当作**未注册 dialect 的通用 operation** 处理——`op->getAttr("set_pipe")` 返回的是字符串化的 attribute（因为 MLIR parser 不知道这个 attribute 的类型，保留为 `StringAttr` 或 `BuiltinAttr`）。因此需要通过 `stringifyAttribute()` + `parsePipeToken()` 做**字符串级解析**。
+在没有 HIVM dialect 注册时，ops 被 MLIR parser 通过 `allowUnregisteredDialects()` 当作**未注册的通用 operation** 处理——op 名称保留为字符串，attributes 保留为不透明的通用格式。因此需要通过 `stringifyAttribute()` + `parsePipeToken()` 做**字符串级解析**来从中提取 pipe、event ID 等信息。
+
+但 `allowUnregisteredDialects()` 只能处理 op 名称不认识的情况，**不能处理自定义 dialect 属性语法**（如 `#hivm.address_space<ub>`）。这就是为什么还需要 `sanitizeMlirBuffer()` 在 parse 前做文本替换（见 2.4 节）。
 
 **两种模式的主要差异**：
 
@@ -149,26 +175,57 @@ static std::string sanitizeMlirBuffer(llvm::StringRef buffer) {
 }
 ```
 
-**为什么需要 sanitize？** `.npuir.mlir` 文件是从 `bishengir-compile --bishengir-print-ir-after` 输出的，包含完整的 `#hivm.address_space<gm>` 等自定义 dialect 属性。在没有 bishengir 的构建中，MLIR parser 不认识这些属性格式，会解析失败。sanitize 把自定义属性替换为整数（MLIR 内置格式）或直接删除。
+**为什么需要 sanitize？MLIR parser 的 `allowUnregisteredDialects()` 不是已经允许未注册的 op 了吗？**
 
-**为什么安全？** HIVMAnalysis 只关心 op 名称、pipe 标记、event ID、地址空间（gm/ub/l1）这些性能相关信息。`hacc.function_kind<DEVICE>` 这类 `hacc` 属性纯粹是后端编译器用的元数据，不影响性能建模。
+关键区别：`allowUnregisteredDialects()` 处理的是**未注册的 op 名称**（如 `hivm.hir.vadd`），parser 会把它当做通用 `Operation*` 解析，属性保留为不透明的 `Attr`。但 `.npuir.mlir` 中包含**自定义 dialect 属性**，例如：
 
-### 2.5 sanitize 的 Fallback 策略
-
-```cpp
-// HIVMAnalysis.cpp:2728-2741
-llvm::SmallVector<llvm::StringRef, 2> parseCandidates;
-parseCandidates.push_back(rawBuffer);        // 先尝试原始内容
-if (sanitized != rawBuffer)
-  parseCandidates.push_back(sanitized);      // 失败了再尝试 sanitized
-for (llvm::StringRef buffer : parseCandidates) {
-  if (auto module = mlir::parseSourceString<mlir::ModuleOp>(buffer, &context)) {
-    // 成功则直接分析
-  }
-}
+```mlir
+memref<1024xf32, #hivm.address_space<ub>>
 ```
 
-先尝试 parse 原始内容（如果构建中有 bishengir，原始内容就能直接 parse），失败再用 sanitized 版本。这是一个**优雅的兼容性设计**。
+`#hivm.address_space<ub>` 是一个**属性别名**（attribute alias）。MLIR parser 解析它时需要知道：
+- `hivm` dialect 是否已注册
+- 如果已注册，调用 HIVM dialect 的属性 parser 来解析 `<ub>` 部分
+- 如果未注册 → **解析失败**（即使开了 `allowUnregisteredDialects`）
+
+`sanitizeMlirBuffer()` 的做法是把这些自定义属性格式**文本替换**为 parser 原生就认识的格式：
+
+```
+#hivm.address_space<gm>  →  0    (MLIR builtin integer attribute)
+#hivm.address_space<ub>  →  1
+#hivm.address_space<l1>  →  2
+hacc.arg_type = #hacc.arg_type<sync_block_lock>  →  整段删除
+hivm.func_core_type = #hivm.func_core_type<AIV>   →  整段删除
+```
+
+替换后，`memref<1024xf32, 1>` 使用了 MLIR 原生的整数 memory space 格式，parser 可以直接处理。
+
+**为什么安全？** HIVMAnalysis 只关心 op 名称、pipe 标记、event ID、地址空间（gm/ub/l1）这些性能相关信息。`hacc.function_kind<DEVICE>` 这类属性纯粹是后端编译器用的元数据，删除后不影响性能建模。
+
+### 2.5 双尝试的 Fallback 策略
+
+```cpp
+// HIVMAnalysis.cpp:2708-2741
+mlir::DialectRegistry registry;
+// 只注册标准 dialect，不注册 HIVM/HACC/Annotation（默认构建）
+registry.insert<mlir::BuiltinDialect, mlir::affine::AffineDialect,
+                mlir::func::FuncDialect, mlir::arith::ArithDialect,
+                mlir::memref::MemRefDialect, mlir::scf::SCFDialect>();
+#ifdef TRITONSIM_HAS_BISHENGIR_HIVM
+registry.insert<mlir::annotation::AnnotationDialect,
+                mlir::hacc::HACCDialect, mlir::hivm::HIVMDialect>();  // 只有内部构建才有
+#endif
+mlir::MLIRContext context(registry);
+context.allowUnregisteredDialects();  // 允许未注册 op，但不解决自定义属性解析问题
+
+// 先尝试 parse 原始内容，失败再尝试 sanitized
+llvm::SmallVector<llvm::StringRef, 2> parseCandidates;
+parseCandidates.push_back(rawBuffer);
+if (sanitized != rawBuffer)
+  parseCandidates.push_back(sanitized);
+```
+
+先尝试 parse 原始内容——如果 HIVM dialect 已注册（内部构建），原始内容直接成功。如果 HIVM dialect 未注册（开源构建），自定义属性会导致解析失败，此时 fallback 到 sanitized 版本。这是一个**优雅的兼容性设计**，一套代码同时适用于两种构建模式。
 
 ---
 
@@ -731,7 +788,7 @@ void HIVMAnalysisReport::emitPerfettoTrace(...) {
 
 1. **输入格式不兼容**：`run_costmodel_inproc` 输入 TTIR → `ConvertTritonToAscend` pass → AscendModel dialect。HIVMAnalysis 输入 NPUIR（`hivm.hir.*` ops）。要集成，需要在 `run_costmodel_inproc` 中调用 `bishengir-compile` 把 TTIR 变成 NPUIR——但这需要 bishengir 二进制在运行环境中存在。
 
-2. **编译依赖**：`TRITONSIM_HAS_BISHENGIR_HIVM` 宏。在开源构建中 HIVMAnalysis 的核心解析逻辑不可用（回退到 generic 路径），而 generic 路径依赖于 MLIR parser 能否正确处理未注册 dialect——这本身就是不可靠的。
+2. **HIVM dialect 未链接**：`TRITONSIM_HAS_BISHENGIR_HIVM` 宏在开源构建中从未被定义。虽然 HIVM dialect 的源码就在 `third_party/ascend/AscendNPU-IR/bishengir/` 下，但 `pip install -e .` 不会编译和链接 HIVM dialect 库。typed 路径的核心解析逻辑（`populateTypedHivmOp`）被 `#ifdef` 跳过，回退到 generic 路径（字符串解析 + `sanitizeMlirBuffer`），而 generic 路径依赖 MLIR parser 在 `allowUnregisteredDialects` 模式下正确处理自定义属性格式——这是一个已知的脆弱点。
 
 3. **设计定位**：HIVMAnalysis 被设计为**独立分析工具**（standalone tool），类似 Intel VTune 或 NVIDIA Nsight 的角色——开发者跑完 kernel 后，dump 出 NPUIR，用 `inproc-costmodel --analyze-hivm` 做 offline 分析。它不是面向 autotune 的在线评估工具。
 
@@ -754,7 +811,7 @@ void HIVMAnalysisReport::emitPerfettoTrace(...) {
 | Loop 处理 | multiplier 乘 | DES 展开 + state propagation |
 | 跨核同步 | 无 | sync_block_set→wait 匹配 |
 | 可视化 | 文本 timeline | Perfetto trace (HTML) |
-| 编译依赖 | 无（纯 MLIR 标准 dialect） | 可选 bishengir（双路径） |
+| 编译依赖 | 无（纯 MLIR 标准 dialect） | Generic 路径无额外依赖；Typed 路径需链接 HIVM dialect 库（`TRITONSIM_HAS_BISHENGIR_HIVM` 控制，开源构建默认不启用） |
 | 使用场景 | autotune (在线) | offline 分析 (工具) |
 
 HIVMAnalysis 代表了**"精确但需要更多信息"**的性能建模路线——它需要 NPUIR 输入来获得同步指令、buffer 分配、地址空间等精确信息，但它能给出远比 PipelineScheduler 精确的调度结果。两者的关系不是替代，而是**互补**——PipelineScheduler 做快速 autotune 评估，HIVMAnalysis 做深度 offline 分析和验证。
