@@ -8,6 +8,67 @@
 - `configs=[]` 在 Ascend 后端中的含义；
 - 自动 Tiling 模式的适用边界，以及何时回到手写 `triton.Config`。
 
+## 对象模型：三层包装
+
+理解 autotune 的执行流程之前，首先要搞清楚 `add_kernel[grid](x, y, output, n)` 到底发生了什么。这里涉及三层包装，每一层把原始函数包一层新对象。
+
+### 第一层：`@triton.jit` → JITFunction
+
+```python
+@triton.jit
+def add_kernel(x_ptr, y_ptr, output_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
+    ...
+```
+
+`@triton.jit` 把普通 Python 函数变成 `JITFunction` 对象。`JITFunction` 继承自 `KernelInterface`，持有原始函数的签名、参数列表等元信息。此时 `add_kernel` 不再是函数，而是一个 `JITFunction` 实例——它不能直接 `add_kernel(...)` 调用，必须通过 `[grid]` 触发。
+
+### 第二层：`@triton.autotune` → AutoTilingTuner
+
+```python
+@triton.autotune(configs=[...], key=['n_elements'])
+@triton.jit
+def add_kernel(...):
+    ...
+```
+
+Python 装饰器从下往上执行：`@triton.jit` 先执行，把 `add_kernel` 变成 `JITFunction`；然后 `@triton.autotune` 执行，把 `JITFunction` 再包装成 `AutoTilingTuner`（Ascend 版本，继承自 `Autotuner` → `KernelInterface`）。
+
+`AutoTilingTuner.__init__` 中 `self.fn = JITFunction`——原始 JIT 函数被保存在 `self.fn` 里。`AutoTilingTuner.run()` 的职责是：先花时间找出最优 config，然后用最优 config 调用 `self.fn.run()` 执行真正的 kernel。
+
+### 第三层：`[grid]` → `__getitem__` 返回 lambda
+
+`AutoTilingTuner` 和 `Autotuner` 都没有定义 `__getitem__`，沿 MRO 链向上找到 `KernelInterface`：
+
+```python
+# python/triton/runtime/jit.py:364-370
+class KernelInterface:
+    def __getitem__(self, grid):
+        return lambda *args, **kwargs: self.run(
+            grid=grid, warmup=False, *args, **kwargs
+        )
+```
+
+`add_kernel[grid]` 不执行 kernel，也不执行 autotune。它只返回一个**新的 lambda**，把 `grid` 和 `self`（AutoTilingTuner 实例）通过闭包捕获。`grid` 本身可以是一个整数元组，也可以是一个可调用对象（如 `lambda meta: (cdiv(N, meta['BLOCK_SIZE']),)`）——它只是一个被捕获的引用，等到后面 `run()` 里才被真正调用。
+
+用户紧接着 `(...)` 调用这个 lambda：
+
+```python
+add_kernel[grid](x, y, output, size)
+#          ↑                        返回 lambda
+#               ↑                   调用 lambda(x, y, output, size)
+#                 → AutoTilingTuner.run(grid=grid, warmup=False, x, y, output, size)
+```
+
+**总结链路**：
+
+```
+原始函数
+  → @triton.jit        → JITFunction
+  → @triton.autotune    → AutoTilingTuner (self.fn = JITFunction)
+  → [grid]              → lambda: self.run(grid=grid, warmup=False, *a, **kw)
+  → (x, y, output, n)   → AutoTilingTuner.run(x, y, output, n, grid=..., warmup=False)
+```
+
 ## 快速上手
 
 在 Triton-Ascend 上，推荐保留社区版 `@triton.autotune` 的基本写法；当希望系统自动生成并评估候选配置时，将 `configs` 设为 `[]`：
