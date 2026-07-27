@@ -69,6 +69,194 @@ add_kernel[grid](x, y, output, size)
   → (x, y, output, n)   → AutoTilingTuner.run(x, y, output, n, grid=..., warmup=False)
 ```
 
+### 参数传导实例：从调用入口到 TTIR 生成
+
+为了更具体地理解参数如何从用户调用一路流到编译阶段，下面以一个带运行时编译选项的调用为例，逐文件、逐函数跟踪每个变量的变化。
+
+**假设调用**：
+
+```python
+add_kernel[grid](x, y, output, n_elements, force_simt_only=True)
+```
+
+其中 `x, y, output` 是 NPU 上的 Tensor，`n_elements=98432`，`force_simt_only=True` 是用户额外传入的编译选项。
+
+---
+
+**Step 1 — `[grid]` 触发 `__getitem__`**
+
+文件：`python/triton/runtime/jit.py:364-370`
+
+`add_kernel[grid]` 返回一个 lambda：
+
+```python
+lambda *args, **kwargs: self.run(grid=grid, warmup=False, *args, **kwargs)
+```
+
+此时不执行任何逻辑，`self`（AutoTilingTuner 实例）和 `grid`（用户传入的 grid 函数）被闭包捕获。
+
+---
+
+**Step 2 — `(x, y, output, n_elements, force_simt_only=True)` 调用 lambda**
+
+lambda 展开为：
+
+```python
+self.run(grid=grid, warmup=False, x, y, output, n_elements, force_simt_only=True)
+```
+
+Python 按位置-关键字规则绑定后，`AutoTilingTuner.run()` 收到的：
+
+```
+*args    = (x, y, output, n_elements)
+**kwargs = {"grid": <lambda>, "warmup": False, "force_simt_only": True}
+```
+
+---
+
+**Step 3 — `generate_key_and_configs()`**
+
+文件：`third_party/ascend/backend/runtime/autotuner.py:1984`
+
+```python
+def generate_key_and_configs(self, *args, **kwargs):
+    # args   = (x, y, output, n_elements)
+    # kwargs = {"grid": <lambda>, "warmup": False, "force_simt_only": True}
+
+    self.nargs = dict(zip(self.arg_names, args))
+    # → {"x_ptr": x, "y_ptr": y, "output_ptr": output, "n_elements": 98432}
+```
+
+`force_simt_only` **不在** `self.nargs` 里——`self.arg_names` 是 JITFunction 的参数名列表（`["x_ptr", "y_ptr", "output_ptr", "n_elements"]`），不包含用户传入的编译选项。
+
+---
+
+**Step 4 — `run()` 调用 `_prune_by_costmodel()`**
+
+文件：`third_party/ascend/backend/runtime/autotuner.py:2242`
+
+```python
+pruned_configs = self._prune_by_costmodel(
+    pruned_configs,
+    *args,      # x, y, output, n_elements
+    **kwargs,   # grid=<lambda>, warmup=False, force_simt_only=True
+)
+```
+
+`*args` 和 `**kwargs` 原封不动透传下去。
+
+---
+
+**Step 5 — `_prune_by_costmodel()` → `_costmodel_compile_ttir()`**
+
+`*args`、`**kwargs` 继续透传，直到进入 `_costmodel_compile_ttir`。
+
+---
+
+**Step 6 — `_costmodel_compile_ttir()`**: `ttir_kwargs` 诞生
+
+文件：`third_party/ascend/backend/runtime/autotuner.py:2065`
+
+```python
+def _costmodel_compile_ttir(self, config, *args, **kwargs):
+    # config = Config(BLOCK_SIZE=1024, num_warps=4, num_stages=2)
+    # args   = (x, y, output, n_elements)
+    # kwargs = {"grid": <lambda>, "warmup": False, "force_simt_only": True}
+
+    # ① 从 self.nargs 拿函数参数
+    bound_args = dict(self.nargs or {})
+    # → {"x_ptr": x, "y_ptr": y, "output_ptr": output, "n_elements": 98432}
+
+    # ② 过滤 kwargs → ttir_kwargs
+    ttir_kwargs = {k: v for k, v in kwargs.items()
+                   if k not in ("grid", "warmup")}
+    # → {"force_simt_only": True}
+    #   grid 被过滤掉了 ← 框架层面参数，_pack_args 不认识
+    #   warmup 被过滤掉了 ← 同上
+    #   force_simt_only 留下了 ← 用户运行时传入的编译选项, _pack_args 需要
+
+    # ③ 合并两类参数
+    current_kwargs = dict(config.all_kwargs(), **ttir_kwargs)
+    # → {"BLOCK_SIZE": 1024, "num_warps": 4, "num_stages": 2,
+    #     "num_ctas": 1, "maxnreg": None,
+    #     "force_simt_only": True}
+    #     ↑ config 的静态参数               ↑ 用户的运行时编译选项
+
+    bound_args.update(current_kwargs)
+    # → {"x_ptr": x, "y_ptr": y, "output_ptr": output, "n_elements": 98432,
+    #     "BLOCK_SIZE": 1024, "num_warps": 4, ..., "force_simt_only": True}
+```
+
+两类参数汇合后，`bound_args` 包含了生成 TTIR 所需的全部信息。
+
+---
+
+**Step 7 — `generate_ttir_for_costmodel()` → `_pack_args()`**
+
+文件：`third_party/ascend/backend/compiler.py:175`
+
+```python
+def generate_ttir_for_costmodel(jit_fn, config_kwargs, bound_args):
+    # config_kwargs = {"BLOCK_SIZE": 1024, ..., "force_simt_only": True}
+    # bound_args    = {"x_ptr": x, ..., "n_elements": 98432,
+    #                  "BLOCK_SIZE": 1024, ..., "force_simt_only": True}
+
+    _, specialization, base_options = binder(**bound_args)
+    # binder 把 x_ptr/y_ptr/output_ptr/n_elements → 按函数签名绑定为位置参数
+    # 其余 (BLOCK_SIZE/num_warps/force_simt_only) → 归入 kwargs
+
+    runtime_kwargs = dict(bound_args, **config_kwargs)
+    options, signature, constexprs, attrs = jit_fn._pack_args(
+        backend, runtime_kwargs, bound_args, specialization, base_options
+    )
+```
+
+在 `_pack_args` 中（`python/triton/runtime/jit.py:671`）：
+
+```python
+def _pack_args(self, backend, kwargs, bound_args, specialization, options):
+    options = backend.parse_options(kwargs)
+    # parse_options 用 NPUOptions 的字段名过滤 kwargs
+    # force_simt_only=True → NPUOptions.force_simt_only = True
+
+    sigkeys = [x.name for x in self.params]
+    for k in kwargs:
+        if k not in options.__dict__ and k not in sigkeys:
+            raise KeyError(...)  # grid/warmup 如果没被过滤,就会在这里报错
+```
+
+`force_simt_only=True` 生效为 `NPUOptions` 的一个字段，后续影响 TTIR 的生成路径（SIMT vs SIMD）。
+
+---
+
+**总结——三类参数的分流**：
+
+```
+用户调用 add_kernel[grid](x, y, out, n, force_simt_only=True)
+                                     └────────┬────────┘
+                                     Python 参数绑定
+                                              │
+                    ┌─────────────────────────┼─────────────────────────┐
+                    ▼                         ▼                         ▼
+           函数参数 (位置)            框架参数 (关键字)           编译选项 (关键字)
+         x, y, output, n            grid, warmup              force_simt_only
+              │                         │                         │
+              ▼                         ▼                         ▼
+         self.nargs                 过滤掉 (ttir_kwargs)       ttir_kwargs
+      在 generate_key_             _pack_args 不认识           _pack_args 需要
+      and_configs 中设置            它们, 需要过滤              (影响 NPUOptions)
+              │                                                   │
+              └───────────────────┬───────────────────────────────┘
+                                  ▼
+                          bound_args + current_kwargs
+                                  │
+                                  ▼
+                      generate_ttir_for_costmodel
+                                  │
+                                  ▼
+                          _pack_args → NPUOptions → 影响 TTIR
+```
+
 ## 快速上手
 
 在 Triton-Ascend 上，推荐保留社区版 `@triton.autotune` 的基本写法；当希望系统自动生成并评估候选配置时，将 `configs` 设为 `[]`：
