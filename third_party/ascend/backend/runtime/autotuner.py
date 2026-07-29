@@ -304,6 +304,30 @@ class AutoTilingTuner(Autotuner):
         self._source_module_ast_cache: Optional[ast.Module] = None
         self._source_module_ast_resolved = False
 
+        # ---- costmodel pruning integration ----
+        costmodel_cfg = (prune_configs_by or {}).get("costmodel", {})
+        self.enable_costmodel_prune = (
+            os.getenv("TRITON_ENABLE_COSTMODEL_PRUNE", "0") == "1"
+            or bool(costmodel_cfg)
+        )
+        if self.enable_costmodel_prune:
+            self.costmodel_top_k = int(
+                os.getenv("TRITON_COSTMODEL_TOP_K",
+                          costmodel_cfg.get("top_k", 10))
+            )
+            self.costmodel_save_predictions = (
+                os.getenv("TRITON_COSTMODEL_SAVE_PREDICTIONS", "0") == "1"
+            )
+            self.costmodel_verbose = (
+                os.getenv("TRITON_COSTMODEL_VERBOSE", "0") == "1"
+            )
+            self.costmodel_reuse_ttir = (
+                os.getenv("TRITON_COSTMODEL_REUSE_TTIR", "1") == "1"
+            )
+            self.costmodel_hardware_config = costmodel_cfg.get("hardware_config") or ""
+            self._costmodel_predictions: Dict = {}
+            self._costmodel_ttir_cache: Dict[str, str] = {}
+
     @staticmethod
     def _parse_explicit_tunable_params(raw_value) -> List[str]:
         if raw_value is None:
@@ -2020,6 +2044,197 @@ class AutoTilingTuner(Autotuner):
                 self.configs = self.gen_configs + expanded_user_configs
         return key
 
+    # ------------------------------------------------------------------
+    # Costmodel pruning helpers
+    # ------------------------------------------------------------------
+
+    def _costmodel_compile_ttir(self, config, *args, **kwargs):
+        """Compile only the TTIR stage for *config*.
+
+        Returns the optimised TTIR text, or ``None`` on failure.
+
+        As a side effect, the TTIR is also written to a temporary file so
+        that ``ir_override`` can be injected into the config during the
+        hardware-benchmark phase, eliminating the redundant ``ast_to_ttir`` +
+        ``make_ttir`` recompilation.
+        """
+        import hashlib
+
+        # config.kwargs contains only tl.constexpr values (e.g. BLOCK_SIZE).
+        # Backend params (num_stages, num_warps, etc.) from all_kwargs()
+        # do not affect TTIR, so excluding them lets configs that differ
+        # only in those params share the same cached TTIR.
+        cache_raw = str(sorted(config.kwargs.items()))
+        cache_key = hashlib.sha256(
+            f"{self.fn.cache_key}-{cache_raw}".encode()
+        ).hexdigest()
+
+        if cache_key in self._costmodel_ttir_cache:
+            if self.costmodel_verbose:
+                print(f"[costmodel] TTIR cache hit for {config}")
+            cached = self._costmodel_ttir_cache[cache_key]
+            return cached[0] if isinstance(cached, tuple) else cached
+
+        try:
+            from triton.backends.ascend.compiler import \
+                generate_ttir_for_costmodel
+
+            if self.costmodel_verbose:
+                print(f"[costmodel] compiling TTIR for {config} ...")
+
+            # bound_args: the concrete tensors + scalars the kernel is called
+            # with (already available in self.nargs from generate_key_and_configs).
+            bound_args = dict(self.nargs or {})
+            # Exclude infrastructure kwargs (grid, warmup) that are injected
+            # by the autotune framework but unknown to _pack_args.
+            ttir_kwargs = {
+                k: v for k, v in kwargs.items()
+                if k not in ("grid", "warmup")
+            }
+            current_kwargs = dict(config.all_kwargs(), **ttir_kwargs)
+            bound_args.update(current_kwargs)
+
+            if self.costmodel_verbose:
+                print(f"[costmodel]   config.kwargs      = {config.kwargs}")
+                print(f"[costmodel]   config.all_kwargs()= {config.all_kwargs()}")
+                print(f"[costmodel]   self.nargs         = {{{', '.join(f'{k}={type(v).__name__}' for k,v in (self.nargs or {}).items())}}}")
+                print(f"[costmodel]   bound_args (merged)= {{{', '.join(f'{k}=...' if not isinstance(v,(int,str,bool)) else f'{k}={v}' for k,v in bound_args.items())}}}")
+                print(f"[costmodel]   current_kwargs     = {{{', '.join(f'{k}={v}' for k,v in current_kwargs.items())}}}")
+
+            t0 = time.time()
+            ttir_text = generate_ttir_for_costmodel(
+                self.fn, current_kwargs, bound_args,
+            )
+            if self.costmodel_verbose:
+                elapsed = (time.time() - t0) * 1000
+                ttir_len = len(ttir_text) if ttir_text else 0
+                print(f"[costmodel] TTIR compiled in {elapsed:.0f}ms "
+                      f"({ttir_len} chars) for {config}")
+        except Exception as exc:
+            if self.print_autotuning or self.costmodel_verbose:
+                import traceback
+                print(f"[costmodel] TTIR compile FAILED for {config}: {exc}")
+                traceback.print_exc()
+            return None
+
+        if ttir_text is None:
+            if self.costmodel_verbose:
+                print(f"[costmodel] TTIR compile returned None for {config}")
+            return None
+
+        if self.costmodel_reuse_ttir:
+            import tempfile
+            tmp = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".ttir", delete=False, encoding="utf-8",
+            )
+            tmp.write(ttir_text)
+            tmp.close()
+            self._costmodel_ttir_cache[cache_key] = (ttir_text, tmp.name)
+        else:
+            self._costmodel_ttir_cache[cache_key] = ttir_text
+        return ttir_text
+
+    def _prune_by_costmodel(self, configs, *args, **kwargs):
+        """Rank *configs* with the in-process costmodel and keep the top *k*."""
+        from triton.backends.ascend.runtime.costmodel_runtime import \
+            costmodel_prune
+
+        if self.costmodel_verbose:
+            print(f"\n[costmodel] pruning {len(configs)} configs "
+                  f"(top_k={self.costmodel_top_k}) ...")
+
+        arg_bindings = None
+        try:
+            arg_bindings = self._build_costmodel_arg_bindings(**kwargs)
+            if self.costmodel_verbose and arg_bindings:
+                print(f"[costmodel] arg_bindings: {arg_bindings}")
+        except Exception:
+            pass
+
+        t0 = time.time()
+        pruned, predictions, cm_timing = costmodel_prune(
+            configs,
+            ttir_for_config=lambda cfg: self._costmodel_compile_ttir(
+                cfg, *args, **kwargs,
+            ),
+            top_k=self.costmodel_top_k,
+            arg_bindings=arg_bindings,
+            hardware_config=self.costmodel_hardware_config or None,
+        )
+        elapsed = time.time() - t0
+
+        self._costmodel_timing = {
+            "total_configs": len(configs),
+            "pruned_configs": len(pruned),
+            "elapsed_s": elapsed,
+            "ttir_elapsed_s": cm_timing.get("ttir_elapsed_s", 0),
+            "eval_elapsed_s": cm_timing.get("eval_elapsed_s", 0),
+        }
+
+        if self.costmodel_save_predictions:
+            self._costmodel_predictions.update(predictions)
+
+        if self.costmodel_verbose or (self.print_autotuning and predictions):
+            print(
+                f"[costmodel] done in {elapsed:.1f}s: "
+                f"{len(configs)} -> {len(pruned)} configs "
+                f"(top_k={self.costmodel_top_k})"
+            )
+            if predictions:
+                # Verbose mode: print every config sorted by prediction.
+                # Normal mode: print top-5 only.
+                show_all = self.costmodel_verbose
+                sorted_cfgs = sorted(predictions, key=lambda c: predictions[c])
+                for i, cfg in enumerate(sorted_cfgs):
+                    if not show_all and i >= 5:
+                        break
+                    lat = predictions.get(cfg, float("inf"))
+                    marker = ">" if cfg in pruned else " "
+                    print(f"  {marker} #{i+1}  {lat:8.3f} us  |  {cfg}")
+                if self.costmodel_verbose:
+                    min_lat = min(predictions.values()) if predictions else 0
+                    max_lat = max(
+                        v for v in predictions.values() if v != float("inf")
+                    ) if predictions else 0
+                    print(f"[costmodel] evaluated {len(predictions)} configs, "
+                          f"latency range: {min_lat:.3f} – {max_lat:.3f} us")
+
+        return pruned if pruned else list(configs)
+
+    def _build_costmodel_arg_bindings(self, **kwargs):
+        """Build an ``arg-bindings`` string for the costmodel.
+
+        Returns comma-separated ``argN=value`` pairs plus (optionally)
+        ``num_programs`` so the C++ PipelineAnalysisPass can apply the
+        correct wave multiplier.
+        """
+        parts = []
+        if self.nargs:
+            for i, name in enumerate(self.arg_names):
+                val = self.nargs.get(name)
+                if val is None:
+                    continue
+                if isinstance(val, int):
+                    parts.append(f"arg{i}={val}")
+        # Evaluate the user's grid function to get total program count.
+        # grid(meta) returns e.g. (97,) or (128,64) — multiply dims.
+        grid = kwargs.get("grid")
+        if grid is not None and callable(grid) and self.nargs and self.configs:
+            try:
+                meta = {**self.nargs, **self.configs[0].kwargs}
+                dims = grid(meta)
+                if dims:
+                    import math
+                    np_val = 1
+                    for d in dims:
+                        np_val *= d
+                    parts.append(f"num_programs={np_val}")
+            except Exception:
+                pass
+        return ",".join(parts)
+
+    # ------------------------------------------------------------------
+
     def run(self, *args, **kwargs):
         key = self.generate_key_and_configs(*args, **kwargs)
         cache_miss = key not in self.cache
@@ -2029,6 +2244,14 @@ class AutoTilingTuner(Autotuner):
         if cache_miss:
             # prune configs
             pruned_configs = self.prune_configs(kwargs)
+
+            # ---- costmodel pre-filter (optional) ----
+            if self.enable_costmodel_prune and len(pruned_configs) > self.costmodel_top_k:
+                pruned_configs = self._prune_by_costmodel(
+                    pruned_configs, *args, **kwargs,
+                )
+            # ---------------------------------------
+
             if self.enable_ubtuner or len(pruned_configs) > 1:
                 used_cached_result = False
                 bench_start = time.time()
@@ -2095,6 +2318,7 @@ class AutoTilingTuner(Autotuner):
         from triton.compiler.errors import CompileTimeAssertionFailure, MLIRCompilationError
         from triton.runtime.errors import OutOfResources
 
+        t_compile_start = time.time()
         kernels_call = {config: self._make_kernel_call(*args, config=config, **kwargs) for config in configs}
         run_fns = {}
         self._compile_failed_configs = []
@@ -2147,9 +2371,15 @@ class AutoTilingTuner(Autotuner):
         if len(run_fns) == 0:
             raise RuntimeError(f"No valid triton configs. {type(exc).__name__}: {exc} \nStack trace: {exc_stack}")
 
+        t_compile_end = time.time()
+
         if len(run_fns) == 1:
             # we ignore expensive profiling method when only single config is left
-            return {config: self.do_bench(fn, quantiles=(0.5, 0.2, 0.8)) for config, fn in run_fns.items()}
+            result = {config: self.do_bench(fn, quantiles=(0.5, 0.2, 0.8)) for config, fn in run_fns.items()}
+            self._hw_bench_timing = {"compile_s": t_compile_end - t_compile_start,
+                                     "bench_s": time.time() - t_compile_end,
+                                     "stages": _stage_rep}
+            return result
 
         parser_mode = getattr(self, "parser_mode", None) or "vector"
         cv_parse_result = getattr(self, "cv_parse_result", None)
@@ -2175,7 +2405,10 @@ class AutoTilingTuner(Autotuner):
                     target_kernel_name=target_kernel_name,
                 )
                 assert len(time_cost) == len(run_fns)
-                return {config: cost for config, cost in zip(run_fns.keys(), time_cost)}
+                result = {config: cost for config, cost in zip(run_fns.keys(), time_cost)}
+                self._hw_bench_timing = {"compile_s": t_compile_end - t_compile_start,
+                                         "bench_s": time.time() - t_compile_end}
+                return result
             except ProfilerResultMismatchError as exc:
                 warnings.warn(
                     "Filtered profiler rows do not match the expected count for autotune benchmarking; "
@@ -2184,9 +2417,15 @@ class AutoTilingTuner(Autotuner):
                     RuntimeWarning,
                     stacklevel=2,
                 )
-                return {config: self.do_bench(fn, quantiles=(0.5, 0.2, 0.8)) for config, fn in run_fns.items()}
+                result = {config: self.do_bench(fn, quantiles=(0.5, 0.2, 0.8)) for config, fn in run_fns.items()}
+                self._hw_bench_timing = {"compile_s": t_compile_end - t_compile_start,
+                                         "bench_s": time.time() - t_compile_end}
+                return result
         else:
-            return {config: self.do_bench(fn, quantiles=(0.5, 0.2, 0.8)) for config, fn in run_fns.items()}
+            result = {config: self.do_bench(fn, quantiles=(0.5, 0.2, 0.8)) for config, fn in run_fns.items()}
+            self._hw_bench_timing = {"compile_s": t_compile_end - t_compile_start,
+                                     "bench_s": time.time() - t_compile_end}
+            return result
 
     def _resolve_target_kernel_name(self, kernels_call, configs) -> Optional[str]:
         for config in configs:
@@ -2207,6 +2446,15 @@ class AutoTilingTuner(Autotuner):
                              " Make sure that you don't re-define auto-tuned symbols.")
         # augment meta-parameters with tunable ones
         current = dict(meta, **config.all_kwargs())
+        if self.enable_costmodel_prune and self.costmodel_reuse_ttir and self._costmodel_ttir_cache:
+            import hashlib
+            cache_raw = str(sorted(config.kwargs.items()))
+            cache_key = hashlib.sha256(
+                f"{self.fn.cache_key}-{cache_raw}".encode()
+            ).hexdigest()
+            cached = self._costmodel_ttir_cache.get(cache_key)
+            if cached is not None and isinstance(cached, tuple) and "ir_override" not in current:
+                current["ir_override"] = cached[1]
         ub_cfg = dict(getattr(config, "ubtune_cfg", {}))
         if ub_cfg:
             current.update(ub_cfg)

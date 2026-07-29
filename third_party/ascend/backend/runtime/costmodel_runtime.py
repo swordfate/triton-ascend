@@ -130,15 +130,18 @@ def _resolve_default_hardware_config() -> str:
 
 
 def _build_costmodel_extra_args(arg_bindings: str, hardware_config: str = ""):
-    base = "-ascend-perf-model"
-    resolved_hardware_config = hardware_config or _resolve_default_hardware_config()
-    # NOTE: Current inproc parser in installed runtime consumes only one payload
-    # token after `-ascend-perf-model`. Frontend only forwards arg-bindings now.
+    # The C++ parser consumes exactly one token after each -ascend-perf-model
+    # flag.  Repeat the flag to pass multiple options.
+    args = ["-ascend-perf-model"]
     if arg_bindings:
-        return [base, f"arg-bindings={arg_bindings}"]
-    if resolved_hardware_config:
-        return [base, f"hardware-config={resolved_hardware_config}"]
-    return [base]
+        args.append(f"arg-bindings={arg_bindings}")
+        args.append("-ascend-perf-model")
+    resolved = hardware_config or _resolve_default_hardware_config()
+    if resolved:
+        args.append(f"hardware-config={resolved}")
+    else:
+        args.pop()  # remove trailing -ascend-perf-model if nothing follows
+    return args
 
 
 def _normalize_costmodel_items(config_ttir_items):
@@ -238,3 +241,108 @@ def costmodel_bench(config_ttir_items):
             if isinstance(item, dict) and item.get("config") is not None:
                 fallback[item["config"]] = float("inf")
         return fallback
+
+
+def costmodel_prune(configs, ttir_for_config, top_k=10, arg_bindings=None,
+                    hardware_config=None):
+    """Prune a list of candidate configs using the in-process costmodel.
+
+    This is a higher-level helper built on top of :func:`costmodel_bench`.  It
+    takes a TTIR-generator callback so that TTIR compilation happens lazily /
+    on-demand and the caller does not need to pre-materialise TTIR for every
+    config beforehand.
+
+    Args:
+        configs: Candidate ``Config`` objects.
+        ttir_for_config: ``Callable[[Config], Optional[str]]`` — returns the
+            TTIR text for *config*, or ``None`` if compilation failed.
+        top_k: Maximum number of configs to retain after costmodel ranking.
+        arg_bindings: Optional costmodel argument-binding string.
+        hardware_config: Optional path to the hardware-config JSON file.
+
+    Returns:
+        ``(pruned_configs, predictions, timing)`` where *timing* is a dict
+        with ``ttir_elapsed_s`` and ``eval_elapsed_s`` keys.
+    """
+    import time as _time
+    _verbose = os.environ.get("TRITON_COSTMODEL_VERBOSE", "0") == "1"
+    _timing = {"ttir_elapsed_s": 0.0, "eval_elapsed_s": 0.0}
+
+    if len(configs) <= top_k:
+        if _verbose:
+            print(f"[costmodel] skip: only {len(configs)} configs "
+                  f"(<= top_k={top_k})")
+        return list(configs), {}, _timing
+
+    if _verbose:
+        print(f"[costmodel] gathering TTIR for {len(configs)} configs ...")
+
+    # ── Phase 1: TTIR compilation (parallel) ──
+    _t0 = _time.time()
+    items = []
+    failed = 0
+    if len(configs) > 1:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        jobs = get_costmodel_jobs(len(configs))
+        with ThreadPoolExecutor(max_workers=jobs) as executor:
+            future_map = {executor.submit(ttir_for_config, cfg): cfg for cfg in configs}
+            for future in as_completed(future_map):
+                cfg = future_map[future]
+                try:
+                    ttir = future.result()
+                    if ttir is None:
+                        failed += 1
+                        continue
+                except Exception as exc:
+                    failed += 1
+                    _warn_costmodel(f"TTIR generation failed for {cfg}: {exc}")
+                    continue
+                items.append({
+                    "config": cfg,
+                    "ttir": ttir,
+                    "arg_bindings": arg_bindings,
+                    "hardware_config": hardware_config or _resolve_default_hardware_config(),
+                })
+    else:
+        for cfg in configs:
+            try:
+                ttir = ttir_for_config(cfg)
+                if ttir is None:
+                    failed += 1
+                    continue
+            except Exception as exc:
+                failed += 1
+                _warn_costmodel(f"TTIR generation failed for {cfg}: {exc}")
+                continue
+            items.append({
+                "config": cfg,
+                "ttir": ttir,
+                "arg_bindings": arg_bindings,
+                "hardware_config": hardware_config or _resolve_default_hardware_config(),
+            })
+    _timing["ttir_elapsed_s"] = _time.time() - _t0
+
+    if _verbose:
+        print(f"[costmodel] {len(items)} TTIRs ready "
+              f"{f'({failed} failed)' if failed else ''}, "
+              f"evaluating via costmodel_bench ...")
+
+    if len(items) <= top_k:
+        return [it["config"] for it in items], {}, _timing
+
+    # ── Phase 2: costmodel evaluation (parallel) ──
+    _t0 = _time.time()
+    latencies = costmodel_bench(items)
+    _timing["eval_elapsed_s"] = _time.time() - _t0
+
+    sorted_cfgs = sorted(
+        latencies.keys(),
+        key=lambda c: latencies.get(c, float("inf")),
+    )
+    pruned = sorted_cfgs[:min(top_k, len(sorted_cfgs))]
+
+    if _verbose:
+        print(f"[costmodel] costmodel_bench returned "
+              f"{len(latencies)} predictions")
+
+    return pruned, latencies, _timing

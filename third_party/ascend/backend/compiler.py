@@ -152,6 +152,66 @@ def make_ttir(mod, metadata, opt):
     return mod
 
 
+def generate_ttir_for_costmodel(jit_fn, config_kwargs, bound_args, device=None):
+    """Generate the optimised TTIR text for *config*.
+
+    Calls ``ast_to_ttir`` + ``make_ttir`` directly, without going through
+    ``triton.compile()``.  This avoids creating a ``CompiledKernel`` (and
+    its metadata / ``pack_metadata`` expectations) when all we need is the
+    TTIR text.
+    """
+    import hashlib
+    import os
+    try:
+        from triton.compiler.code_generator import ast_to_ttir
+        from triton.compiler.compiler import ASTSource
+        from triton.runtime import driver
+        from triton._C.libtriton import ir as triton_ir
+        from triton._C.libtriton.ascend import ir as ascend_ir
+    except ImportError:
+        return None
+
+    if device is None:
+        device = driver.active.get_current_device()
+
+    _, _, _, backend, binder = jit_fn.device_caches[device]
+    _, specialization, base_options = binder(**bound_args)
+
+    runtime_kwargs = dict(bound_args, **config_kwargs)
+    options, signature, constexprs, attrs = jit_fn._pack_args(
+        backend, runtime_kwargs, bound_args, specialization, base_options,
+    )
+
+    if os.environ.get("TRITON_COSTMODEL_VERBOSE", "0") == "1":
+        sigkeys = [x.name for x in jit_fn.params]
+        print(f"[costmodel]   binder input  = {{{', '.join(f'{k}=...' for k in bound_args)}}}")
+        print(f"[costmodel]   specialization= {[(sigkeys[i], v[0], v[1] if v[0] != 'constexpr' else v[1]) for i, v in enumerate(specialization)]}")
+        print(f"[costmodel]   constexprs     = {constexprs}")
+        print(f"[costmodel]   signature      = {signature}")
+        print(f"[costmodel]   config_kwargs -> NPUOptions: {[k for k in config_kwargs if k in options.__dict__]}")
+
+    codegen_fns = backend.get_codegen_implementation(options)
+    module_map = backend.get_module_map()
+
+    ctx = triton_ir.context()
+    triton_ir.load_dialects(ctx)
+    ascend_ir.load_dialects(ctx)
+    backend.load_dialects(ctx)
+
+    src = ASTSource(jit_fn, signature, constexprs, attrs)
+    mod = ast_to_ttir(
+        jit_fn, src, context=ctx, options=options,
+        codegen_fns=codegen_fns, module_map=module_map,
+    )
+    metadata = {
+        "hash": hashlib.sha256(
+            f"{jit_fn.cache_key}-{sorted(config_kwargs.items())}".encode()
+        ).hexdigest(),
+    }
+    mod = make_ttir(mod, metadata, options)
+    return str(mod)
+
+
 def ttir_to_linalg(mod, metadata, opt, *, named_ops=False):
     # use triton_adapter to lower Triton-MLIR to linalg
     # Get Triton-MLIR as string

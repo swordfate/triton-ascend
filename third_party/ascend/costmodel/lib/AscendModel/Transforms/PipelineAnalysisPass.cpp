@@ -69,18 +69,23 @@ struct PipelineAnalysisPass
     }
     const HardwareConfig &config = *hardwareConfig;
 
-    // Parse bindings
+    // Parse bindings — use raw Bindings to preserve custom keys like
+    // num_programs (which exportArgBindings would filter out).
     llvm::DenseMap<unsigned, int64_t> argBindings;
     llvm::StringMap<int64_t> programIdBindings;
     SmallVector<int64_t> loopTripCountOverrides;
+    std::optional<int64_t> pythonNumPrograms;
 
     if (!argBindingsStr.empty()) {
-      std::string parseError;
-      if (!parseBindings(argBindingsStr, argBindings, programIdBindings,
-                         parseError)) {
-        emitError(module.getLoc(), parseError);
+      auto parsed = parseBindings(argBindingsStr);
+      if (!parsed) {
+        emitError(module.getLoc(),
+                  llvm::toString(parsed.takeError()));
         return signalPassFailure();
       }
+      parsed->exportArgBindings(argBindings);
+      parsed->exportProgramIdBindings(programIdBindings);
+      pythonNumPrograms = parsed->get<int64_t>("num_programs");
     }
 
     if (!loopTripCountsStr.empty()) {
@@ -206,9 +211,32 @@ struct PipelineAnalysisPass
     for (const auto &pipelineOp : scheduler.getAllOps())
       simpleSumCycles += pipelineOp.duration * pipelineOp.loopMultiplier;
 
+    // ---- kernel-level cycle estimation ----
+    int64_t numParallelUnits = config.getNumAIVCores();
+    int64_t numPrograms = pythonNumPrograms.value_or(1);
+    int64_t numInnerIters = 0;
+    // If Python didn't provide num_programs, try to derive it from the
+    // resolved loop trip counts.  This only works when the costmodel
+    // pipeline has a wave loop (currently never — auto-blockify runs
+    // in bishengir-compile, not here).
+    if (!pythonNumPrograms.has_value()) {
+      for (scf::ForOp forOp : allLoops) {
+        if (auto tcAttr = forOp->getAttrOfType<IntegerAttr>("ascend.trip_count")) {
+          int64_t tc = tcAttr.getInt();
+          if (tc > 1)
+            numPrograms = tc * numParallelUnits;
+        }
+      }
+    }
+    int64_t scheduledCycles =
+        scheduler.getKernelCycles(numPrograms, numParallelUnits, numInnerIters);
+
     module->setAttr("ascend.scheduled_cycles_one_iter",
                     IntegerAttr::get(IntegerType::get(module.getContext(), 64),
                                      oneIterCycles));
+    module->setAttr("ascend.scheduled_cycles",
+                    IntegerAttr::get(IntegerType::get(module.getContext(), 64),
+                                     scheduledCycles));
     module->setAttr("ascend.roofline_cycles",
                     IntegerAttr::get(IntegerType::get(module.getContext(), 64),
                                      rooflineTotalCycles));
