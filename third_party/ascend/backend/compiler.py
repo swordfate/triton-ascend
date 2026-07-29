@@ -1295,23 +1295,39 @@ class AscendBackend(BaseBackend):
 
     def add_stages(self, stages, options, language):
         if self.target.backend == "npu":
-            stages["ttir"] = lambda src, metadata: make_ttir(src, metadata, options)
+            import os as _os
+            _trace = _os.environ.get("TRITON_COMPILE_STAGE_TRACE", "0") == "1"
+            if _trace:
+                import time as _time, sys as _sys
+                def _wrap(name, fn):
+                    def _timed(src, metadata):
+                        t0 = _time.time(); r = fn(src, metadata)
+                        _dt = _time.time() - t0
+                        if _dt > 0.001:
+                            print(f"  [stage] {name:<15} {_dt:.2f}s", file=_sys.stderr)
+                        return r
+                    return _timed
+            else:
+                def _wrap(name, fn):
+                    return fn
+
+            stages["ttir"] = _wrap("ttir", lambda src, metadata: make_ttir(src, metadata, options))
             if options.force_simt_only:
-                stages["npubin"] = (lambda src, metadata: ttir_to_npubin(src, metadata, options))
+                stages["npubin"] = _wrap("npubin", lambda src, metadata: ttir_to_npubin(src, metadata, options))
                 return
-            stages["ttadapter"] = lambda src, metadata: ttir_to_linalg(src, metadata, options, named_ops=True)
+            stages["ttadapter"] = _wrap("ttadapter", lambda src, metadata: ttir_to_linalg(src, metadata, options, named_ops=True))
             # Support BC mode: convert Linalg IR to Bytecode format, then back to MLIR
             if options.use_bytecode:
                 # Step 1: Convert Linalg IR to Bytecode using triton-mlir-opt
-                stages["mlirbc"] = lambda src, metadata: linalg_to_bc_by_triton_mlir_opt(src, metadata, options)
+                stages["mlirbc"] = _wrap("mlirbc", lambda src, metadata: linalg_to_bc_by_triton_mlir_opt(src, metadata, options))
                 # Step 2: Convert Bytecode back to MLIR text using bishengir-opt
-                stages["bcmlir"] = lambda src, metadata: bc_to_linalg_by_bishengir_opt(src, metadata, options)
+                stages["bcmlir"] = _wrap("bcmlir", lambda src, metadata: bc_to_linalg_by_bishengir_opt(src, metadata, options))
             if options.compile_on_910_95:
-                stages["npubin"] = (
-                    lambda src, metadata: linalg_to_bin_enable_npu_compile_910_95(src, metadata, options))
+                stages["npubin"] = _wrap("npubin", (
+                    lambda src, metadata: linalg_to_bin_enable_npu_compile_910_95(src, metadata, options)))
             else:
-                stages["npubin"] = (
-                    lambda src, metadata: linalg_to_bin_enable_npu_compile_A2_A3(src, metadata, options))
+                stages["npubin"] = _wrap("npubin", (
+                    lambda src, metadata: linalg_to_bin_enable_npu_compile_A2_A3(src, metadata, options)))
         else:
             raise NotImplementedError(f"Backend '{self.target.backend}' is not supported. "
                                       "Please ensure the target backend is set to 'npu'.")

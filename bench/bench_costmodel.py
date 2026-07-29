@@ -21,6 +21,7 @@ from typing import Any, Dict, List
 
 # Set before @triton.autotune decorators are evaluated (module-level)
 os.environ.setdefault("TRITON_COSTMODEL_SAVE_PREDICTIONS", "1")
+os.environ.setdefault("TRITON_COSTMODEL_REUSE_TTIR", "0")
 
 import torch
 import triton
@@ -92,12 +93,17 @@ def main():
     output = torch.empty_like(x)
     grid = lambda meta: (triton.cdiv(size, meta["BLOCK_SIZE"]),)
 
-    # ── clear compilation cache ────────────────────────────────────────
-    import shutil, glob as _glob
-    _cache_dir = os.path.expanduser("~/.triton/cache")
-    if os.path.isdir(_cache_dir):
-        shutil.rmtree(_cache_dir)
-        print("=== Compilation cache cleared ===")
+    # Warm one bishengir-compile invocation so the first timed pipeline
+    # does not pay the toolchain/library startup cost.
+    print("=== Compiler warmup (not timed) ===")
+    _warm = torch.empty_like(x)
+    @triton.autotune(configs=[configs[0]], key=["n_elements"])
+    @triton.jit
+    def _warmup(x_ptr, y_ptr, o_ptr, n, BLOCK_SIZE: tl.constexpr):
+        pid = tl.program_id(0); bs = pid * BLOCK_SIZE
+        off = bs + tl.arange(0, BLOCK_SIZE); m = off < n
+        tl.store(o_ptr + off, tl.load(x_ptr + off, mask=m) + tl.load(y_ptr + off, mask=m), mask=m)
+    _warmup[grid](x, y, _warm, size)
     print()
 
     # ── define pipeline functions ────────────────────────────────────
@@ -126,7 +132,7 @@ def main():
             print(f"    ├─ HW compile:      {hw.get('compile_s', 0):.2f}s ({len(timings)} configs)")
             print(f"    └─ HW kernel:       {hw.get('bench_s', 0):.2f}s")
         print(f"  best: {_a.best_config}")
-        for c, t in sorted(timings.items(), key=lambda x: x[1])[:5]:
+        for c, t in sorted(timings.items(), key=lambda x: x[1]):
             print(f"    {t:.4f} ms  |  {c}")
         return elapsed, timings, preds, cm, _a.best_config, _a
 
@@ -149,7 +155,7 @@ def main():
         print(f"    ├─ HW compile:      {hw.get('compile_s', 0):.2f}s ({len(timings)} configs)")
         print(f"    └─ HW kernel:       {hw.get('bench_s', 0):.2f}s")
         print(f"  best: {_b.best_config}")
-        for c, t in sorted(timings.items(), key=lambda x: x[1])[:5]:
+        for c, t in sorted(timings.items(), key=lambda x: x[1]):
             print(f"    {t:.4f} ms  |  {c}")
         return elapsed, timings, _b.best_config, _b
 
@@ -167,11 +173,6 @@ def main():
                 print(f"  (skipping Pipeline {label})")
                 continue
             print(f"  Running Pipeline {label}...")
-            # clear cache between pipelines
-            if (a_elapsed is not None or b_elapsed is not None):
-                if os.path.isdir(_cache_dir):
-                    shutil.rmtree(_cache_dir)
-                    print("\n=== Compilation cache cleared ===\n")
             if label == "A":
                 a_elapsed, a_timings, a_predictions, a_costmodel_timing, a_best, a_tuner = pipeline_fn()
             else:
@@ -228,7 +229,7 @@ def main():
         print(f"  Kendall tau:   {kendall_tau(pred_sorted, true_sorted):.3f}")
 
         print(f"\n  {'Pred(us)':>10}  {'Real(us)':>10}  Config")
-        for cfg in pred_sorted[:10]:
+        for cfg in pred_sorted:
             pred = a_predictions.get(cfg, float("inf"))
             real = b_timings.get(cfg, float("inf")) * 1000  # ms → us
             print(f"  {pred:10.3f}  {real:10.1f}  {cfg}")

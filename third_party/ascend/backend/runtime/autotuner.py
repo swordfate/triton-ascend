@@ -310,6 +310,9 @@ class AutoTilingTuner(Autotuner):
             os.getenv("TRITON_ENABLE_COSTMODEL_PRUNE", "0") == "1"
             or bool(costmodel_cfg)
         )
+        self.costmodel_verbose = (
+            os.getenv("TRITON_COSTMODEL_VERBOSE", "0") == "1"
+        )
         if self.enable_costmodel_prune:
             self.costmodel_top_k = int(
                 os.getenv("TRITON_COSTMODEL_TOP_K",
@@ -318,11 +321,8 @@ class AutoTilingTuner(Autotuner):
             self.costmodel_save_predictions = (
                 os.getenv("TRITON_COSTMODEL_SAVE_PREDICTIONS", "0") == "1"
             )
-            self.costmodel_verbose = (
-                os.getenv("TRITON_COSTMODEL_VERBOSE", "0") == "1"
-            )
             self.costmodel_reuse_ttir = (
-                os.getenv("TRITON_COSTMODEL_REUSE_TTIR", "1") == "1"
+                os.getenv("TRITON_COSTMODEL_REUSE_TTIR", "0") == "1"
             )
             self.costmodel_hardware_config = costmodel_cfg.get("hardware_config") or ""
             self._costmodel_predictions: Dict = {}
@@ -2143,6 +2143,7 @@ class AutoTilingTuner(Autotuner):
             print(f"\n[costmodel] pruning {len(configs)} configs "
                   f"(top_k={self.costmodel_top_k}) ...")
 
+        t0 = time.time()
         arg_bindings = None
         try:
             arg_bindings = self._build_costmodel_arg_bindings(**kwargs)
@@ -2151,7 +2152,6 @@ class AutoTilingTuner(Autotuner):
         except Exception:
             pass
 
-        t0 = time.time()
         pruned, predictions, cm_timing = costmodel_prune(
             configs,
             ttir_for_config=lambda cfg: self._costmodel_compile_ttir(
@@ -2283,11 +2283,27 @@ class AutoTilingTuner(Autotuner):
             config.pre_hook(full_nargs)
         final_kwargs = dict(config.all_kwargs(), **kwargs)
         final_kwargs.update(ub_cfg)
+        # Inject ir_override so the final execution uses the same cache key
+        # as _batch_bench (which also injects ir_override).  Without this,
+        # the cache key differs and the best config is needlessly recompiled.
+        if self.enable_costmodel_prune and self.costmodel_reuse_ttir and self._costmodel_ttir_cache:
+            import hashlib
+            cache_raw = str(sorted(config.kwargs.items()))
+            cache_key = hashlib.sha256(
+                f"{self.fn.cache_key}-{cache_raw}".encode()
+            ).hexdigest()
+            cached = self._costmodel_ttir_cache.get(cache_key)
+            if cached is not None and isinstance(cached, tuple) and "ir_override" not in final_kwargs:
+                final_kwargs["ir_override"] = cached[1]
         try:
+            _t_final = time.time()
             ret = self.fn.run(
                 *args,
                 **final_kwargs,
             )
+            _dt = time.time() - _t_final
+            if self.costmodel_verbose:
+                print(f"[costmodel] final exec {_dt:.2f}s")
             return ret
         finally:
             self.nargs = None

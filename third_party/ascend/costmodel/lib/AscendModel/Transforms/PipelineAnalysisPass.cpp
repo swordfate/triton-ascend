@@ -212,9 +212,25 @@ struct PipelineAnalysisPass
       simpleSumCycles += pipelineOp.duration * pipelineOp.loopMultiplier;
 
     // ---- kernel-level cycle estimation ----
-    int64_t numParallelUnits = config.getNumAIVCores();
+    // Detect kernel type: if any Cube op exists, use AIC core count.
+    bool hasCube = false;
+    for (const auto &pipelineOp : scheduler.getAllOps()) {
+      if (pipelineOp.hwUnit == HWUnit::Cube) {
+        hasCube = true;
+        break;
+      }
+    }
+    int64_t numParallelUnits =
+        hasCube ? config.getNumAICCores() : config.getNumAIVCores();
     int64_t numPrograms = pythonNumPrograms.value_or(1);
+    // Use the maximum resolved loop trip count as numInnerIters (for
+    // kernels with user-written inner loops like `for i in range(N)`).
     int64_t numInnerIters = 0;
+    for (scf::ForOp forOp : allLoops) {
+      if (auto tcAttr = forOp->getAttrOfType<IntegerAttr>("ascend.trip_count")) {
+        numInnerIters = std::max(numInnerIters, tcAttr.getInt());
+      }
+    }
     // If Python didn't provide num_programs, try to derive it from the
     // resolved loop trip counts.  This only works when the costmodel
     // pipeline has a wave loop (currently never — auto-blockify runs
