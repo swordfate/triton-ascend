@@ -2217,13 +2217,20 @@ class AutoTilingTuner(Autotuner):
         correct wave multiplier.
         """
         parts = []
+        # constexpr params are inlined as arith.constant in the TTIR
+        # function signature, so they must not appear in arg-bindings
+        # and do not consume a TTIR argument slot.
+        constexpr_indices = set(getattr(self.fn, 'constexprs', []))
         if self.nargs:
             for i, name in enumerate(self.arg_names):
+                if i in constexpr_indices:
+                    continue
                 val = self.nargs.get(name)
                 if val is None:
                     continue
                 if isinstance(val, int):
-                    parts.append(f"arg{i}={val}")
+                    ttir_idx = i - sum(1 for ci in constexpr_indices if ci < i)
+                    parts.append(f"arg{ttir_idx}={val}")
         # Evaluate the user's grid to get total program count.
         # Supports both callable grids (lambda meta: ...) and fixed
         # tuple grids (num_vectorcore, ).  grid(meta) returns e.g.
