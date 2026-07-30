@@ -314,10 +314,12 @@ class AutoTilingTuner(Autotuner):
             os.getenv("TRITON_COSTMODEL_VERBOSE", "0") == "1"
         )
         if self.enable_costmodel_prune:
-            self.costmodel_top_k = int(
-                os.getenv("TRITON_COSTMODEL_TOP_K",
-                          costmodel_cfg.get("top_k", 10))
-            )
+            _raw = os.getenv("TRITON_COSTMODEL_TOP_K",
+                             costmodel_cfg.get("top_k", 0.2))
+            _val = float(_raw)
+            # <= 1 → percentage (0.2 = 20%), > 1 → absolute count
+            self._costmodel_top_k_is_pct = _val <= 1.0
+            self._costmodel_top_k_raw = _val
             self.costmodel_save_predictions = (
                 os.getenv("TRITON_COSTMODEL_SAVE_PREDICTIONS", "0") == "1"
             )
@@ -327,6 +329,12 @@ class AutoTilingTuner(Autotuner):
             self.costmodel_hardware_config = costmodel_cfg.get("hardware_config") or ""
             self._costmodel_predictions: Dict = {}
             self._costmodel_ttir_cache: Dict[str, str] = {}
+
+    def _resolve_costmodel_top_k(self, n_configs: int) -> int:
+        """Resolve effective top-k from raw config (percentage or absolute)."""
+        if self._costmodel_top_k_is_pct:
+            return max(1, int(n_configs * self._costmodel_top_k_raw))
+        return min(int(self._costmodel_top_k_raw), n_configs)
 
     @staticmethod
     def _parse_explicit_tunable_params(raw_value) -> List[str]:
@@ -2139,9 +2147,10 @@ class AutoTilingTuner(Autotuner):
         from triton.backends.ascend.runtime.costmodel_runtime import \
             costmodel_prune
 
+        resolved_top_k = self._resolve_costmodel_top_k(len(configs))
         if self.costmodel_verbose:
             print(f"\n[costmodel] pruning {len(configs)} configs "
-                  f"(top_k={self.costmodel_top_k}) ...")
+                  f"(top_k={resolved_top_k}) ...")
 
         t0 = time.time()
         arg_bindings = None
@@ -2157,7 +2166,7 @@ class AutoTilingTuner(Autotuner):
             ttir_for_config=lambda cfg: self._costmodel_compile_ttir(
                 cfg, *args, **kwargs,
             ),
-            top_k=self.costmodel_top_k,
+            top_k=resolved_top_k,
             arg_bindings=arg_bindings,
             hardware_config=self.costmodel_hardware_config or None,
         )
@@ -2178,7 +2187,7 @@ class AutoTilingTuner(Autotuner):
             print(
                 f"[costmodel] done in {elapsed:.1f}s: "
                 f"{len(configs)} -> {len(pruned)} configs "
-                f"(top_k={self.costmodel_top_k})"
+                f"(top_k={resolved_top_k})"
             )
             if predictions:
                 # Verbose mode: print every config sorted by prediction.
@@ -2258,7 +2267,7 @@ class AutoTilingTuner(Autotuner):
 
             # ---- costmodel pre-filter (optional) ----
             full_configs = pruned_configs
-            if self.enable_costmodel_prune and len(full_configs) > self.costmodel_top_k:
+            if self.enable_costmodel_prune and len(full_configs) > self._resolve_costmodel_top_k(len(full_configs)):
                 pruned_configs = self._prune_by_costmodel(
                     full_configs, *args, **kwargs,
                 )
@@ -2321,11 +2330,14 @@ class AutoTilingTuner(Autotuner):
             if cached is not None and isinstance(cached, tuple) and "ir_override" not in final_kwargs:
                 final_kwargs["ir_override"] = cached[1]
         try:
+            import torch as _torch
+            _torch.npu.synchronize()
             _t_final = time.time()
             ret = self.fn.run(
                 *args,
                 **final_kwargs,
             )
+            _torch.npu.synchronize()
             _dt = time.time() - _t_final
             if self.costmodel_verbose:
                 print(f"[costmodel] final exec {_dt:.2f}s")

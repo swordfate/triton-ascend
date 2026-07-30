@@ -174,6 +174,12 @@ def _eval_one_costmodel_item(item):
         return config, cached
 
     output = run_costmodel(ttir_or_path=ttir, extra_args=extra_args)
+    if output is None:
+        # Dump failed TTIR to a temp file for debugging
+        import tempfile
+        with tempfile.NamedTemporaryFile(prefix="ttir_dump_", suffix=".mlir", delete=False, mode="w") as f:
+            f.write(ttir)
+            print(f"[costmodel] dumped failing TTIR to {f.name} (arg_bindings={arg_bindings})")
     latency = float("inf") if output is None else parse_latency(output)
     store_costmodel_latency(cache_key, latency)
     return config, latency
