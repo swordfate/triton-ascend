@@ -2048,18 +2048,6 @@ class AutoTilingTuner(Autotuner):
     # Costmodel pruning helpers
     # ------------------------------------------------------------------
 
-    def _get_jit_function(self):
-        """Return the underlying :class:`JITFunction` regardless of decorators.
-
-        Some kernels use ``@libentry()`` (e.g. LigerKernel), which wraps the
-        JITFunction in a ``LibEntry`` object.  This helper unwraps it so that
-        ``.cache_key`` is always accessible.
-        """
-        fn = self.fn
-        while hasattr(fn, 'jit_function'):
-            fn = fn.jit_function
-        return fn
-
     def _costmodel_compile_ttir(self, config, *args, **kwargs):
         """Compile only the TTIR stage for *config*.
 
@@ -2078,7 +2066,7 @@ class AutoTilingTuner(Autotuner):
         # only in those params share the same cached TTIR.
         cache_raw = str(sorted(config.kwargs.items()))
         cache_key = hashlib.sha256(
-            f"{self._get_jit_function().cache_key}-{cache_raw}".encode()
+            f"{self.fn.cache_key}-{cache_raw}".encode()
         ).hexdigest()
 
         if cache_key in self._costmodel_ttir_cache:
@@ -2269,16 +2257,30 @@ class AutoTilingTuner(Autotuner):
             pruned_configs = self.prune_configs(kwargs)
 
             # ---- costmodel pre-filter (optional) ----
-            if self.enable_costmodel_prune and len(pruned_configs) > self.costmodel_top_k:
+            full_configs = pruned_configs
+            if self.enable_costmodel_prune and len(full_configs) > self.costmodel_top_k:
                 pruned_configs = self._prune_by_costmodel(
-                    pruned_configs, *args, **kwargs,
+                    full_configs, *args, **kwargs,
                 )
             # ---------------------------------------
 
             if self.enable_ubtuner or len(pruned_configs) > 1:
                 used_cached_result = False
                 bench_start = time.time()
-                timings = self._batch_bench(*args, configs=pruned_configs, **kwargs)
+                try:
+                    timings = self._batch_bench(*args, configs=pruned_configs, **kwargs)
+                except RuntimeError:
+                    # Costmodel may select only configs that fail HW
+                    # compilation (e.g. UB overflow).  Fall back to the
+                    # full candidate list so at least some config succeeds.
+                    import warnings
+                    warnings.warn(
+                        f"[costmodel] all pruned configs failed HW compile "
+                        f"({len(pruned_configs)} configs); "
+                        f"falling back to full list ({len(full_configs)} configs)"
+                    )
+                    pruned_configs = full_configs
+                    timings = self._batch_bench(*args, configs=full_configs, **kwargs)
                 bench_end = time.time()
                 self.bench_time = bench_end - bench_start
                 self.cache[key] = builtins.min(timings, key=timings.get)
@@ -2313,7 +2315,7 @@ class AutoTilingTuner(Autotuner):
             import hashlib
             cache_raw = str(sorted(config.kwargs.items()))
             cache_key = hashlib.sha256(
-                f"{self._get_jit_function().cache_key}-{cache_raw}".encode()
+                f"{self.fn.cache_key}-{cache_raw}".encode()
             ).hexdigest()
             cached = self._costmodel_ttir_cache.get(cache_key)
             if cached is not None and isinstance(cached, tuple) and "ir_override" not in final_kwargs:
@@ -2360,7 +2362,7 @@ class AutoTilingTuner(Autotuner):
         t_compile_start = time.time()
         kernels_call = {config: self._make_kernel_call(*args, config=config, **kwargs) for config in configs}
         run_fns = {}
-        self._compile_failed_configs = []  # list of (config, error_message)
+        self._compile_failed_configs = []
         exc = None
         exc_stack = ""
 
@@ -2389,7 +2391,7 @@ class AutoTilingTuner(Autotuner):
                             exc_stack = traceback.format_exc()
                             exc = e
                             self._try_ubtuner(*args, config=config, excp=e, run_fns=run_fns, **kwargs)
-                            self._compile_failed_configs.append((config, traceback.format_exc()))
+                            self._compile_failed_configs.append(config)
             except Exception as e:
                 # ignore exception from __exit__() of AsyncCompileMode
                 triton.runtime._async_compile.active_mode.set(None)
@@ -2405,7 +2407,7 @@ class AutoTilingTuner(Autotuner):
                     exc_stack = traceback.format_exc()
                     exc = e
                     self._try_ubtuner(*args, config=config, excp=e, run_fns=run_fns, **kwargs)
-                    self._compile_failed_configs.append((config, exc_stack))
+                    self._compile_failed_configs.append(config)
 
         if len(run_fns) == 0:
             raise RuntimeError(f"No valid triton configs. {type(exc).__name__}: {exc} \nStack trace: {exc_stack}")
@@ -2445,7 +2447,7 @@ class AutoTilingTuner(Autotuner):
                 assert len(time_cost) == len(run_fns)
                 result = {config: cost for config, cost in zip(run_fns.keys(), time_cost)}
                 self._hw_bench_timing = {"compile_s": t_compile_end - t_compile_start,
-                                         "bench_s": time.time() - t_compile_end}
+                                     "bench_s": time.time() - t_compile_end}
                 return result
             except ProfilerResultMismatchError as exc:
                 warnings.warn(
@@ -2457,7 +2459,7 @@ class AutoTilingTuner(Autotuner):
                 )
                 result = {config: self.do_bench(fn, quantiles=(0.5, 0.2, 0.8)) for config, fn in run_fns.items()}
                 self._hw_bench_timing = {"compile_s": t_compile_end - t_compile_start,
-                                         "bench_s": time.time() - t_compile_end}
+                                     "bench_s": time.time() - t_compile_end}
                 return result
         else:
             result = {config: self.do_bench(fn, quantiles=(0.5, 0.2, 0.8)) for config, fn in run_fns.items()}
@@ -2488,7 +2490,7 @@ class AutoTilingTuner(Autotuner):
             import hashlib
             cache_raw = str(sorted(config.kwargs.items()))
             cache_key = hashlib.sha256(
-                f"{self._get_jit_function().cache_key}-{cache_raw}".encode()
+                f"{self.fn.cache_key}-{cache_raw}".encode()
             ).hexdigest()
             cached = self._costmodel_ttir_cache.get(cache_key)
             if cached is not None and isinstance(cached, tuple) and "ir_override" not in current:

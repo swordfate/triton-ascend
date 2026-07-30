@@ -194,14 +194,8 @@ def run_autotune_pass(
 
     if failed:
         print(f"  [!] {len(failed)} config(s) failed to compile on HW:")
-        for item in failed:
-            if isinstance(item, tuple):
-                cfg, tb = item
-                print(f"      - {cfg}")
-                for line in tb.strip().splitlines():
-                    print(f"        {line}")
-            else:
-                print(f"      - {item}")
+        for cfg in failed:
+            print(f"      - {cfg}")
         print()
 
     return elapsed, timings, predictions, best, cm_timing, hw_timing
