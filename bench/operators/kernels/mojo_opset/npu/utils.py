@@ -1,0 +1,37 @@
+# Source: mojo_opset/mojo_opset/backends/ttx/kernels/npu/utils.py
+from functools import lru_cache
+
+import triton
+import triton.language as tl
+
+try:
+    from triton.runtime.libentry import libentry
+except ImportError:
+
+    def libentry():
+        """No-op fallback when triton.runtime.libentry is unavailable."""
+        def _decorator(fn):
+            return fn
+
+        return _decorator
+
+VEC_ALIGN_BYTES = 256
+SRAM_ALIGN_BYTES = 32
+
+
+@lru_cache(maxsize=1)
+def get_num_cores(op_type="vector"):
+    assert op_type in ["vector", "cube", "mix"], f"op_type {op_type} must in ['vector', 'cube', 'mix']."
+    return (
+        triton.runtime.driver.active.utils.get_device_properties("npu")["num_vectorcore"]
+        if op_type == "vector"
+        else triton.runtime.driver.active.utils.get_device_properties("npu")["num_aicore"]
+    )
+
+
+# npu triton only
+exp = tl.exp
+exp2 = tl.math.exp2
+log = tl.log
+log2 = tl.log2
+gather = tl.gather

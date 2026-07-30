@@ -2048,6 +2048,18 @@ class AutoTilingTuner(Autotuner):
     # Costmodel pruning helpers
     # ------------------------------------------------------------------
 
+    def _get_jit_function(self):
+        """Return the underlying :class:`JITFunction` regardless of decorators.
+
+        Some kernels use ``@libentry()`` (e.g. LigerKernel), which wraps the
+        JITFunction in a ``LibEntry`` object.  This helper unwraps it so that
+        ``.cache_key`` is always accessible.
+        """
+        fn = self.fn
+        while hasattr(fn, 'jit_function'):
+            fn = fn.jit_function
+        return fn
+
     def _costmodel_compile_ttir(self, config, *args, **kwargs):
         """Compile only the TTIR stage for *config*.
 
@@ -2066,7 +2078,7 @@ class AutoTilingTuner(Autotuner):
         # only in those params share the same cached TTIR.
         cache_raw = str(sorted(config.kwargs.items()))
         cache_key = hashlib.sha256(
-            f"{self.fn.cache_key}-{cache_raw}".encode()
+            f"{self._get_jit_function().cache_key}-{cache_raw}".encode()
         ).hexdigest()
 
         if cache_key in self._costmodel_ttir_cache:
@@ -2192,10 +2204,9 @@ class AutoTilingTuner(Autotuner):
                     marker = ">" if cfg in pruned else " "
                     print(f"  {marker} #{i+1}  {lat:8.3f} us  |  {cfg}")
                 if self.costmodel_verbose:
-                    min_lat = min(predictions.values()) if predictions else 0
-                    max_lat = max(
-                        v for v in predictions.values() if v != float("inf")
-                    ) if predictions else 0
+                    valid = [v for v in predictions.values() if v != float("inf")]
+                    min_lat = min(valid) if valid else 0
+                    max_lat = max(valid) if valid else 0
                     print(f"[costmodel] evaluated {len(predictions)} configs, "
                           f"latency range: {min_lat:.3f} – {max_lat:.3f} us")
 
@@ -2216,21 +2227,33 @@ class AutoTilingTuner(Autotuner):
                     continue
                 if isinstance(val, int):
                     parts.append(f"arg{i}={val}")
-        # Evaluate the user's grid function to get total program count.
-        # grid(meta) returns e.g. (97,) or (128,64) — multiply dims.
+        # Evaluate the user's grid to get total program count.
+        # Supports both callable grids (lambda meta: ...) and fixed
+        # tuple grids (num_vectorcore, ).  grid(meta) returns e.g.
+        # (97,) or (128,64) — multiply dimensions.
         grid = kwargs.get("grid")
-        if grid is not None and callable(grid) and self.nargs and self.configs:
-            try:
-                meta = {**self.nargs, **self.configs[0].kwargs}
-                dims = grid(meta)
-                if dims:
-                    import math
-                    np_val = 1
-                    for d in dims:
-                        np_val *= d
-                    parts.append(f"num_programs={np_val}")
-            except Exception:
-                pass
+        if grid is not None:
+            if callable(grid) and self.nargs and self.configs:
+                try:
+                    meta = {**self.nargs, **self.configs[0].kwargs}
+                    dims = grid(meta)
+                    if dims:
+                        np_val = 1
+                        for d in dims:
+                            np_val *= d
+                        parts.append(f"num_programsx={np_val}")
+                except Exception:
+                    pass
+            elif isinstance(grid, (tuple, list)):
+                np_val = 1
+                for d in grid:
+                    np_val *= d
+                parts.append(f"num_programsx={np_val}")
+        # The C++ costmodel evaluates a single program and then applies wave
+        # serialization. Bind pid_x=0 so it can resolve stride-loop bounds.
+        # parseBindings() normalizes pid_x → x / program_id_x / pid_x.
+        if "pid_x=0" not in parts:
+            parts.append("pid_x=0")
         return ",".join(parts)
 
     # ------------------------------------------------------------------
@@ -2290,7 +2313,7 @@ class AutoTilingTuner(Autotuner):
             import hashlib
             cache_raw = str(sorted(config.kwargs.items()))
             cache_key = hashlib.sha256(
-                f"{self.fn.cache_key}-{cache_raw}".encode()
+                f"{self._get_jit_function().cache_key}-{cache_raw}".encode()
             ).hexdigest()
             cached = self._costmodel_ttir_cache.get(cache_key)
             if cached is not None and isinstance(cached, tuple) and "ir_override" not in final_kwargs:
@@ -2337,7 +2360,7 @@ class AutoTilingTuner(Autotuner):
         t_compile_start = time.time()
         kernels_call = {config: self._make_kernel_call(*args, config=config, **kwargs) for config in configs}
         run_fns = {}
-        self._compile_failed_configs = []
+        self._compile_failed_configs = []  # list of (config, error_message)
         exc = None
         exc_stack = ""
 
@@ -2366,7 +2389,7 @@ class AutoTilingTuner(Autotuner):
                             exc_stack = traceback.format_exc()
                             exc = e
                             self._try_ubtuner(*args, config=config, excp=e, run_fns=run_fns, **kwargs)
-                            self._compile_failed_configs.append(config)
+                            self._compile_failed_configs.append((config, traceback.format_exc()))
             except Exception as e:
                 # ignore exception from __exit__() of AsyncCompileMode
                 triton.runtime._async_compile.active_mode.set(None)
@@ -2382,7 +2405,7 @@ class AutoTilingTuner(Autotuner):
                     exc_stack = traceback.format_exc()
                     exc = e
                     self._try_ubtuner(*args, config=config, excp=e, run_fns=run_fns, **kwargs)
-                    self._compile_failed_configs.append(config)
+                    self._compile_failed_configs.append((config, exc_stack))
 
         if len(run_fns) == 0:
             raise RuntimeError(f"No valid triton configs. {type(exc).__name__}: {exc} \nStack trace: {exc_stack}")
@@ -2393,8 +2416,7 @@ class AutoTilingTuner(Autotuner):
             # we ignore expensive profiling method when only single config is left
             result = {config: self.do_bench(fn, quantiles=(0.5, 0.2, 0.8)) for config, fn in run_fns.items()}
             self._hw_bench_timing = {"compile_s": t_compile_end - t_compile_start,
-                                     "bench_s": time.time() - t_compile_end,
-                                     "stages": _stage_rep}
+                                     "bench_s": time.time() - t_compile_end}
             return result
 
         parser_mode = getattr(self, "parser_mode", None) or "vector"
@@ -2466,7 +2488,7 @@ class AutoTilingTuner(Autotuner):
             import hashlib
             cache_raw = str(sorted(config.kwargs.items()))
             cache_key = hashlib.sha256(
-                f"{self.fn.cache_key}-{cache_raw}".encode()
+                f"{self._get_jit_function().cache_key}-{cache_raw}".encode()
             ).hexdigest()
             cached = self._costmodel_ttir_cache.get(cache_key)
             if cached is not None and isinstance(cached, tuple) and "ir_override" not in current:

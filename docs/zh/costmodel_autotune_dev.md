@@ -198,56 +198,111 @@ def _build_costmodel_arg_bindings(self, **kwargs):
 
 ---
 
-## 倒推第 4 层：TTIR 复用（ir_override）
+## 倒推第 4 层：TTIR 复用（ir_override）—— 两层缓存模型
 
-costmodel 和硬件 benchmark 会重复 `ast_to_ttir()` + `make_ttir()`。通过 `Config.ir_override` 机制复用。
+costmodel 和硬件 benchmark 共享同一份 TTIR 编译产物，通过 `ir_override` 机制避免重复 `ast_to_ttir()` + `make_ttir()`。
 
-由 `TRITON_COSTMODEL_REUSE_TTIR` 控制（默认 `1` 启用）：
+### 第一层缓存：`_costmodel_ttir_cache`（我们自己维护的）
 
-- **启用时**：costmodel 阶段将 TTIR 写入 `/tmp`（tmpfs），缓存值存 `(ttir_text, temp_path)`。硬件阶段 `_make_kernel_call` 注入 `current["ir_override"] = temp_path`，`triton.compile()` stages 循环在 `.ttir` 匹配时 `parse()` 直接读文件，跳过 `make_ttir`。
-- **关闭时**（`TRITON_COSTMODEL_REUSE_TTIR=0`）：缓存值仅存 `ttir_text`，硬件阶段正常重编译。用于对比端到端延迟差异。
+key 为 `sha256(fn.cache_key + sorted(config.kwargs))`，value 为 `(ttir_text, temp_path)`。
+**不含** `ir_override`，因为它是用来查 TTIR 文件的，不需要。
+
+### 第二层缓存：JITFunction 的编译缓存（Triton 内置）
+
+JIT 的 `compute_cache_key()` 把 **所有 kwargs**（包括 `ir_override`）纳入 key：
+
+```python
+# jit.py: compute_cache_key
+cache_key = str(specialization) + str(options)  # options 含 ir_override
+```
+
+### ir_override 必须在两处注入
+
+| 注入点 | 代码位置 | 作用 |
+|--------|---------|------|
+| `_make_kernel_call()` | autotuner.py L2495 | HW bench 时复用 costmodel 的 TTIR，跳过 `ast_to_ttir` |
+| `run()` | autotuner.py L2304 | **最终执行时复用** HW bench 编译好的 binary |
+
+两处不注入的后果：
+
+```
+_batch_bench (HW bench):              run() (最终执行):
+─────────────────────────             ─────────────────────
+current["ir_override"] = "/tmp/..."   final_kwargs 里没有 ir_override
+        │                                     │
+        ▼                                     ▼
+JIT key = hash({...,                      JIT key = hash({...,
+  ir_override:"/tmp/XXX"})                   ir_override:None})   ← 不同!
+        │                                     │
+        ▼                                     ▼
+   存入 JIT 缓存                           查 JIT 缓存 → MISS → 重编译
+```
+
+**启用 `reuse_ttir` 后，两处注入保证最终执行直接命中 `_batch_bench` 编译好的 binary，零冗余编译。**
+
+由 `TRITON_COSTMODEL_REUSE_TTIR` 控制（默认 `0` 关闭，需要显式开启）：
+
+- **启用时**：costmodel 阶段将 TTIR 写入 `/tmp`（tmpfs），`_make_kernel_call` 和 `run()` 都注入 `ir_override`。TTIR 编译仅在 costmodel 阶段发生一次，HW bench 和最终执行都是复用。
+- **关闭时**：缓存值仅存 `ttir_text`（不含 temp path），各阶段独立编译。用于对比端到端延迟差异。
+
+### 代码索引
+
+```
+costmodel 阶段: _costmodel_compile_ttir()          ← 写 TTIR 文件，存 (ttir_text, temp_path)
+HW bench 阶段:  _make_kernel_call()                ← current["ir_override"] = cached[1]
+最终执行阶段:   run()                               ← final_kwargs["ir_override"] = cached[1]
+```
 
 ---
 
-## 下游修复：C++ pipeline 的 kernel 级 cycle 估算
+## 倒推第 5 层：pid_x 与 num_programsx — C++ 循环分析
 
-### 问题一：`getKernelCycles` 未被调用，`ascend.scheduled_cycles` 未设置
+costmodel 的 C++ PipelineAnalysisPass 需要对 kernel 中的 stride-loop（`for row in range(pid, n_tasks, num_programs)`）做静态 trip count 估算。这些循环依赖运行时值：
 
-`PipelineAnalysisPass` 只设了 `scheduled_cycles_one_iter`。`extractEstimatedTimeUs` 找不到 `ascend.scheduled_cycles`，fallback 到逐 op 求和——无 wave 乘数、无 scalar overhead。
+- **Lower bound**: `tl.program_id(0)` → C++ 需要 `pid_x` 绑定
+- **Step**: `tl.num_programs(0)` → C++ 需要 `num_programsx` 绑定
+- **Upper bound**: 从 kernel 参数推导（如 `n_rows`） → C++ 需要 `argN` 绑定
 
-**修复**：调用 `scheduler.getKernelCycles()`，写入 `ascend.scheduled_cycles`。
+Python 端的 `_build_costmodel_arg_bindings()` 生成逗号分隔的绑定字符串：
 
-### 问题二：`numPrograms` 无法从 IR 推导
+```
+arg2=4096,arg3=4096,arg4=4096,num_programsx=48,pid_x=0
+```
 
-costmodel 管线不含 auto-blockify（wave loop 在 `bishengir-compile` 创建），IR 里无 wave loop。从循环 trip count 推导的方案永远返回 1。
+C++ 端解析链路（`Utils.h`）：
 
-**方案**：Python 层评估 `grid(lambda)` → `num_programs` → C++ `parseBindings` 保留自定义 key → `parsed->get<int64_t>("num_programs")` 读取。
+```
+parseBindings("pid_x=0,...")
+  → 归一化: "x"=0, "pid_x"=0, "program_id_x"=0  （三个别名）
+  → exportProgramIdBindings → programIdBindings["x"]=0
+
+parseBindings("num_programsx=48,...")
+  → 归一化: "num_programsx"=48, "num_programs_x"=48  （两个别名）
+  → exportProgramIdBindings → programIdBindings["num_programsx"]=48
+
+evaluateValue(lower) → find("x") → 0
+evaluateValue(step)  → find("num_programsx") → 48
+evaluateValue(upper) → find("arg3") → 4096
+
+tripCount = ceil((4096 - 0) / 48) = 86
+```
+
+同时 `num_programs` 也用于 wave 计算：
 
 ```cpp
-// PipelineAnalysisPass.cpp
-auto parsed = parseBindings(argBindingsStr);       // 保留所有 key(不只是 argN)
-parsed->exportArgBindings(argBindings);
-auto pythonNumPrograms = parsed->get<int64_t>("num_programs");  // 自定义 key
-int64_t numPrograms = pythonNumPrograms.value_or(1);
-int64_t scheduledCycles =
-    scheduler.getKernelCycles(numPrograms, numParallelUnits=40, numInnerIters=0);
+pythonNumPrograms = parsed->get<int64_t>("num_programsx");  // 优先 num_programsx
+// fallback: parsed->get<int64_t>("num_programs")           // 向后兼容
+numWaves = ceil(numPrograms / numParallelUnits);
 ```
 
-`getKernelCycles` 内部：
-```
-barrierCycles = numInnerIters × pipeBarrierCycles
-perProgram = (oneIterCycles + barrier) × (1 + scalarFactor)    // 1+3.74
-numWaves   = ceil(numPrograms / numParallelUnits)               // ceil(97/40)=3
-return perProgram × numWaves
-```
+**注意**：关键词用 `num_programsx`（无下划线），因为 C++ `evaluateValue` 里查找的是 `"num_programs" + dim` = `"num_programsx"`，不是 `"num_programs_x"`。不过 `parseBindings` 也接受 `num_programsx` 格式并写入两个别名，所以两个格式都能命中。
 
 ### 数据流总览
 
 ```
-Python: grid(meta) → (97,) → "arg3=98432,num_programs=97"
-C++:    parseBindings → argBindings[3]=98432, numPrograms=97
-        getKernelCycles(97, 40, 0) = oneIterCycles × 4.74 × 3
-```
+Python: grid tuple (48,) → "num_programsx=48,pid_x=0"
+C++:    parseBindings → programIdBindings["x"]=0, ["num_programsx"]=48
+        getKernelCycles(48, ...) → perProgramCycles × numWaves
 
 ---
 

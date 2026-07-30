@@ -85,7 +85,11 @@ struct PipelineAnalysisPass
       }
       parsed->exportArgBindings(argBindings);
       parsed->exportProgramIdBindings(programIdBindings);
-      pythonNumPrograms = parsed->get<int64_t>("num_programs");
+      // Try num_programsx first (matching evaluateValue lookup),
+      // fall back to bare num_programs for backwards compatibility.
+      pythonNumPrograms = parsed->get<int64_t>("num_programsx");
+      if (!pythonNumPrograms)
+        pythonNumPrograms = parsed->get<int64_t>("num_programs");
     }
 
     if (!loopTripCountsStr.empty()) {

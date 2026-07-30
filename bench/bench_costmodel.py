@@ -93,8 +93,12 @@ def main():
     output = torch.empty_like(x)
     grid = lambda meta: (triton.cdiv(size, meta["BLOCK_SIZE"]),)
 
-    # Warm one bishengir-compile invocation so the first timed pipeline
-    # does not pay the toolchain/library startup cost.
+    # Clear stale cache so each benchmark run starts from scratch, then
+    # warm one bishengir-compile invocation to load the toolchain.
+    import shutil as _shutil
+    _default_cache = os.path.expanduser("~/.triton/cache")
+    if os.path.isdir(_default_cache):
+        _shutil.rmtree(_default_cache, ignore_errors=True)
     print("=== Compiler warmup (not timed) ===")
     _warm = torch.empty_like(x)
     @triton.autotune(configs=[configs[0]], key=["n_elements"])
