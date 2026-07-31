@@ -19,6 +19,7 @@ import time
 import torch
 import triton  # noqa: F401
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import bench_common as common
 
 # ---------------------------------------------------------------------------

@@ -17,18 +17,18 @@ echo "============================================"
 echo ""
 
 for bench in \
-    bench/operators/bench_gelu.py \
-    bench/operators/bench_silu.py \
-    bench/operators/bench_swiglu.py \
-    bench/operators/bench_matmul.py \
-    bench/operators/bench_group_gemm.py \
-    bench/operators/bench_sdpa.py \
-    bench/operators/bench_quant.py \
-    bench/operators/bench_lightning_indexer.py \
-    bench/operators/bench_int8_gemm.py \
-    bench/operators/bench_convolution.py \
-    bench/operators/bench_diffution_attention.py \
-    bench/operators/bench_fused_ce.py; do
+    bench/operators/q2tritonkernel/bench_gelu.py \
+    bench/operators/q2tritonkernel/bench_swiglu.py \
+    bench/operators/q2tritonkernel/bench_sdpa.py \
+    bench/operators/mojo_opset/bench_silu.py \
+    bench/operators/mojo_opset/bench_group_gemm.py \
+    bench/operators/mojo_opset/bench_quant.py \
+    bench/operators/mojo_opset/bench_lightning_indexer.py \
+    bench/operators/mojo_opset/bench_int8_gemm.py \
+    bench/operators/mojo_opset/bench_convolution.py \
+    bench/operators/mojo_opset/bench_diffution_attention.py \
+    bench/operators/mojo_opset/bench_fused_ce.py \
+    bench/operators/triton_ascend_kernels/bench_matmul.py; do
     echo ""
     echo "############################################"
     echo "# $(basename $bench)"

@@ -7,6 +7,7 @@ Source: mojo_opset/.../kernels/npu/a2/quant.py
 from __future__ import annotations
 import json, os, sys
 import torch
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import bench_common as common
 
 TOP_K = int(os.environ.get("TRITON_COSTMODEL_TOP_K", "4"))
@@ -21,7 +22,7 @@ def main():
     common.reload_kernel_module(qa)
     common.warmup_cache()
     a_elapsed, a_timings, a_preds, a_best, a_cm, a_hw = common.run_autotune_pass(
-        qa, "scale_dynamic_quant_kernel", lambda: qa.dynamic_quant_impl(x), args=())
+        qa, "scale_dynamic_quant_kernel", lambda: qa.dynamic_quant_impl(x, None), args=())
     common.print_results("A", a_elapsed, a_timings, a_best, a_preds, a_cm, a_hw)
 
     common.setup_costmodel_env(False)
@@ -29,7 +30,7 @@ def main():
     common.reload_kernel_module(qb)
     common.warmup_cache()
     b_elapsed, b_timings, _, b_best, _, b_hw = common.run_autotune_pass(
-        qb, "scale_dynamic_quant_kernel", lambda: qb.dynamic_quant_impl(x), args=())
+        qb, "scale_dynamic_quant_kernel", lambda: qb.dynamic_quant_impl(x, None), args=())
     common.print_results("B", b_elapsed, b_timings, b_best, hw_timing=b_hw)
 
     common.print_comparison(a_elapsed, a_timings, a_preds, a_cm, a_hw, b_elapsed, b_timings, b_hw, TOP_K)

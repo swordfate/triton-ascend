@@ -15,6 +15,7 @@ import triton.language as tl
     ],
     key=["n_cols"],
     restore_value=["X_ptr"],
+    hints={"auto_gen_config": True},
 )
 @triton.jit
 def _cross_entropy_kernel(
@@ -252,6 +253,7 @@ def _cross_entropy_kernel(
     ],
     key=["n_cols"],
     restore_value=["X_ptr"],
+    hints={"auto_gen_config": True},
 )
 @triton.jit
 def _cross_entropy_prime_kernel(

@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-"""Benchmark SDPA forward: costmodel-predicted vs brute-force autotune.
+"""Benchmark SwiGLU: costmodel-predicted vs brute-force autotune.
 
-Kernel source (copied as-is, no import changes needed):
-    kernels/sdpa.py  ←  Q2TritonKernel/src/kernels/sdpa.py
-
-Uses ``kernel_sdpa_fwd`` (the training SDPA forward with active autotune).
+Kernel source (copied as-is, imports only adjusted):
+    kernels/activation/swiglu.py  ←  Q2TritonKernel/src/kernels/activation/swiglu.py
 
 Usage::
 
-    TRITON_COSTMODEL_TOP_K=3 python bench/operators/bench_sdpa.py
+    TRITON_COSTMODEL_TOP_K=5 python bench/operators/bench_swiglu.py
 """
 
 from __future__ import annotations
@@ -21,13 +19,14 @@ import time
 import torch
 import triton  # noqa: F401
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import bench_common as common
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 
-TOP_K = int(os.environ.get("TRITON_COSTMODEL_TOP_K", "3"))
+TOP_K = int(os.environ.get("TRITON_COSTMODEL_TOP_K", "5"))
 
 # ---------------------------------------------------------------------------
 # Main
@@ -37,31 +36,25 @@ def main() -> None:
     # ------------------------------------------------------------------
     # Prepare inputs
     # ------------------------------------------------------------------
-    B, H, S, D = 2, 8, 1024, 64  # batch, heads, seq_len, head_dim
-    q = torch.randn(B, H, S, D, device="npu", dtype=torch.bfloat16)
-    k = torch.randn(B, H, S, D, device="npu", dtype=torch.bfloat16)
-    v = torch.randn(B, H, S, D, device="npu", dtype=torch.bfloat16)
-    # Causal mask — upper triangle is False (masked out)
-    mask = torch.tril(torch.ones(S, S, device="npu", dtype=torch.bool))
+    shape = (4, 1024, 4096)  # B, T, H
+    a = torch.randn(shape, device="npu", dtype=torch.float16)
+    b = torch.randn(shape, device="npu", dtype=torch.float16)
 
     # ------------------------------------------------------------------
     
     # Pipeline A: costmodel pre-filter
     # ------------------------------------------------------------------
     common.setup_costmodel_env(enable=True, top_k=TOP_K)
-    from kernels.q2tritonkernel import sdpa as sdpa_a
-    common.reload_kernel_module(sdpa_a)
+    from kernels.q2tritonkernel.activation import swiglu as swiglu_a
+    common.reload_kernel_module(swiglu_a)
     common.warmup_cache()
 
     print("=== Pipeline A: costmodel pre-filter ===")
-    # We use a thin wrapper because sdpa_fwd_impl has complex arg handling
-    def _run_sdpa_a():
-        return sdpa_a.sdpa_fwd_impl(q, k, v, mask=mask)
-
     a_elapsed, a_timings, a_preds, a_best, a_cm, a_hw = common.run_autotune_pass(
-        sdpa_a,
-        "kernel_sdpa_fwd",
-        _run_sdpa_a,
+        swiglu_a,
+        "_swiglu_fwd_kernel",
+        swiglu_a.swiglu_fwd_impl,
+        args=(a, b),
     )
     common.print_results("A", a_elapsed, a_timings, a_best, a_preds, a_cm, a_hw)
 
@@ -69,18 +62,16 @@ def main() -> None:
     # Pipeline B: brute-force (HW bench all configs)
     # ------------------------------------------------------------------
     common.setup_costmodel_env(enable=False)
-    from kernels.q2tritonkernel import sdpa as sdpa_b
-    common.reload_kernel_module(sdpa_b)
+    from kernels.q2tritonkernel.activation import swiglu as swiglu_b
+    common.reload_kernel_module(swiglu_b)
     common.warmup_cache()
 
     print("=== Pipeline B: brute-force ===")
-    def _run_sdpa_b():
-        return sdpa_b.sdpa_fwd_impl(q, k, v, mask=mask)
-
     b_elapsed, b_timings, _, b_best, _, b_hw = common.run_autotune_pass(
-        sdpa_b,
-        "kernel_sdpa_fwd",
-        _run_sdpa_b,
+        swiglu_b,
+        "_swiglu_fwd_kernel",
+        swiglu_b.swiglu_fwd_impl,
+        args=(a, b),
     )
     common.print_results("B", b_elapsed, b_timings, b_best, hw_timing=b_hw)
 
@@ -95,8 +86,8 @@ def main() -> None:
 
     # Save results
     results = {
-        "operator": "sdpa_fwd",
-        "shape": {"B": B, "H": H, "S": S, "D": D},
+        "operator": "swiglu",
+        "shape": list(shape),
         "top_k": TOP_K,
         "pipeline_a": {"elapsed_s": a_elapsed, "best": str(a_best)},
         "pipeline_b": {"elapsed_s": b_elapsed, "best": str(b_best)},
@@ -105,7 +96,7 @@ def main() -> None:
         "a_timings_s": {str(k): v for k, v in a_timings.items()},
         "b_timings_s": {str(k): v for k, v in b_timings.items()},
     }
-    out_path = os.path.join(os.path.dirname(__file__), "results_sdpa.json")
+    out_path = os.path.join(os.path.dirname(__file__), "results_swiglu.json")
     with open(out_path, "w") as f:
         json.dump(results, f, indent=2, default=str)
     print(f"Results saved to {out_path}")

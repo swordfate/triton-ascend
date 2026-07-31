@@ -12,13 +12,6 @@ from kernels.mojo_opset.npu.utils import get_num_cores
 from kernels.mojo_opset.kern_utils import input_guard
 from kernels.mojo_opset.kern_utils import prepare_chunk_indices
 
-@triton.autotune(
-    configs=[
-        triton.Config({"BD": BD})
-        for BD in [128, 256, 4096]
-    ],
-    key=["T", "D"],
-)
 @triton.heuristics(
     {
         "HAS_WEIGHT": lambda args: args["weight"] is not None,
@@ -27,6 +20,14 @@ from kernels.mojo_opset.kern_utils import prepare_chunk_indices
         "USE_INITIAL_STATE": lambda args: args["initial_state"] is not None,
         "IS_VARLEN": lambda args: args["cu_seqlens"] is not None,
     }
+)
+@triton.autotune(
+    configs=[
+        triton.Config({"BD": BD})
+        for BD in [128, 256, 4096]
+    ],
+    key=["T", "D"],
+    hints={"auto_gen_config": True},
 )
 @triton.jit
 def causal_conv1d_fwd_kernel(

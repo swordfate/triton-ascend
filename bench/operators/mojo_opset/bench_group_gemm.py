@@ -18,6 +18,7 @@ import sys
 import torch
 import triton  # noqa: F401
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import bench_common as common
 
 TOP_K = int(os.environ.get("TRITON_COSTMODEL_TOP_K", "6"))
