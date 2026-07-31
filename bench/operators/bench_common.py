@@ -24,7 +24,7 @@ _cache_dirs: List[str] = []
 # Environment helpers
 # ---------------------------------------------------------------------------
 
-def setup_costmodel_env(enable: bool, top_k: int = 5) -> None:
+def setup_costmodel_env(enable: bool, top_k: float = 0.2) -> None:
     """Set (or clear) environment variables that control costmodel pruning.
 
     Each call creates a fresh ``TRITON_CACHE_DIR`` so that Pipeline A and

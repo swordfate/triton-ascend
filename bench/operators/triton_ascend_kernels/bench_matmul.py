@@ -26,7 +26,7 @@ import bench_common as common
 # Config
 # ---------------------------------------------------------------------------
 
-TOP_K = int(os.environ.get("TRITON_COSTMODEL_TOP_K", "5"))
+TOP_K = float(os.environ.get("TRITON_COSTMODEL_TOP_K", "0.2"))
 
 # ---------------------------------------------------------------------------
 # Main
