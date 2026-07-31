@@ -9,7 +9,7 @@ Pipeline B (brute-force):
 
 Usage::
 
-    python bench/bench_costmodel.py
+    python bench/bench_costmodel_vecadd.py
 """
 
 from __future__ import annotations
@@ -244,9 +244,9 @@ def main():
         "pipeline_b": {"elapsed_s": b_elapsed, "best": str(b_best)},
         "speedup": speedup,
     }
-    with open("bench_costmodel_results.json", "w") as f:
+    with open("bench_costmodel_vecadd_results.json", "w") as f:
         json.dump(results, f, indent=2, default=str)
-    print(f"\nResults saved to bench_costmodel_results.json")
+    print(f"\nResults saved to bench_costmodel_vecadd_results.json")
 
 
 if __name__ == "__main__":
