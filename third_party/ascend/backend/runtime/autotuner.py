@@ -2272,6 +2272,7 @@ class AutoTilingTuner(Autotuner):
         if self.is_simt_mode and kwargs.get('simt_stack_limit', None) is None:
             kwargs['simt_stack_limit'] = self.simt_stack_limit
         used_cached_result = True
+        self.best_config = None
         if cache_miss:
             # prune configs
             pruned_configs = self.prune_configs(kwargs)
@@ -2300,7 +2301,16 @@ class AutoTilingTuner(Autotuner):
                         f"falling back to full list ({len(full_configs)} configs)"
                     )
                     pruned_configs = full_configs
-                    timings = self._batch_bench(*args, configs=full_configs, **kwargs)
+                    try:
+                        timings = self._batch_bench(*args, configs=full_configs, **kwargs)
+                    except RuntimeError:
+                        warnings.warn(
+                            f"[costmodel] full config list also failed HW "
+                            f"compile ({len(full_configs)} configs); "
+                            f"no valid config — best_config will be None"
+                        )
+                        self.best_config = None
+                        return None
                 bench_end = time.time()
                 self.bench_time = bench_end - bench_start
                 self.cache[key] = builtins.min(timings, key=timings.get)
@@ -2309,7 +2319,7 @@ class AutoTilingTuner(Autotuner):
                 self.configs_timings = timings
                 config = self.cache[key]
             else:
-                config = pruned_configs[0]
+                config = pruned_configs[0] if pruned_configs else None
         else:
             config = self.cache[key]
 
