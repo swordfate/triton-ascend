@@ -35,7 +35,10 @@ def layer_norm_fwd_heuristics(args):
 
 @triton.heuristics({"BLOCK_SIZE_M": layer_norm_fwd_heuristics})
 @triton.autotune(
-    configs=[],
+    configs=[
+        triton.Config({"BLOCK_SIZE_M": 8}),
+        triton.Config({"BLOCK_SIZE_M": 16}),
+    ],
     key=["n_rows", "n_cols"],
     hints={"auto_gen_config": True},
 )

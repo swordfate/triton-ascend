@@ -2221,16 +2221,20 @@ class AutoTilingTuner(Autotuner):
         # function signature, so they must not appear in arg-bindings
         # and do not consume a TTIR argument slot.
         constexpr_indices = set(getattr(self.fn, 'constexprs', []))
-        if self.nargs:
-            for i, name in enumerate(self.arg_names):
-                if i in constexpr_indices:
-                    continue
-                val = self.nargs.get(name)
-                if val is None:
-                    continue
-                if isinstance(val, int):
-                    ttir_idx = i - sum(1 for ci in constexpr_indices if ci < i)
-                    parts.append(f"arg{ttir_idx}={val}")
+        # Look up arg values from both positional (self.nargs) and
+        # keyword arguments.  Many kernel wrappers pass scalar params
+        # (n_rows, n_cols, etc.) as keywords, not positionally.
+        for i, name in enumerate(self.arg_names):
+            if i in constexpr_indices:
+                continue
+            val = self.nargs.get(name) if self.nargs else None
+            if val is None:
+                val = kwargs.get(name)
+            if val is None:
+                continue
+            if isinstance(val, int):
+                ttir_idx = i - sum(1 for ci in constexpr_indices if ci < i)
+                parts.append(f"arg{ttir_idx}={val}")
         # Evaluate the user's grid to get total program count.
         # Supports both callable grids (lambda meta: ...) and fixed
         # tuple grids (num_vectorcore, ).  grid(meta) returns e.g.
@@ -2274,7 +2278,7 @@ class AutoTilingTuner(Autotuner):
 
             # ---- costmodel pre-filter (optional) ----
             full_configs = pruned_configs
-            if self.enable_costmodel_prune and len(full_configs) > self._resolve_costmodel_top_k(len(full_configs)):
+            if self.enable_costmodel_prune:
                 pruned_configs = self._prune_by_costmodel(
                     full_configs, *args, **kwargs,
                 )

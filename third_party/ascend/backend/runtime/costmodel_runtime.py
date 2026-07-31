@@ -274,12 +274,6 @@ def costmodel_prune(configs, ttir_for_config, top_k=10, arg_bindings=None,
     _verbose = os.environ.get("TRITON_COSTMODEL_VERBOSE", "0") == "1"
     _timing = {"ttir_elapsed_s": 0.0, "eval_elapsed_s": 0.0}
 
-    if len(configs) <= top_k:
-        if _verbose:
-            print(f"[costmodel] skip: only {len(configs)} configs "
-                  f"(<= top_k={top_k})")
-        return list(configs), {}, _timing
-
     if _verbose:
         print(f"[costmodel] gathering TTIR for {len(configs)} configs ...")
 
@@ -332,9 +326,6 @@ def costmodel_prune(configs, ttir_for_config, top_k=10, arg_bindings=None,
         print(f"[costmodel] {len(items)} TTIRs ready "
               f"{f'({failed} failed)' if failed else ''}, "
               f"evaluating via costmodel_bench ...")
-
-    if len(items) <= top_k:
-        return [it["config"] for it in items], {}, _timing
 
     # ── Phase 2: costmodel evaluation (parallel) ──
     _t0 = _time.time()

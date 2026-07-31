@@ -910,7 +910,11 @@ def join_prob_reject_sampling_impl(
 
 
 @triton.autotune(
-    configs=[],
+    configs=[
+        triton.Config({"BLOCK_SIZE": 2048}),
+        triton.Config({"BLOCK_SIZE": 4096}),
+        triton.Config({"BLOCK_SIZE": 8192}),
+    ],
     key=["n_batch", "n_vocab"],
     hints={"auto_gen_config": True},
 )

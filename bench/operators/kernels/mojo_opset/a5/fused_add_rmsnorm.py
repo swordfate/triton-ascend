@@ -43,7 +43,10 @@ def _block_size_n_heur(args):
 
 # @libentry()
 @triton.autotune(
-    configs=[],
+    configs=[
+        triton.Config({"BLOCK_SIZE_M": 8}),
+        triton.Config({"BLOCK_SIZE_M": 16}),
+    ],
     key=["n_rows", "n_cols"],
     hints={"auto_gen_config": True},
 )
