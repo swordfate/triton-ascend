@@ -1738,3 +1738,166 @@ Python 读取 effective:
 两者是互补关系：
 - **PipelineAnalysisPass**：精确的 SIMD 延时预测 → 用于 autotuner 剪枝（已集成）
 - **SimdSimtCostModel**：快速的 SIMD/SIMT 对比 → 用于 compile_mode 自动选择（本分支实现）
+
+---
+
+## 十五、`unstructured_in_simt` 是怎么逐 op 选 SIMT 的
+
+`compile_mode="unstructured_in_simt"` 不走 costmodel。它靠 `UnstructureConversionPass` 对 **每个 load/store op** 独立做静态判断。
+
+### 15.1 决策代码（我们分支的原始代码）
+
+文件：`third_party/ascend/lib/TritonToUnstructure/UnstructureConversionPass.cpp:532-542`
+
+```cpp
+// 对 kernel 里的每一个 load/store op，独立判断：
+bool indirectFastPathEnabled =
+    compileOn91095Flag              // ① 必须是 A5 芯片
+    && forceSimtTemplateFlag        // ② compile_mode 必须是 unstructured_in_simt
+                                    //    （NPUOptions.__post_init__ 设 force_simt_template=True）
+    && (
+        (!ptrOffsetInfo.isStructured()  // ③ 指针是 非连续/离散 的
+         && sizeInByte < 64)           //    且连续区域 < 64 字节
+        ||
+        routeDiscreteMaskToSimt         // ④ 或者上一个 pass 标记了"离散 mask，路由 SIMT"
+    );
+
+bool rankWithinLimit = resultShape.size() <= 5;  // 额外限制：维度 ≤ 5
+
+if (indirectFastPathEnabled && rankWithinLimit) {
+    tryRewriteIndirectFastPath(...);    // → tt.load → ascend.indirect_load (SIMT)
+    return;
+}
+// 否则 → 回退标量循环 (SIMD)
+```
+
+### 15.2 四个条件逐个解释
+
+**条件 ① `compileOn91095Flag`**：必须是在 A5（Ascend 950）上编译。A2/A3 没有 SIMT 硬件，直接跳过。
+
+**条件 ② `forceSimtTemplateFlag`**：由 `NPUOptions.__post_init__` 根据 `compile_mode` 自动设置。`"unstructured_in_simt"` 时设为 True，`"simd"` 时设为 False。`"simt_only"` 时整个 pass 不运行（走另一条编译链路）。
+
+**条件 ③ `!ptrOffsetInfo.isStructured() && sizeInByte < 64`**：这是核心判断。`ptrOffsetInfo.isStructured()` 分析指针表达式是否形成"规则的连续访存"：
+
+- **结构化**（`isStructured() = true`）：指针是 `base + program_id * BLOCK + range(BLOCK)` 这种线性模式。SIMD DMA 可以直接处理，不需要 SIMT。
+- **非结构化**（`isStructured() = false`）：指针依赖运行时值，比如 `base + index_array[i]`。SIMD 只能展开成标量循环，SIMT 的 `indirect_load` 更快。
+- **`sizeInByte < 64`**：即使是非结构化，如果连续区域太小（< 64 字节），说明数据量不大，SIMT dispatch 开销可能超过收益。
+
+**条件 ④ `routeDiscreteMaskToSimt`**：由 `DiscreteMaskAccessConversion` pass（在前一个 pass 运行）设置。它分析 `mask` 表达式是否非连续——例如 `mask = (indices < N)` 中 `indices` 是动态的。如果是非连续 mask 且满足 A5 + 维数 ≤ 5，就打上这个标记。
+
+### 15.3 例子
+
+```mlir
+// Load A: 线性地址 — 结构化，连续
+%a = tt.load %a_ptr[%linear_offset] ...
+// → isStructured() = true → 条件③不满足 → SIMD（正常 DMA）
+
+// Load B: 间接地址 — 非结构化，离散
+%b = tt.load %b_ptr[%dynamic_indices] ...
+// → isStructured() = false, sizeInByte = 32 < 64
+// → 条件③满足 → rank = 2 ≤ 5
+// → indirectFastPathEnabled = true
+// → tryRewriteIndirectFastPath → tt.load 转 ascend.indirect_load (SIMT)
+```
+
+### 15.4 与 `simd_simt` 模式的本质区别
+
+| | `unstructured_in_simt` | `simd_simt` |
+|---|---|---|
+| 决策粒度 | **每个 op** 独立 | **先 kernel 级三选一**，再逐 op 标记 |
+| 谁决定 SIMT | 编译器 pass 静态规则 | costmodel 评分 → gate 通过 → 才启用 |
+| 所有满足条件的 op 都走 SIMT？ | 是（无差别） | 否（只有 costmodel 批准的那些） |
+| 需要 costmodel？ | 不需要 | 需要 |
+| gather 怎么处理 | 满足条件 → indirect_load；不满足 → 标量循环 | `isMixedSimtAnchor` 直接判定 → SIMT |
+
+---
+
+## 十六、`simd_simt` 模式下怎么转成 `indirect_load`
+
+costmodel 本身不做 IR 转换——它只打分和标记。真正的 `tt.load → ascend.indirect_load` 转换还是由 `UnstructureConversionPass` 完成。关键改动在 `simt_costmodel` 分支里通过 `shouldUseSimtTemplate()` 桥接了 costmodel 的决策和原有的转换 pass。
+
+### 16.1 改了一行：从全局 flag 换成统一判断函数
+
+**原来**（`unstructured_in_simt`）：
+
+```cpp
+bool indirectFastPathEnabled =
+    compileOn91095Flag && forceSimtTemplateFlag &&  // ← 全局：所有 op 都允许
+    ((!ptrOffsetInfo.isStructured() && sizeInByte < 64) || routeDiscreteMaskToSimt);
+```
+
+**simt_costmodel 分支改为**：
+
+```cpp
+bool simtFastPathRequested =
+    shouldUseSimtTemplate(op, forceSimtTemplateFlag);  // ← 逐 op：只对批准的 op 允许
+bool indirectFastPathEnabled =
+    compileOn91095Flag && simtFastPathRequested &&
+    ((!ptrOffsetInfo.isStructured() && sizeInByte < 64) || routeDiscreteMaskToSimt);
+```
+
+### 16.2 `shouldUseSimtTemplate()` — 统一两种模式的判断
+
+文件：`third_party/ascend/include/Utils/SimtSelection.h:113-122`
+
+```cpp
+inline bool shouldUseSimtTemplate(Operation *op, bool legacyForceSimt) {
+    // 如果被 scope.scope {simd} 包着 → 一定不用 SIMT
+    if (hasEnclosingVectorMode(op, "simd"))
+        return false;
+
+    // 否则检查：op 是否被标记 selected 或被 scope.scope {simt} 包着？
+    const bool locallySelected =
+        isSelectedForSimt(op) || hasEnclosingVectorMode(op, "simt");
+
+    // 关键分支：costmodel 是否在控制？
+    if (isModelControlled(op))
+        return locallySelected;        // ← 模型控制：只看局部标记
+                                        //   只有 costmodel 批准的 op 才能走 SIMT
+
+    return legacyForceSimt || locallySelected;  // ← legacy 模式：
+                                                //   forceSimtTemplateFlag=True
+                                                //   → 所有 op 都允许
+}
+```
+
+### 16.3 两个模式下的行为对比
+
+| | `unstructured_in_simt` | `simd_simt`（costmodel 选 mixed） |
+|---|---|---|
+| `isModelControlled(op)` | false | true |
+| `shouldUseSimtTemplate` 返回 | `true \|\| locallySelected` = **true** | `locallySelected` |
+| 哪些 op 能走 SIMT | **所有满足 structural 条件的 op** | **只有 scope.scope{simt} 里或标记了 selected 的 op** |
+| 控制来源 | 编译器 pass 静态规则 | costmodel 决策 + 编译器 pass 静态规则 |
+
+### 16.4 完整链路：从 costmodel 到 IR 转换
+
+```
+simd_simt 模式下，一个 indirect load op 的完整旅程：
+                                                       │
+① SelectSimdSimtCostModel                               │
+  → isMixedSimtAnchor(op) = true                       │ ← gather / indirect load
+  → op 打上 ascend.simt_costmodel.selected 属性        │
+                                                       │
+② MaterializeSimtScopes                                 │
+  → 把 op 包进 scope.scope {simt}                      │
+                                                       │
+③ （编译器继续...）                                     │
+                                                       │
+④ UnstructureConversionPass                             │
+  → shouldUseSimtTemplate(op, flag)                    │
+    → hasEnclosingVectorMode(op, "simt") = true        │ ← 检测到 scope.scope {simt}
+    → isModelControlled(op) = true                     │
+    → return locallySelected = true                    │
+  → indirectFastPathEnabled = true                     │
+  → tryRewriteIndirectFastPath                         │
+    → tt.load → ascend.indirect_load  ← 这里才真正转换  │
+```
+
+### 16.5 注意：scope.scope 和 indirect_load 是两个独立的概念
+
+即使 op 被包进 `scope.scope {simt}`，要转成 `indirect_load` 仍需满足 structural 条件（非结构化 + size<64 + rank≤5）。不满足的 op 虽然在 scope 里（下游编译器会给它 SIMT 代码生成），但不会变成 `indirect_load` 指令。
+
+反过来，在 `unstructured_in_simt` 模式下，即使 op 不在 scope 里，只要满足 structural 条件就能转成 `indirect_load`。
+
+**总结**：`simd_simt` 和 `unstructured_in_simt` 用的是**同一个 pass** 做 `tt.load → indirect_load` 转换。区别只是 `simd_simt` 在前面插了 costmodel + Materialize 两步，把"允许走 SIMT 的 op 列表"从"所有满足条件的 op"收窄到"costmodel 批准的那些 op"。
