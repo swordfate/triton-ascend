@@ -2267,6 +2267,7 @@ class AutoTilingTuner(Autotuner):
     # ------------------------------------------------------------------
 
     def run(self, *args, **kwargs):
+        self._was_called = True
         key = self.generate_key_and_configs(*args, **kwargs)
         cache_miss = key not in self.cache
         if self.is_simt_mode and kwargs.get('simt_stack_limit', None) is None:

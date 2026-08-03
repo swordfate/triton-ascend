@@ -126,18 +126,26 @@ def extract_hw_timing(tuner: Any) -> Dict[str, float]:
 # ---------------------------------------------------------------------------
 
 def find_active_tuner(module: ModuleType, candidates: List[str]) -> str:
-    """Return the first candidate tuner name that has non-empty timings.
+    """Return the first candidate tuner whose ``run()`` was actually invoked.
 
     Some wrappers dispatch to different kernels based on heuristics
-    (e.g. mojo's silu_fwd_impl selects from 3 variants).  This helper
-    detects which one was actually used.
+    (e.g. mojo's silu_fwd_impl selects from 3 variants, rmsnorm_infer_impl
+    chooses between _infer_kernel and _infer_kernel_single).
+
+    The Ascend autotuner sets ``self._was_called = True`` at the top of
+    ``run()``, so even if all configs later fail HW compilation we can
+    still tell which kernel was targeted.
     """
     for attr in candidates:
         tuner = getattr(module, attr, None)
-        if tuner is not None:
-            raw = getattr(tuner, "configs_timings", {})
-            if raw:
-                return attr
+        if tuner is not None and getattr(tuner, "_was_called", False):
+            return attr
+    # Fallback: try configs_timings (for kernels that use the standard
+    # Triton autotuner which does not set _was_called).
+    for attr in candidates:
+        tuner = getattr(module, attr, None)
+        if tuner is not None and getattr(tuner, "configs_timings", {}):
+            return attr
     return candidates[0]
 
 
@@ -180,11 +188,22 @@ def run_autotune_pass(
     wrapper_fn(*args, **kwargs)
     elapsed = time.time() - t0
 
-    active = tuner_attr
-    if tuner_fallbacks:
-        active = find_active_tuner(module, [tuner_attr] + tuner_fallbacks)
+    # Auto-detect which tuner was actually called.  Many wrappers dispatch
+    # to a different kernel than tuner_attr based on input shapes.
+    if tuner_fallbacks is None:
+        # Discover all autotune-decorated kernels in the module automatically.
+        import triton.runtime.autotuner as _autotuner_mod
+        all_candidates = sorted(
+            name for name, obj in vars(module).items()
+            if isinstance(obj, _autotuner_mod.Autotuner)
+        )
+    else:
+        all_candidates = [tuner_attr] + list(tuner_fallbacks)
+    active = find_active_tuner(module, all_candidates)
 
     tuner = getattr(module, active)
+    if active != tuner_attr and os.environ.get("TRITON_COSTMODEL_VERBOSE", "0") == "1":
+        print(f"[bench] tuner auto-detected: {tuner_attr} → {active}")
     failed = getattr(tuner, "_compile_failed_configs", [])
     timings = extract_timings(tuner)
     predictions = extract_predictions(tuner)
