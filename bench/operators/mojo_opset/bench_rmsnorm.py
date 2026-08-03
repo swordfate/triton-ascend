@@ -24,9 +24,9 @@ def main():
     common.reload_kernel_module(mod_a)
     common.warmup_cache()
     a_elapsed, a_timings, a_preds, a_best, a_cm, a_hw = common.run_autotune_pass(
-        mod_a, "_rmsnorm_infer_kernel",
+        mod_a, "_rmsnorm_infer_kernel_single",
         lambda: mod_a.rmsnorm_infer_impl(x, w, 1e-6),
-        tuner_fallbacks=None,
+        tuner_fallbacks=["_rmsnorm_infer_kernel"],
     )
     common.print_results("A", a_elapsed, a_timings, a_best, a_preds, a_cm, a_hw)
 
@@ -36,9 +36,9 @@ def main():
     common.reload_kernel_module(mod_b)
     common.warmup_cache()
     b_elapsed, b_timings, _, b_best, _, b_hw = common.run_autotune_pass(
-        mod_b, "_rmsnorm_infer_kernel",
+        mod_b, "_rmsnorm_infer_kernel_single",
         lambda: mod_a.rmsnorm_infer_impl(x, w, 1e-6),
-        tuner_fallbacks=None,
+        tuner_fallbacks=["_rmsnorm_infer_kernel"],
     )
     common.print_results("B", b_elapsed, b_timings, b_best, hw_timing=b_hw)
 
