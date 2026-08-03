@@ -331,9 +331,14 @@ class AutoTilingTuner(Autotuner):
             self._costmodel_ttir_cache: Dict[str, str] = {}
 
     def _resolve_costmodel_top_k(self, n_configs: int) -> int:
-        """Resolve effective top-k from raw config (percentage or absolute)."""
+        """Resolve effective top-k from raw config (percentage or absolute).
+
+        The percentage branch floors at 2 (not 1) so the HW bench phase
+        always has at least 2 candidates to compare — the single-config
+        fast path skips profiling and would hide costmodel accuracy.
+        """
         if self._costmodel_top_k_is_pct:
-            return max(1, int(n_configs * self._costmodel_top_k_raw))
+            return min(max(2, int(n_configs * self._costmodel_top_k_raw)), n_configs)
         return min(int(self._costmodel_top_k_raw), n_configs)
 
     @staticmethod
