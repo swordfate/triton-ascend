@@ -82,9 +82,8 @@ def layer_norm_fwd_two_pass_heuristics(args):
 
 @triton.autotune(
     configs=[
-        triton.Config({"BLOCK_SIZE_M": 4}),
-        triton.Config({"BLOCK_SIZE_M": 8}),
-        triton.Config({"BLOCK_SIZE_M": 16}),
+        triton.Config({}),
+        triton.Config({}, num_warps=8),
     ],
     key=["n_rows", "n_cols"],
     hints={"auto_gen_config": True},
