@@ -1901,3 +1901,147 @@ simd_simt 模式下，一个 indirect load op 的完整旅程：
 反过来，在 `unstructured_in_simt` 模式下，即使 op 不在 scope 里，只要满足 structural 条件就能转成 `indirect_load`。
 
 **总结**：`simd_simt` 和 `unstructured_in_simt` 用的是**同一个 pass** 做 `tt.load → indirect_load` 转换。区别只是 `simd_simt` 在前面插了 costmodel + Materialize 两步，把"允许走 SIMT 的 op 列表"从"所有满足条件的 op"收窄到"costmodel 批准的那些 op"。
+
+---
+
+## 十七、反推：作者是怎么写出这些公式和参数的
+
+这些密密麻麻的条件、系数、门控不是凭空想出来的。从代码和 profile 文件的反推，作者的完整方法论是：
+
+### 17.1 第一步：微基准测量——得到 op 级吞吐量
+
+文件：`microbench/ascend_davidv100_v1.json`
+
+作者写了一套微基准测试程序（文件里的 `source` 字段记录了来源：`triton_cases/SIMT_Test/tput.cce; concur2.cce`）。做法是：
+
+1. 对 **每一个** op 类型（`f32.add`、`f32.mul`、`f32.div`、`load`、`store`……），写一个只包含该 op 的极简 kernel
+2. 分别在 SIMD 和 SIMT 路径下编译
+3. 在真实 A5 硬件上反复跑，读 `SYS_CNT` 硬件计数器（类似 GPU 的 clock cycles）
+4. 记录饱和吞吐量（ops/cycle）
+
+profile 里的 `confidence` 字段记录了数据来源的可信度：
+
+```json
+"source_kind": "isolated_microbenchmark",  // ← 实测
+"source": "triton_cases/SIMT_Test/tput.cce",
+"confidence": "high"
+
+"source_kind": "architecture_fact",        // ← 硬件手册
+"source": "Ascend vector ISA width",
+"confidence": "high"
+```
+
+**每个 op 的 throughput 不是算出来的，是测出来的。** 你看到的那一长串 `simd_ops` / `simt_ops` 里的 `throughput` 值，都是作者在硬件上跑了微基准后填进去的。
+
+### 17.2 第二步：第一原理建模——分析公式的骨架
+
+有了 op 级吞吐量，作者从硬件架构知识出发，搭建了一个分析性成本模型：
+
+1. **SIMD**：向量宽度 2048 bit → 一条指令处理 `2048/32 = 64` 个 f32。如果 op 操作了 500 个元素 → 需要 `ceil(500/64) = 8` 条向量指令。每条指令耗时 = `1/throughput` 周期。所以 SIMD cycles = `ceil(elements/64) / throughput`。
+
+2. **SIMT**：warp size = 32。不需要向量打包，直接 `elements / throughput`。
+
+3. **Memory**：SIMD 有独立 DMA 引擎（MTE2 load, MTE3 store），可以和计算并行 → `max(load, store)`。SIMT 的 load/store 共享总线 → `load + store`。
+
+4. **Dot**：FLOPs = `2*M*N*K`，SIMD 有专用 Cube 单元（吞吐高），SIMT 没有（吞吐低）。
+
+5. **Shuffle/Predicate**：reduction 在 SIMT 上需要 warp shuffle（log2(32)=5 级），mask 材料化需要 predicate 指令。
+
+这些不是从数据里学的——是作者知道硬件怎么工作，直接写的物理模型。
+
+### 17.3 第三步：硬件校准——修正分析模型的误差
+
+分析模型是理想化的。真实硬件有 cache miss、bank conflict、指令调度气泡等效应。作者的解决方案：
+
+1. 构造几个**有代表性的真实 kernel**（不是微基准那种单 op kernel，而是有 gather、dot、mask、循环的复杂 kernel）
+2. 在真实硬件上用 `SYS_CNT` 硬件计数器测量实际耗时
+3. 把 kernel 的 TTIR 喂给分析模型，算出**预测值**
+4. 对比预测值与实测值的差距
+
+profile 第 25 行的注释直接承认了：
+
+```json
+"source": "Bounded development activation fitted to repeated Ascend950PR
+           Event runs for masked-rowwise and tiny-gather-dot structural
+           domains; no workload-name matching; wider validation is still
+           required before general rollout"
+```
+
+**"fitted to repeated Ascend950PR Event runs"** = 在 A5 上反复跑，采集 Event 计数器数据，拟合参数。
+
+具体来说，他发现了以下规律：
+- **不规则访存（irregular addressing）的 kernel**：预测值总是偏低（太乐观）→ 加一个与 `laneDependentPointerOps` 成正比的 penalty → `irregular_per_density = 0.8`（这个值是从数据里 fit 出来的）
+- **有很多 mask 的 kernel**：SIMD 需要材料化 mask（额外的 DMA → 标量传输）→ 加 `per_mask_rank = 0.022` 的 penalty
+- **有 reduction 的 kernel**：SIMT 上的 warp shuffle 开销比纯计算模型预估的大 → 加 `per_weighted_reduction = 0.02` 的 penalty
+- **小矩阵乘（tiny dot）**：SIMD Cube 单元对于小矩阵利用率低（underfill）→ 单独建模 tiny dot case
+
+每个 penalty 系数（0.8、0.022、0.02、0.06……）都是**从数据里 fit 出来的**，不是推理出来的。这就解释了为什么有那么多看似"魔法数字"的参数——它们是拟合结果。
+
+### 17.4 第四步：校准域（Coverage）——诚实地划定模型的有效边界
+
+作者没有声称模型在任何 kernel 上都准。profile 第 27 行的注释：
+
+```json
+"description": "Feature-domain limits within which Event-calibrated
+                structural ranking is admitted; these are model validity
+                bounds rather than hardware limits."
+```
+
+**"these are model validity bounds rather than hardware limits"** = 这些限制是模型的准确范围，不是硬件的能力限制。
+
+具体来说：
+- `tiny_dot_flops_max = 16384`：只在 dot FLOPs ≤ 16384 的 kernel 上验证过
+- `rowwise_loop_trip_sum_max = 32`：只在循环总迭代数 ≤ 32 的 kernel 上验证过
+- `minimum_irregular_density = 0.25`：只在 irregular density ≥ 0.25 的 kernel 上验证过
+
+超出这些范围的 kernel → `calibrationCovered = false` → gate 不通过 → 退回 `all_simd`。这是非常诚实的工程实践：**在没测试过的域里不做决策。**
+
+### 17.5 第五步：迭代——v1 到 v5
+
+profile 版本号是 `v5`（`david-v100-simd-simt-20260728-v5`）。说明经过了 5 个版本的迭代。典型的迭代流程：
+
+```
+v1: 只有微基准数据 + 简单分析模型 → 在真实 kernel 上误差很大
+v2: 加了 structural penalty → 对 masked-rowwise kernel 改善了
+v3: 加了 tiny dot 分支 → 对小矩阵乘 kernel 改善了
+v4: 加了 coverage + gate → 不在校准域内拒绝决策
+v5: 调整了权重、更新了 profile 参数 → 当前版本
+```
+
+### 17.6 方法论总结
+
+```
+┌─ 阶段 1：微基准测量 ───────────────────────────────┐
+│ 写 30+ 个单 op kernel → 分别 SIMD/SIMT 编译        │
+│ → 在 A5 上跑 → 读 SYS_CNT → 得到每个 op 的吞吐    │
+│ 产物：profile.simd_ops / simt_ops（186 个参数）    │
+└────────────────────────────────────────────────────┘
+                        │
+┌─ 阶段 2：第一原理建模 ─────────────────────────────┐
+│ 基于硬件架构知识写分析模型                          │
+│ 产物：analyzeSimdSimtFeatures + estimateSimdSimtCandidates
+│       （~600 行 C++）                              │
+└────────────────────────────────────────────────────┘
+                        │
+┌─ 阶段 3：硬件校准 ─────────────────────────────────┐
+│ 构造代表性 kernel → 实测 vs 预测 → 拟合 penalty    │
+│ 产物：structural_penalty_ratio（16 个系数）         │
+│       mixed_simd_fraction（8 个系数）              │
+│ 这些系数不是推理的，是数据 fit 的                  │
+└────────────────────────────────────────────────────┘
+                        │
+┌─ 阶段 4：校准域划定 ───────────────────────────────┐
+│ 记录模型在哪些 kernel 模式上验证过                  │
+│ 产物：coverage 域（11 个阈值）                     │
+│ 超出域 → 拒绝决策                                   │
+└────────────────────────────────────────────────────┘
+                        │
+┌─ 阶段 5：迭代 v1→v5 ──────────────────────────────┐
+│ 每次迭代：扩展校准域 / 修正参数 / 添加新 pattern   │
+│ 产物：profile_version = v5                        │
+└────────────────────────────────────────────────────┘
+```
+
+所以回答你的问题："作者怎么知道这些条件会更好？" **他不知道，他测出来的。** op 级吞吐是微基准测的，penalty 系数是在真实 kernel 上对比预测值和实测值后拟合的，coverage 是他诚实地记录了"在这些范围之外我没测过所以不保证"。
+
+这也是为什么 profile 是 JSON 而不是硬编码在 C++ 里——作者知道参数需要频繁迭代更新，放在 JSON 里可以不用重编译 C++ 就能调参。
