@@ -330,7 +330,16 @@ if (!gatePassed) → effective = "all_simd"（默认回退，安全）
 
 ```python
 def _run_cpp_simd_simt_costmodel(mod, metadata, opt) -> str:
-    """只在 compile_mode="simd_simt" 时触发"""
+    """双重门控：compile_mode="simd_simt" 且 auto_simt_scope_mode != "off" 才触发"""
+
+    # 门控：两条件任一不满足 → 直接返回，不跑 costmodel
+    mode = opt.auto_simt_scope_mode
+    if mode == "off" or metadata.get("compile_mode") != "simd_simt":
+        return "backend_default"
+
+    # auto_simt_scope_mode 可通过环境变量 TRITON_ASCEND_AUTO_SIMT_SCOPE=auto/off 控制
+    # compile_mode="simd_simt" 是新增的第四个模式，专用于触发 costmodel
+    # 已有的三个模式（simd/unstructured_in_simt/simt_only）走 legacy 路径，不经过 costmodel
 
     # 1. 加载 profile
     profile = opt.auto_simt_model_profile or "david_v100_simd_simt_v1.json"
@@ -1211,7 +1220,498 @@ SimdSimtCostReport
   └─ breakdown: 详细的 cost breakdown（JSON 输出用）
 ```
 
-## 九、关键设计决策总结
+## 九、`compile_mode` 是怎么传到 costmodel 的
+
+问题：用户在 kernel 调用时写的 `compile_mode="simd_simt"`，最终是怎么到达 `_run_cpp_simd_simt_costmodel` 的？
+
+### 9.1 完整链路
+
+```
+用户代码
+  kernel[grid](args, compile_mode="simd_simt")
+        │
+        ▼
+JITFunction.run()                                        ← jit.py:695
+        │
+        ├─ binder(*args, **kwargs)                       ← jit.py:710
+        │    binder 是 create_function_from_signature() 动态生成的函数
+        │    它有 **options 参数，会捕获所有非 kernel 形参的 kwarg
+        │    包括 compile_mode="simd_simt"
+        │    返回 (params, specialization, options_dict)
+        │    options_dict = {"compile_mode": "simd_simt", ...}
+        │
+        ├─ _pack_args(backend, kwargs, ...)              ← jit.py:717
+        │    │
+        │    └─ backend.parse_options(kwargs)             ← jit.py:673
+        │         │
+        │         └─ backend/compiler.py:AscendBackend.parse_options()
+        │               │
+        │               └─ 从 kwargs 里提取 NPUOptions 字段
+        │                  args = {k: kwargs[k] for k in NPUOptions 字段名 if k in kwargs}
+        │                  → compile_mode="simd_simt" 被提取
+        │                  → NPUOptions(compile_mode="simd_simt", ...)
+        │
+        │            NPUOptions.__post_init__()           ← compiler.py:1139
+        │               compile_mode == "simd_simt"
+        │               → force_simt_template = True
+        │               → parallel_mode = "mix_simd_simt"
+        │               → auto_simt_scope_mode = 标准化(环境变量或默认值)
+        │
+        ├─ _do_compile(key, signature, ..., options, ...)  ← jit.py:720
+        │    │
+        │    └─ triton.compile(src, target=..., options=options)
+        │         │                                    ← compiler/compiler.py:228
+        │         ├─ metadata = {
+        │         │      "hash": hash,
+        │         │      "target": target,
+        │         │      **options.__dict__,  ← 这里！NPUOptions 所有字段展开进 metadata
+        │         │      **env_vars,
+        │         │    }
+        │         │    → metadata["compile_mode"] = "simd_simt"
+        │         │    → metadata["force_simt_template"] = True
+        │         │    → metadata["parallel_mode"] = "mix_simd_simt"
+        │         │
+        │         └─ backend.add_stages(stages, options, ...)
+        │               │
+        │               └─ stages["ttadapter"] = lambda src, metadata:
+        │                       ttir_to_linalg(src, metadata, options, ...)
+        │                                            ↑         ↑
+        │                                     metadata 里有    opt=NPUOptions
+        │                                     compile_mode      对象也直接传入
+        │
+        └─ 每个 stage 按序执行，metadata 贯穿所有 stage
+               │
+               ▼
+          ttir_to_linalg(mod, metadata, opt)             ← compiler.py:182
+               │
+               ├─ _run_cpp_simd_simt_costmodel(mod, metadata, opt)
+               │    │
+               │    ├─ opt.auto_simt_scope_mode  ← 从 NPUOptions 直接读
+               │    └─ metadata.get("compile_mode") ← 从 metadata dict 读
+               │       → 两个值都来自同一个 NPUOptions
+               │
+               └─ metadata["compile_mode"] == "simd_simt"
+                    且 opt.auto_simt_scope_mode != "off"
+                    → 运行 SelectSimdSimtCostModel + MaterializeSimtScopes
+```
+
+关键点在第 284 行：
+
+```python
+metadata = {
+    "hash": hash,
+    "target": target,
+    **options.__dict__,    # ← NPUOptions 的所有字段一字排开
+    **env_vars,
+}
+```
+
+因为 `NPUOptions` 是一个 `@dataclass`，`options.__dict__` 包含所有字段：`compile_mode`、`force_simt_template`、`parallel_mode`、`num_warps`、`auto_simt_scope_mode` 等。它们是自动进入 metadata 的，不需要手动拷贝。
+
+### 9.2 为什么在 C++ pass 里能同时读到 options 和 metadata
+
+```python
+def _run_cpp_simd_simt_costmodel(mod, metadata, opt) -> str:
+    mode = opt.auto_simt_scope_mode                    # ← 从 NPUOptions 直接读
+    if mode == "off" or metadata.get("compile_mode") != "simd_simt":  # ← 从 metadata 读
+        return "backend_default"
+```
+
+两个来源其实是同一个 NPUOptions 对象的不同视图——`opt` 是原始 dataclass，`metadata` 是它的 dict 展开。代码里有时读 `opt.xxx` 有时读 `metadata["xxx"]`，本质上是一样的。
+
+---
+
+## 十、SelectSimdSimtCostModel Pass — 逐行解读（~250 行）
+
+这是整个 autoscope 的"驾驶员"：它调用评分模型、解读结果、做出最终决策、标记 SIMT anchor op。文件：`costmodel/lib/AscendModel/Transforms/SelectSimdSimtCostModel.cpp`。
+
+### 10.1 Pass 的输入参数
+
+```cpp
+// SelectSimdSimtCostModelPass 的成员变量（在 Passes.td 中定义）：
+//   mode              ← "auto" 或 "report"
+//   profilePath       ← JSON profile 文件路径
+//   actualTarget      ← 当前芯片型号（如 "Ascend950PR_9579"）
+//   numWarps          ← warp 数（默认 32）
+//   marginRatio       ← 决策阈值（默认 0.10 = 10%）
+//   compileOn91095    ← 是否在 A5 上编译
+//   dumpPath          ← JSON 报告输出路径（可选）
+```
+
+### 10.2 `isMixedSimtAnchor()` — 判断一个 op 是否应标为 SIMT
+
+```cpp
+static bool isMixedSimtAnchor(Operation *op, bool compileOn91095) {
+    // 只针对 A5 芯片；非 A5 没有 SIMT 硬件，直接返回 false
+    if (!compileOn91095)
+        return false;
+
+    llvm::StringRef name = op->getName().getStringRef();
+
+    // ── 总是走 SIMT 的 op 类型 ──
+    if (name == "tt.gather" || name == "tt.histogram")
+        return true;                          // gather/histogram 天生离散 → 总是 SIMT
+
+    // ── 有条件走 SIMT 的 op ──
+    if (name == "tt.scan")
+        return isPlainOneDimensionalCumsum(op);  // 只有 1 维 cumsum（加和）适合 SIMT
+
+    if (name.starts_with("tt.atomic"))
+        return hasTensorPointerOperand(op);      // atomic 操作如果操作对象是张量 → SIMT
+
+    if (name == "tt.load" || name == "tt.store")
+        // 关键判断：这个 load/store 的指针是否依赖"从内存加载出来的索引"？
+        // 即：是不是间接访存（indirect load/store）
+        return hasTensorPointerOperand(op) && pointerDependsOnLoadedIndex(op);
+
+    return false;  // 其他所有 op（dot, add, mul, ...）→ 不标 SIMT，走默认 SIMD
+}
+```
+
+**`pointerDependsOnLoadedIndex` 做了什么**（lines 97-128）：
+
+从一个 memory op（load/store）的指针操作数出发，沿着 MLIR 的 SSA use-def 链反向追踪。如果能追溯到另一个 `tt.load`（即这个指针的索引来自之前的 load 结果），说明这是间接访存——数据依赖动态值。
+
+```cpp
+static bool pointerDependsOnLoadedIndex(Operation *memoryOp) {
+    SmallVector<Value> worklist{memoryOp->getOperand(0)};  // 从指针操作数开始
+    llvm::DenseSet<Value> visited;                          // 避免重复访问
+
+    while (!worklist.empty()) {
+        Value value = worklist.pop_back_val();              // BFS 遍历
+        if (!visited.insert(value).second) continue;        // 已访问 → 跳过
+
+        // 如果这个 value 是 BlockArgument（如 scf.for 的循环变量）
+        // 需要跨越循环边界追踪
+        if (auto argument = dyn_cast<BlockArgument>(value)) {
+            // ... 处理循环传递的值 ...
+            continue;
+        }
+
+        // 如果这个 value 产生自某个 op
+        Operation *producer = value.getDefiningOp();
+        if (!producer) continue;
+
+        // ← 关键：如果追溯到 tt.load 或 tt.gather
+        //    说明指针依赖已加载的数据 → 间接访存
+        llvm::StringRef name = producer->getName().getStringRef();
+        if (name == "tt.load" || name == "tt.gather")
+            return true;
+
+        // 继续沿 SSA 链反向追踪
+        llvm::append_range(worklist, producer->getOperands());
+    }
+    return false;
+}
+```
+
+举个例子说明 `pointerDependsOnLoadedIndex` 判断什么：
+
+```mlir
+// gather kernel 的 TTIR 片段
+%indices = tt.load %indices_ptr ...        // ← tt.load，加载索引数组
+%data    = tt.load %data_ptr[%indices] ... // ← 指针依赖 %indices，而 %indices 来自 load
+                                          //   → pointerDependsOnLoadedIndex = true
+                                          //   → isMixedSimtAnchor = true
+                                          //   → 这个 load 被标为 SIMT ← indirect_load
+```
+
+如果是普通的连续 load：
+
+```mlir
+// vecadd kernel 的 TTIR 片段
+%x = tt.load %x_ptr[%linear_offset] ...   // ← 指针是线性偏移（program_id * BLOCK + range）
+                                          //   不依赖其他 load 的结果
+                                          //   → pointerDependsOnLoadedIndex = false
+                                          //   → isMixedSimtAnchor = false
+                                          //   → 不标 SIMT，走默认 SIMD
+```
+
+### 10.3 `collectMixedSimtAnchors()` — 收集所有应标 SIMT 的 op
+
+```cpp
+static SmallVector<Operation *>
+collectMixedSimtAnchors(ModuleOp module, bool compileOn91095) {
+    SmallVector<Operation *> anchors;
+    module.walk<WalkOrder::PreOrder>([&](Operation *op) {
+        if (isMixedSimtAnchor(op, compileOn91095)) {
+            anchors.push_back(op);           // 记录这个 op
+            return WalkResult::skip();       // PreOrder + skip：不递归进入这个 op 内部
+                                             //   （避免把 SIMT scope 内的子 op 重复标记）
+        }
+        return WalkResult::advance();        // 继续向深层遍历
+    });
+    return anchors;
+}
+```
+
+`WalkOrder::PreOrder` 确保先处理外层 op，再进入嵌套（这与 `MaterializeSimtScopes` 的 `scope.scope` 包覆配合——如果一个 gather 已经被包进 scope，就不会重复处理里面的 load）。
+
+### 10.4 `runOnOperation()` — Pass 的主入口（lines 202-280）
+
+这是整个 pass 的执行体，分 6 个阶段：
+
+#### 阶段 1：清理 + 初始化
+
+```cpp
+ModuleOp module = getOperation();          // 拿到当前 MLIR 模块
+clearPreviousSelection(module);            // 清除上一次运行可能留下的 attrs
+                                           // （ascend.simt_costmodel.effective / selected 等）
+
+bool autoMode = mode.getValue() == "auto"; // mode 是 pass 参数："auto" → 会自动应用决策
+                                           //                     "report" → 只出报告不动 IR
+
+SimdSimtCostModelOptions options;          // 构建 costmodel 选项
+options.profilePath   = profilePath.getValue();
+options.actualTarget  = actualTarget.getValue();
+options.numWarps      = numWarps.getValue();
+options.marginRatio   = marginRatio.getValue();
+// auto 模式下：out-of-coverage 的 kernel 不评分（安全第一）
+// report 模式下：即使 out-of-coverage 也评分（用于离线分析）
+options.scoreOutsideCalibrationCoverage = !autoMode;
+```
+
+#### 阶段 2：调用评分模型
+
+```cpp
+auto reportOr = analyzeSimdSimtCandidates(module, options);  // 第八章详解的评分函数
+if (!reportOr) {
+    // 如果 costmodel 本身出错（如 profile 解析失败），报错退出
+    module.emitError("C++ SIMD/SIMT cost model failed: ")
+        << llvm::toString(reportOr.takeError());
+    signalPassFailure();
+    return;
+}
+SimdSimtCostReport report = std::move(*reportOr);
+// 此时 report.decision  = AllSIMD / AllSIMTOnly / MixedSIMDSIMT
+//      report.gatePassed = 是否通过所有门控
+```
+
+#### 阶段 3：从 recommended 到 effective（决策生效判定）
+
+```cpp
+// recommended = 模型推荐的最优候选
+std::string recommended =
+    report.candidateCostsEvaluated
+        ? stringifySimdSimtCandidate(report.decision).str()  // "all_simd" / "all_simt_only" / "mixed_simd_simt"
+        : "backend_default";
+
+// effective 初始化为 "backend_default"（= 不做任何改变）
+std::string effective = "backend_default";
+SmallVector<Operation *> mixedAnchors;
+bool actionSupported = true;
+
+// 对于 mixed 候选：检查是否可以落地
+if (recommended == "mixed_simd_simt") {
+    if (hasExplicitScope) {
+        // 如果 kernel 里已经有手动 scope.scope → 不动（避免冲突）
+        actionSupported = false;
+    } else {
+        // 收集需要标 SIMT 的 op
+        mixedAnchors = collectMixedSimtAnchors(module, compileOn91095);
+        if (mixedAnchors.empty()) {
+            // 如果收集不到任何 anchor → 选 mix 没意义（没有 op 实际需要 SIMT）
+            actionSupported = false;
+        }
+    }
+} else if (recommended == "all_simt_only" && hasExplicitScope) {
+    // 不要用手动 scope 的 kernel 覆盖为全 SIMT
+    actionSupported = false;
+}
+
+// ── 只有 auto 模式 + gate 通过 + action 可落地 → 才真正采纳 ──
+if (autoMode && report.gatePassed && actionSupported) {
+    effective = recommended;                               // 采纳模型推荐
+
+    if (effective == "mixed_simd_simt") {
+        // 关键：逐 op 标记！
+        for (Operation *anchor : mixedAnchors)
+            anchor->setAttr("ascend.simt_costmodel.selected",
+                            UnitAttr::get(module.getContext()));
+        //    ↑ 给每个 mixed anchor op 打上标记
+        //    后续 MaterializeSimtScopes 读取这个标记，包 scope.scope{simt}
+    }
+}
+// 否则 effective 保持 "backend_default" → 走 legacy 路径
+```
+
+#### 阶段 4：写入 module attrs（供 Python 读取）
+
+```cpp
+Builder builder(module.getContext());
+module->setAttr("ascend.simt_costmodel.recommended",
+                builder.getStringAttr(recommended));
+module->setAttr("ascend.simt_costmodel.effective",
+                builder.getStringAttr(effective));
+module->setAttr("ascend.simt_costmodel.report_json",
+                builder.getStringAttr(reportJSON));
+// 写入各个候选的分数（Python 可读，用于日志/调试）
+module->setAttr("ascend.simt_costmodel.all_simd_score",
+                builder.getF64FloatAttr(report.candidateCosts.allSimd));
+module->setAttr("ascend.simt_costmodel.all_simt_score",
+                builder.getF64FloatAttr(report.candidateCosts.allSimtOnly));
+module->setAttr("ascend.simt_costmodel.mixed_score",
+                builder.getF64FloatAttr(report.candidateCosts.mixedSimdSimt));
+```
+
+#### 阶段 5：检查 full-SIMT 情况
+
+```cpp
+// 检查：整个 kernel body 是否就是单个 void SIMT scope？
+// 如果是 → 标记 scope_pure_simt_auto，Python 会直接走全 SIMT 路径
+Operation *voidScope = findWholeBodyVoidSimtScope(module);
+if (voidScope && effective == "all_simt_only") {
+    module->setAttr("ascend.simt_costmodel.scope_pure_simt_auto",
+                    builder.getBoolAttr(true));
+}
+```
+
+#### 阶段 6：报告输出
+
+```cpp
+// 如果配置了 dumpPath，把 JSON 报告追加写入文件
+if (!dumpPath.getValue().empty()) {
+    appendJSONLine(dumpPath.getValue(), reportJSON);
+}
+```
+
+---
+
+## 十一、MaterializeSimtScopes Pass — 逐行解读（~150 行）
+
+文件：`costmodel/lib/AscendModel/Transforms/MaterializeSimtScopes.cpp`。
+
+它的唯一任务：把 `SelectSimdSimtCostModel` 标记的 op（带有 `ascend.simt_costmodel.selected` 属性）**包进 `scope.scope {simt}` region**，让下游 AscendNPU IR 编译器识别。
+
+### 11.1 为什么需要这个 pass
+
+`SelectSimdSimtCostModel` 只是在 op 上打了一个属性标记：
+
+```mlir
+%result = tt.load %ptr ...  {ascend.simt_costmodel.selected}
+```
+
+下游编译器不认识这个自定义属性。它认识的是 `scope.scope {vec_mode = "simt"}`。所以需要一个 pass 把属性标记转换为 MLIR region 结构。
+
+### 11.2 `wrapSelectedOperation()` — 将单个 op 包进 scope
+
+```cpp
+static LogicalResult wrapSelectedOperation(Operation *op) {
+    OpBuilder builder(op);  // builder 在 op 前面创建新指令
+
+    // 创建 scope.scope op
+    OperationState scopeState(op->getLoc(), "scope.scope");
+    //   scope 的输出类型 = 原 op 的输出类型（保持 SSA 兼容）
+    scopeState.addTypes(op->getResultTypes());
+    //   设置 vec_mode = "simt"
+    scopeState.addAttribute("vec_mode", builder.getStringAttr("simt"));
+    //   分配一个空的 Region（后续填入 op）
+    scopeState.addRegion();
+    Operation *scopeOp = builder.create(scopeState);
+
+    // 把 op 移入 scope region 内
+    Block &body = scopeOp->getRegion(0).emplaceBlock();
+    op->moveBefore(&body, body.end());  // 移动 op 到 scope 的 body 中
+
+    // 创建 scope.return，把 op 的所有结果返回出去
+    builder.setInsertionPointAfter(op);
+    builder.create<scope::ReturnOp>(op->getLoc(), op->getResults());
+
+    // 把 scope 的所有结果替换原来 op 的结果（保持 SSA）
+    for (auto [i, result] : llvm::enumerate(scopeOp->getResults()))
+        op->getResult(i).replaceAllUsesWith(result);
+
+    return success();
+}
+```
+
+### 11.3 转换过程示意
+
+**输入**（`SelectSimdSimtCostModel` 标记后）：
+
+```mlir
+tt.func @kernel(...) {
+    %data = tt.load %data_ptr[%idx] {ascend.simt_costmodel.selected} ...
+    //                                ↑ 标记：这个 load 要走 SIMT
+    %sum  = arith.addf %data, %bias ...
+    tt.return
+}
+```
+
+**输出**（`MaterializeSimtScopes` 执行后）：
+
+```mlir
+tt.func @kernel(...) {
+    %data = "scope.scope"() <{vec_mode = "simt"}> ({
+        %inner = tt.load %data_ptr[%idx] ...       // ← 原来的 load 被包进 scope
+        scope.return %inner : tensor<8x32xf32>
+    }) : () -> tensor<8x32xf32>
+    //     ↑ scope.scope 的 vec_mode="simt" 告诉下游：这段走 SIMT
+
+    %sum = arith.addf %data, %bias ...             // ← add 没被标记，留外面走 SIMD
+    tt.return
+}
+```
+
+下游 AscendNPU IR 编译器遇到 `scope.scope {vec_mode = "simt"}` 时，会把 region 内部的代码用 SIMT 编译器编译，外部的用 SIMD 编译器编译。
+
+### 11.4 `runOnOperation()` — Pass 主入口
+
+```cpp
+void runOnOperation() override {
+    ModuleOp module = getOperation();
+
+    // 找到所有被标记 selected 的 op
+    SmallVector<Operation *> selectedOps;
+    module.walk([&](Operation *op) {
+        if (isSelectedForSimt(op))  // 检查 ascend.simt_costmodel.selected 属性
+            selectedOps.push_back(op);
+    });
+
+    // 对每个被标记的 op 执行包覆
+    for (Operation *op : selectedOps) {
+        // 跳过已经被包进 scope 的 op（避免重复包覆）
+        if (hasSelectedAncestor(op))
+            continue;
+        // 跳过不能材质化的 op（如 terminator、isolated-from-above）
+        if (!isMaterializable(op))
+            continue;
+        wrapSelectedOperation(op);
+    }
+}
+```
+
+`hasSelectedAncestor` 检查祖先链：如果 op 的某个外层 op 已经被包进 scope.scope（比如一个 gather 里嵌套的 load），就不再包覆这个内层 op——因为外层 scope 已经覆盖了它。
+
+---
+
+## 十二、三个 Pass 的协作流程
+
+```
+make_ttir() → 标准 TTIR 优化后的 IR
+    │
+    ▼
+ttir_to_linalg()
+    │
+    ├─ SelectSimdSimtCostModel Pass
+    │   ├─ analyzeSimdSimtCandidates(module)    → 评分三选一
+    │   ├─ 判断 gatePassed + actionSupported
+    │   ├─ 如果选 mixed: collectMixedSimtAnchors → 逐 op 标记 selected
+    │   └─ 写入 module attrs（effective, report_json, scores）
+    │
+    ├─ MaterializeSimtScopes Pass
+    │   ├─ 找到所有 selected op
+    │   └─ 包进 scope.scope {simt}
+    │
+    ▼
+Python 读取 effective:
+    ├─ "all_simd"       → 继续正常 SIMD 编译
+    ├─ "all_simt_only"  → force_simt_only=True, 走全 SIMT
+    └─ "mixed_simd_simt"→ 结合 scope.scope 标记继续混合编译
+    └─ "backend_default"→ gate 没通过/不满足条件 → legacy 路径
+```
+
+## 十三、关键设计决策总结
 
 | 设计选择 | 为什么 |
 |---------|--------|
