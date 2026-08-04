@@ -284,7 +284,49 @@ def MixedTimingPass : Pass<"mixed-timing", "ModuleOp"> {
 | `MixedTimingPass` | ModuleOp | `ascend.mixed_cycles` |
 | `SelectSimdSimtCostModelPass` | 上面四个 Pass 的 attrs | `ascend.simt_costmodel.effective`, `ascend.simt_costmodel.report_json`, `ascend.simt_costmodel.selected`（逐 op） |
 
-### 3.3 SelectSimdSimtCostModelPass::runOnOperation() 的改造版
+### 3.3 性能分析：三个 Timing Pass 需要并行吗？
+
+三个 Pass 之间的数据依赖：
+
+```
+SimdTimingPass  ─── 输入: ModuleOp + SIMD config ─── 输出: simd_cycles
+SimtTimingPass  ─── 输入: ModuleOp + SIMT config ─── 输出: simt_cycles
+MixedTimingPass ─── 输入: ModuleOp + 两个 config ─── 输出: mixed_cycles
+```
+
+**没有相互依赖**——任何一个都不需要等另一个的结果。理论上可以完全并行。
+
+但每个 Pass 内部做的事情是 `module.walk()` 遍历 op 然后套 analytical 公式：
+
+| Pass | Walk 复杂度 | 模拟复杂度 |
+|------|-----------|----------|
+| SimdTimingPass | O(N)，N = op 数量 | 建 DAG + 调度，O(N²) worst case，实际 O(N) |
+| SimtTimingPass | O(N) | 线性扫描指令列表 |
+| MixedTimingPass | O(N) | 两个子模拟器的线性组合 |
+
+一个典型 kernel（~500 ops）：单 Pass 几十到几百微秒。三个串行：< 1ms。
+
+真正的开销在**前面生成 TTIR 的 `ast_to_ttir + make_ttir`**（毫秒到秒级），这三个 Pass 在它之后跑，时间可忽略。
+
+**结论：当前不需要并行。** 如果将来超大 kernel（几万 op）成为瓶颈，并行方案很简单：
+
+```
+Python 侧:
+  mod_clone_A = clone(mod)   mod_clone_B = clone(mod)   mod_clone_C = clone(mod)
+       │                          │                          │
+  ThreadPoolExecutor:
+    fut_A = submit(SimdTimingPass,  mod_clone_A)
+    fut_B = submit(SimtTimingPass,  mod_clone_B)
+    fut_C = submit(MixedTimingPass, mod_clone_C)
+       │                          │                          │
+  simd_cycles  = fut_A.result()   simt_cycles  = fut_B.result()   mixed_cycles = fut_C.result()
+       └──────────────────────────┴──────────────────────────┘
+                        → SelectSimdSimtCostModelPass
+```
+
+需要 clone ModuleOp 是因为 MLIR 不是线程安全的（不能多个 Pass 同时操作同一个 ModuleOp）。但每个 clone 是只读操作（写的是 attrs，但每个 clone 独立写），所以没有锁竞争。
+
+### 3.4 SelectSimdSimtCostModelPass::runOnOperation() 的改造版
 
 ```cpp
 void SelectSimdSimtCostModelPass::runOnOperation() override {
