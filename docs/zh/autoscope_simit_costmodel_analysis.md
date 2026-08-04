@@ -2045,3 +2045,208 @@ v5: 调整了权重、更新了 profile 参数 → 当前版本
 所以回答你的问题："作者怎么知道这些条件会更好？" **他不知道，他测出来的。** op 级吞吐是微基准测的，penalty 系数是在真实 kernel 上对比预测值和实测值后拟合的，coverage 是他诚实地记录了"在这些范围之外我没测过所以不保证"。
 
 这也是为什么 profile 是 JSON 而不是硬编码在 C++ 里——作者知道参数需要频繁迭代更新，放在 JSON 里可以不用重编译 C++ 就能调参。
+
+---
+
+## 十八、Microbenchmark 详细拆解：25 个指标测了什么、怎么用
+
+文件：`backend/costmodel_profiles/microbench/ascend_davidv100_v1.json`
+
+25 个指标，每个都有 `source` 字段记录了测量来源（如 `triton_cases/SIMT_Test/tput.cce`），`source_kind` 区分了实测（`isolated_microbenchmark`）还是硬件参数（`architecture_fact`/`device_configuration`）。
+
+### 18.1 指标分类总览
+
+```
+时钟/架构常量 (4个)     → 把 cycle 数变成有物理意义的单位
+SIMT 启动开销 (2个)     → 算 setup cost
+混合模式过渡 (6个)      → 算 mixed 的切换代价
+SIMT 访存 (8个)         → 算 load/store 的 cycle（GM + UB）
+SIMT 计算+通信 (3个)    → 算 compute + shuffle 的 cycle
+SIMD 计算基准 (2个)     → 算 SIMD compute 的基准
+```
+
+### 18.2 第一类：时钟与架构常量（4 个）
+
+| 指标 | 值 | source_kind | 为什么需要 |
+|------|-----|-------------|-----------|
+| `clock.sys_cnt.frequency_mhz` | 988.9 MHz | isolated_microbenchmark | 所有 costmodel 输出以 SYS_CNT cycles 为单位，这个值用于把 cycles 换算成 wall-clock us |
+| `clock.device_compute.frequency_mhz` | 1650 MHz | device_configuration | 将来做 device_compute ↔ SYS_CNT 互转（当前未用到） |
+| `simd.vector_width_bits` | 2048 bit | architecture_fact | **SIMD 公式核心**：`vectorWidth = 2048/32 = 64` 元素/指令。决定 `ceil(elements/64) / throughput` 的分母 |
+| `simt.warp_size` | 32 lane | architecture_fact | **SIMT 公式核心**：`warpInstructions = ceil(elements/32)`、`shuffleLevels = log2(32) = 5` |
+
+测量方法：
+- `clock.sys_cnt.frequency_mhz`：写一个 kernel 跑不同时长，读 SYS_CNT 计数器差值，线性回归斜率。来源：`triton_cases/SIMT_Test SYS_CNT slope calibration`
+- `simd.vector_width_bits` 和 `simt.warp_size`：直接来自硬件 ISA 手册，不需要测量
+
+### 18.3 第二类：SIMT 启动开销（2 个）
+
+| 指标 | 值 | 怎么测 | 为什么需要 |
+|------|-----|--------|-----------|
+| `simt.setup.empty` | 115 cycles | 写一个**空 launch** 的 SIMT kernel（body 是 no-op），跑 SYS_CNT。来源 `meas.cce` | 得到 SIMT 纯启动开销。C++ 里作为 `simtSetupCycles`——评分公式中 `allSimtOnly` 的固定部分 |
+| `simt.setup.empty_with_barrier` | 141 cycles | 同上，但 scope 外加了 barrier 指令 | 带上同步开销的版本，用于更保守的估计 |
+
+在 C++ 评分公式中的使用（第 1902-1904 行）：
+
+```cpp
+simtAnalyticalCycles = profile.simtSetupCycles      // ← 115 cycles
+                     + simtIssuePayloadCycles * profile.programIssueScale;
+//                     ↑ 计算 + 访存 + shuffle + predicate 的加权和
+```
+
+### 18.4 第三类：混合模式过渡开销（6 个）
+
+| 指标 | 值 | 怎么测 | 为什么需要 |
+|------|-----|--------|-----------|
+| `mixed.empty_simt_setup.warps_1` | 182 cycles | `simt_transition_microbench_tail16_barrier_20260713.txt` | **混合模式核心参数**：SIMD 核启动 SIMT region 需要上下文切换 |
+| `mixed.empty_simt_setup.warps_2` | 182 cycles | 同上 | ↑ |
+| `mixed.empty_simt_setup.warps_4` | 182 cycles | 同上 | ↑ |
+| `mixed.empty_simt_setup.warps_8` | 182 cycles | 同上 | ↑ |
+| `mixed.empty_simt_setup.warps_16` | 182 cycles | 同上 | ↑ |
+| `mixed.empty_simt_setup.warps_32` | **223** cycles | 同上 | 32 warps 时跳到 223——可能触及了 warp scheduler 的扩展代价 |
+
+这些值直接进入 `candidateCosts.mixedSimdSimt` 计算（C++ 第 1957-1972 行）：
+
+```cpp
+// 找到最接近当前 numWarps 的 transition profile
+nearestTransition = argmin(|numWarps - transition.numWarps|);
+
+// mixed 的 setup = 对应 warp 数的空 SIMT region setup
+mixedSetupCycles = nearestTransition->emptySimtSetupCycles;  // 如 32 warps → 223
+
+// transitionDelta = 混合比纯 SIMT 多出来的 setup 开销
+transitionDelta = max(0, mixedSetupCycles - standaloneSimtSetupCycles);
+//              = max(0, 223 - 115) = 108 cycles
+```
+
+### 18.5 第四类：SIMT 访存（8 个）—— Global Memory + Unified Buffer
+
+| 子类 | 指标 | 值 | 怎么测 | 为什么需要 |
+|------|------|-----|--------|-----------|
+| **GM load** | `simt.gm.load.throughput` | 0.1731 warp_insn/cycle | `simt_gm_memory_david_v100_20260725.csv`：32 warps 交替执行，128 MiB 数据集，每个线程 8 个独立 load | **SIMT 内存公式**：`simtLoadCycles = loadWarpInstructions / 0.1731` |
+| | `simt.gm.load.bandwidth` | 22.15 B/cycle | 同上 | 将来做 bytes→cycles 直转用（当前未用） |
+| **GM store** | `simt.gm.store.throughput` | 0.1290 warp_insn/cycle | 同上 | `simtStoreCycles = storeWarpInstructions / 0.1290` |
+| | `simt.gm.store.bandwidth` | 16.51 B/cycle | 同上 | 同上 |
+| **UB load** | `simt.ub.load.throughput` | 0.5073 warp_insn/cycle | `simt_memory_david_v100_20260725.csv`：16 warps，128 KiB，4 组轮换 | UB 比 GM 快 3×（0.5073 vs 0.1731），留下做更精细的存访建模 |
+| | `simt.ub.load.bandwidth` | 64.93 B/cycle | 同上 | 同上 |
+| **UB store** | `simt.ub.store.throughput` | 0.5301 warp_insn/cycle | 同上 | 同上 |
+| | `simt.ub.store.bandwidth` | 67.85 B/cycle | 同上 | 同上 |
+
+**GM vs UB 的区别**：
+- **GM**（Global Memory）= HBM，吞吐 0.17 warp_insn/cycle → 是瓶颈
+- **UB**（Unified Buffer）= 片上 SRAM，吞吐 0.5 warp_insn/cycle → 快 3×
+
+当前 C++ 代码只用 GM 的 throughput 值，因为特征提取阶段还不知道哪些数据会在 UB 里。UB 数据是给将来扩展留的。
+
+GM load/store 在 C++ 中的使用（第 1844-1851 行）：
+
+```cpp
+// SIMT memory = load + store（共享总线，串行）
+simtLoadCycles  = loadWarpInstructions  / 0.1731;  // GM load throughput
+simtStoreCycles = storeWarpInstructions / 0.1290;  // GM store throughput
+simtMemoryCycles = simtLoadCycles + simtStoreCycles;
+
+// 对比 SIMD memory = max(load, store)（独立 DMA，并行）
+simdMemoryCycles = max(simdLoadCycles, simdStoreCycles);
+```
+
+### 18.6 第五类：SIMT 计算与通信（3 个）+ SIMD 计算基准（2 个）
+
+| 指标 | 值 | 怎么测 | 为什么需要 |
+|------|-----|--------|-----------|
+| `simt.f32.add.throughput` | **141.0** scalar_op/cycle | `tput.cce; concur2.cce`：写一个全是 f32 add 的 kernel，11 warps 饱和执行，读 SYS_CNT | **SIMT 计算基准**：其他所有 op（mul/div/exp/log...）的成本都相对于 add。如 `simtOps["mul"].factor = 1.2` → mul 成本是 add 的 1.2 倍 |
+| `simt.shuffle.throughput` | **0.8172** warp_insn/cycle | `simt_shuffle_david_v100_20260725.csv`：32 warps，4 条独立 ILP 链，测 shfl-up 吞吐 | **reduction 在 SIMT 上的成本**：warp 内 reduce 需要通过 shuffle 指令交换数据 |
+| `simt.shuffle.dependent_latency` | 27.27 cycles | 同上，但只用 1 warp + 依赖链 | shuffle 的单次延迟。当前未用，留作精细建模 |
+| `simd.f32.add.throughput` | 3.30 vector_insn/cycle | 同源 | 每条 SIMD 向量指令耗时 `1/3.30 = 0.303` SYS_CNT cycles。类似地作为 SIMD 其他 op 的基准 |
+| `simd.f32.add.dependent_latency` | 1.818 cycles | 同源 | SIMD add 依赖链延迟。当前未用 |
+
+**为什么只测了 add，mul/div/exp 等不需要测？**
+
+因为在 profile JSON 里，其他 op 是用**相对于 add 的 factor**表达的：
+
+```json
+"simt.f32.add": {"throughput": 141.0, "factor": 1.0},   // 基准
+"simt.f32.mul": {"throughput": 141.0, "factor": 1.0},   // mul = 1× add
+"simt.f32.div": {"throughput": 141.0, "factor": 1.7},   // div = 1.7× add（除法贵 70%）
+"simt.f32.exp": {"throughput": 141.0, "factor": 8.0},   // exp = 8× add（指数非常贵）
+```
+
+在 C++ 评分公式中（第 1810-1811 行）：
+
+```cpp
+// SIMT 某个 op 的 cycles = elements / throughput * factor
+simtCycles = elements / 141.0 * factor;  // 如 mul: factor=1.0, exp: factor=8.0
+```
+
+### 18.7 Shuffle 的使用细节
+
+在 C++ 中，shuffle 只用于 SIMT 的 reduction 和 scan（第 1857-1866 行）：
+
+```cpp
+// shuffle 层级数 = log2(warp_size) = log2(32) = 5
+const int64_t shuffleLevels = ceil(log2(32));
+
+// shuffle 指令总数 = reductions × ceil(maxNumel/warp_size) × shuffleLevels
+//   例如：32 reductions，maxNumel=256，warp=32 → 32 × 8 × 5 = 1280 条 shuffle 指令
+simtShuffleInstructions =
+    (weightedReductions + weightedScans) *
+    ceil(maxNumel / 32) * 5;
+
+// shuffle cycles = 1280 / 0.8172 ≈ 1566 cycles
+simtShuffleCycles = simtShuffleInstructions / 0.8172;
+
+// shuffle 被加到 SIMT payload 的计算中：
+simtIssuePayloadCycles =
+    max(simtCompute + simtShuffle + simtDot, simtMemory) + simtPredicate;
+```
+
+### 18.8 全部指标在评分公式中的流向图
+
+```
+                    ┌──────────────────────────────────────────────────┐
+                    │              estimateSimdSimtCandidates          │
+                    │                                                 │
+simd.vector_width   │  simdCompute = Σ ceil(elems/64) /                │
+  (2048 bit)        │               profile.simdOps[op].throughput     │
+                    │               * profile.simdOps[op].factor       │
+                    │                                                 │
+simt.warp_size (32) │  simtCompute = Σ elems /                         │
+                    │               profile.simtOps[op].throughput     │
+                    │               * profile.simtOps[op].factor       │
+                    │                                                 │
+simt.gm.load        │  simtLoad   = loadWarpInsns / 0.1731            │
+  (0.1731)          │  simtStore  = storeWarpInsns / 0.1290           │
+simt.gm.store       │  simtMemory = simtLoad + simtStore               │
+  (0.1290)          │                                                 │
+                    │  simdMemory = max(simdLoad, simdStore)            │
+                    │        (DMA 并行，按字节算，非 warp 指令)         │
+                    │                                                 │
+simt.shuffle        │  shuffleCycles =                                │
+  (0.8172)          │    (reductions * maxNumel/32 * log2(32))        │
+                    │    / 0.8172                                     │
+                    │                                                 │
+simt.setup.empty    │  simtAnalytical =                               │
+  (115 cycles)      │    115 + max(compute+shuffle+dot, memory)       │
+                    │          * programIssueScale                     │
+                    │                                                 │
+mixed.empty_simt    │  mixedSetup = nearestTransition                  │
+  _setup.warps_*    │    (如 32 warps → 223 cycles)                    │
+  (182-223 cycles)  │                                                 │
+                    │  mixedCost = mixedSetup +                       │
+                    │    simtPayload + blend *                         │
+                    │    (simdPayload - simtPayload)                   │
+                    │                                                 │
+clock.sys_cnt       │  wall_time_us = selected_cycles / 988.9          │
+  (988.9 MHz)       │    (costmodel 输出的是 selection score,          │
+                    │     不是 wall time; 这个换算仅供参考)            │
+                    └──────────────────────────────────────────────────┘
+```
+
+### 18.9 关键洞察：为什么 profile 是这样的结构
+
+1. **微基准和候选模型分离**：`microbench/ascend_davidv100_v1.json` 存的是**模型无关的硬件实测数据**（op 吞吐、内存带宽、setup 开销），`david_v100_simd_simt_v1.json` 存的是**模型特定的参数**（penalty 系数、calibration 域、门控参数）。两者分开意味着同一个人 / 不同团队可以更新微基准数据（换芯片？重新测）而不影响模型公式，反之亦然。
+
+2. **每个测量都有 provenance**：`source` 字段记录了"这个值是什么文件/命令/配置测出来的"。这是科学实验的 reproducibility 标准——别人可以复现，可以质疑。
+
+3. **confidence 不是装饰**：`high`/`medium`/`low` 会实际影响 gate。如果一个指标是 `low` confidence，依赖它的候选 score 的 overall confidence 会被拉低，可能导致 gate 不通过——这是一种自动的"数据质量不够就别用"机制。
+
+4. **当前只用了部分数据**：UB load/store throughput、shuffle latency、compute clock 等都还没用上。说明作者留了扩展空间——当模型需要更精细的内存层次建模时（比如区分 UB-resident vs GM-resident 的数据），这些数据已经就位。
