@@ -18,6 +18,8 @@ add_triton_ut(
 add_triton_ut(
   NAME CostModelPasses
   SRCS PassesTest.cpp
+  DEFS
+    TRITON_ASCEND_SIMD_SIMT_TEST_PROFILE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../../costmodel/profiles/simd_simt/david_v100_simd_simt_v1.json"
   LIBS
     AscendModelTransforms
     AscendModelAnalysis
@@ -29,4 +31,13 @@ add_triton_ut(
     MLIRPass
     MLIRSCFDialect
     MLIRSupport
+)
+
+add_triton_ut(
+  NAME SimdSimtCostModel
+  SRCS SimdSimtCostModelTest.cpp
+  DEFS
+    TRITON_ASCEND_SIMD_SIMT_TEST_PROFILE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../../costmodel/profiles/simd_simt/david_v100_simd_simt_v1.json"
+  LIBS
+    AscendModelRouteModel
 )
