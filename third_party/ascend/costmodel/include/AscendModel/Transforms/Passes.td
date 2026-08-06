@@ -184,4 +184,46 @@ def PerfReportPass : Pass<"perf-report", "ModuleOp"> {
 }
 
 
+//===----------------------------------------------------------------------===//
+// SelectSimdSimtCostModel
+//===----------------------------------------------------------------------===//
+def SelectSimdSimtCostModelPass : Pass<"select-simd-simt-costmodel", "mlir::ModuleOp"> {
+  let summary = "C++ SIMD/SIMT candidate selection with mixed-scope materialization";
+  let description = [{
+    This pass runs the analytical feature extraction and scoring model,
+    selects the best SIMD/SIMT candidate, applies safety gates, and when
+    a mixed decision is admitted, materializes local SIMT scopes.
+  }];
+  let options = [
+    Option<"mode", "mode", "std::string", /*default=*/"\"report\"",
+           "Selection mode: auto | report">,
+    Option<"profilePath", "profile-path", "std::string", /*default=*/"\"\"",
+           "Path to the SIMD/SIMT candidate profile JSON">,
+    Option<"actualTarget", "actual-target", "std::string", /*default=*/"\"\"",
+           "Actual target arch string">,
+    Option<"numWarps", "num-warps", "int64_t", /*default=*/"32",
+           "Number of SIMT warps">,
+    Option<"marginRatio", "margin-ratio", "double", /*default=*/"0.10",
+           "Minimum relative gain over the all-SIMD baseline">,
+    Option<"compileOn91095", "compile-on-910-95", "bool", /*default=*/"false",
+           "Target can materialize the SIMT anchor plan">,
+    Option<"reportFile", "report-file", "std::string", /*default=*/"\"\"",
+           "Optional JSONL report output file path">,
+  ];
+}
+
+//===----------------------------------------------------------------------===//
+// MaterializeSimtScopes
+//===----------------------------------------------------------------------===//
+def MaterializeSimtScopesPass : Pass<"materialize-simt-scopes", "mlir::ModuleOp"> {
+  let summary = "Validate that an admitted mixed decision has scope.scope contracts";
+  let description = [{
+    This pass verifies that a module-level mixed_simd_simt effective
+    decision is backed by at least one materialized scope.scope region
+    with vec_mode=simt. It does not create scopes itself; the selector
+    pass must already have materialized the anchor plan.
+  }];
+}
+
+
 #endif // ASCEND_MODEL_TRANSFORMS_PASSES_TD

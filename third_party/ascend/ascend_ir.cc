@@ -43,6 +43,7 @@
 #include "mlir/Support/LLVM.h"
 #include "llvm/IR/Instructions.h"
 #include <Python.h>
+#include "AscendModel/RouteModel/SimtSelection.h"
 
 using namespace mlir;
 namespace py = pybind11;
@@ -607,6 +608,39 @@ void init_ascend_ir(py::module &&m) {
   });
   m.def("remove_attr",
         [](OpState &op, std::string &name) -> void { op->removeAttr(name); });
+
+  m.def("inline_void_simt_scopes_for_pure_simt", [](OpState &op) {
+    return ascend::simt_selection::inlineVoidSimtScopesForPureSimt(
+        op.getOperation());
+  });
+
+  m.def("is_whole_body_void_simt_scope", [](OpState &op) {
+    return ascend::simt_selection::findWholeBodyVoidSimtScope(
+               op.getOperation()) != nullptr;
+  });
+
+  m.def("clear_simd_simt_costmodel_attrs", [](OpState &op) {
+    for (llvm::StringRef name : {
+             "ascend.simt_costmodel.effective",
+             "ascend.simt_costmodel.recommended",
+             "ascend.simt_costmodel.selection_source",
+             "ascend.simt_costmodel.ranking_confidence",
+             "ascend.simt_costmodel.all_simd_score",
+             "ascend.simt_costmodel.all_simt_score",
+             "ascend.simt_costmodel.mixed_score",
+             "ascend.simt_costmodel.report_json",
+         })
+      op->removeAttr(name);
+  });
+
+  m.def("get_string_attr",
+        [](OpState &op, const std::string &name) -> py::object {
+          auto ret = op->getAttrOfType<StringAttr>(name);
+          if (!ret) {
+            return py::none();
+          }
+          return py::cast(ret.getValue().str());
+        });
 
   py::class_<AscendNPUIROpBuilder, TritonOpBuilder>(
       m, "ascendnpu_ir_builder", py::module_local(), py::dynamic_attr())

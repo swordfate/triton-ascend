@@ -102,6 +102,9 @@ def _export_coalesce_metadata(mod, metadata):
     axis = _get_then_remove_rc(mod, "hacc.coalesce_axis")
     metadata["coalesce_factor"] = factor if isinstance(factor, int) and factor > 1 else 1
     metadata["coalesce_axis"] = axis if isinstance(axis, int) and axis >= 0 else -1
+    ceil_div = _get_then_remove_rc(mod, "hacc.coalesce_grid_ceil_div")
+    metadata["coalesce_grid_ceil_div"] = bool(isinstance(ceil_div, int) and ceil_div > 0)
+    metadata["row_coalescing_applied"] = metadata["coalesce_factor"] > 1
 
 
 def _adjust_metadata_by_module_result(mod, metadata, opt, **kwargs):
@@ -152,7 +155,116 @@ def make_ttir(mod, metadata, opt):
     return mod
 
 
+def _costmodel_profiles_dir() -> Path:
+    compiler = Path(__file__)
+    native_packaged = (
+        compiler.resolve().parents[2] / "_C" / "ascend" / "costmodel_profiles"
+    )
+    if native_packaged.is_dir():
+        return native_packaged
+    legacy_packaged = compiler.with_name("costmodel_profiles")
+    if legacy_packaged.is_dir():
+        return legacy_packaged
+    source = Path(__file__).resolve().parent.parent / "costmodel" / "profiles"
+    return source if source.is_dir() else native_packaged
+
+
+def _normalize_auto_simt_scope_mode(mode):
+    if mode is None:
+        return "off"
+    mode = str(mode).strip().lower()
+    if mode in ("1", "true", "on", "yes", "auto"):
+        return "auto"
+    if mode in ("report", "dry_run", "dry-run", "dump"):
+        return "report"
+    return "off"
+
+
+def _auto_simt_asset_hash(path, default_name):
+    asset = Path(path) if path else _costmodel_profiles_dir() / default_name
+    try:
+        selection_bytes = asset.read_bytes()
+    except OSError:
+        return f"missing:{asset}"
+    digest = hashlib.sha256()
+    digest.update(b"selection-profile\0")
+    digest.update(selection_bytes)
+    try:
+        profile = json.loads(selection_bytes)
+        shared_ref = (
+            profile.get("microbenchmark_profile")
+            if isinstance(profile, dict)
+            else None
+        )
+    except (TypeError, ValueError, UnicodeError):
+        shared_ref = None
+    if shared_ref and isinstance(shared_ref, str):
+        shared_asset = Path(shared_ref)
+        if not shared_asset.is_absolute():
+            shared_asset = asset.parent / shared_asset
+        digest.update(b"\0shared-microbenchmark\0")
+        try:
+            digest.update(shared_asset.read_bytes())
+        except OSError:
+            digest.update(f"missing:{shared_asset}".encode())
+    return digest.hexdigest()
+
+
+def _run_cpp_simd_simt_costmodel(mod, metadata, opt) -> str:
+    mode = opt.auto_simt_scope_mode
+    if mode == "off" or metadata.get("compile_mode") != "simd_simt":
+        return "backend_default"
+
+    profile = opt.auto_simt_model_profile or str(
+        _costmodel_profiles_dir() / "simd_simt" / "david_v100_simd_simt_v1.json"
+    )
+    pm = ir.pass_manager(mod.context)
+    pm.enable_debug()
+    ascend.passes.ttir.add_select_simd_simt_costmodel(
+        pm,
+        mode,
+        profile,
+        str(opt.arch),
+        int(opt.num_warps),
+        float(opt.auto_simt_scope_margin),
+        bool(opt.compile_on_910_95),
+        str(opt.auto_simt_scope_dump),
+    )
+    ascend.passes.ttir.add_materialize_simt_scopes(pm)
+    pm.run(mod)
+
+    report = ascend.ir.get_string_attr(mod, "ascend.simt_costmodel.report_json")
+    effective = ascend.ir.get_string_attr(mod, "ascend.simt_costmodel.effective")
+    if not report or effective not in {
+        "all_simd", "all_simt_only", "mixed_simd_simt", "backend_default"
+    }:
+        raise RuntimeError("invalid native SIMD/SIMT costmodel result")
+    metadata["auto_simt_scope_report"] = report
+    if effective == "mixed_simd_simt":
+        metadata["auto_simt_requested_kind"] = effective
+    return effective
+
+
 def ttir_to_linalg(mod, metadata, opt, *, named_ops=False):
+    # Run C++ SIMD/SIMT cost model before any lowering
+    cpp_decision = _run_cpp_simd_simt_costmodel(mod, metadata, opt)
+    cpp_all_simt = cpp_decision == "all_simt_only"
+    if metadata.get("compile_mode") == "simd_simt" and (
+        cpp_all_simt or ascend.ir.is_whole_body_void_simt_scope(mod)
+    ):
+        metadata["scope_pure_simt_auto"] = True
+        metadata["force_simt_only"] = True
+        metadata["parallel_mode"] = "simt"
+        metadata["shared_mem_dynamic_size"] = 122880
+        pm = ir.pass_manager(mod.context)
+        pm.enable_debug()
+        ascend.passes.ttir.add_row_coalescing(pm)
+        pm.run(mod)
+        _export_coalesce_metadata(mod, metadata)
+        ascend.ir.inline_void_simt_scopes_for_pure_simt(mod)
+        ascend.ir.clear_simd_simt_costmodel_attrs(mod)
+        return str(mod)
+
     # use triton_adapter to lower Triton-MLIR to linalg
     # Get Triton-MLIR as string
     ttir_code = str(mod)
@@ -400,6 +512,16 @@ def _parse_linalg_metadata(linalg: str, metadata: dict):
     # the mix mode is also encoded into metadata['name'] for runtime to distinguish
     metadata["mix_mode"] = re.search(MIX_MODE_REGEX, linalg).group(1)
     metadata["parallel_mode"] = re.search(PARALLEL_MODE_REGEX, linalg).group(1)
+    if metadata.get("auto_simt_requested_kind") == "mixed_simd_simt":
+        applied = metadata["parallel_mode"] == "mix_simd_simt"
+        metadata["auto_simt_scope_applied"] = applied
+        if not applied and os.environ.get(
+            "TRITON_ASCEND_AUTO_SIMT_STRICT_VERIFY", ""
+        ).strip().lower() in {"1", "true", "yes", "on"}:
+            raise RuntimeError(
+                "C++ costmodel selected mixed SIMD/SIMT, but lowering "
+                f"reported {metadata['parallel_mode']!r}"
+            )
     metadata["kernel_name"] = re.search(KERNEL_NAME_REGEX, linalg).group(1)
     # Check the function load_binary in npu_driver.py.
     metadata["name"] = metadata["kernel_name"]
@@ -682,6 +804,8 @@ def linalg_to_bin_enable_npu_compile_910_95(linalg: str, metadata, opt):
         if npu_compiler_path.endswith("bishengir-compile"):
             _compile_option_list += [
                 "--enable-hfusion-compile=true",
+                # CANN 9.1's hivmc-a5 cannot translate hacc.noinline yet
+                "--enable-lib-call-no-inline=false",
                 "--enable-triton-kernel-compile=true",
             ]
         bisheng_options = metadata["bisheng_options"]
@@ -703,6 +827,11 @@ def linalg_to_bin_enable_npu_compile_910_95(linalg: str, metadata, opt):
             _compile_option_list += [f"--num-warps={num_warps}"]
             warp_size = metadata.get("warp_size", opt.warp_size)
             _compile_option_list += [f"--threads-per-warp={warp_size}"]
+
+        if metadata.get("auto_simt_requested_kind") == "mixed_simd_simt":
+            _compile_option_list += [
+                "--enable-hivm-delayed-cross-core-gss=false"
+            ]
 
         cmd_list = ([npu_compiler_path, ttadapter_path] + _compile_option_list + ["-o", bin_file])
         vf_merge_level = metadata["vf_merge_level"]
@@ -1102,6 +1231,15 @@ class NPUOptions:
     # "simt_template" and "unstructured_in_simt" are deprecated aliases for
     # "simd_simt_template".
     compile_mode: str = "simd"
+    # Auto SIMT scope: C++ costmodel-driven SIMD/SIMT routing
+    #   "off"    — skip costmodel, use legacy behaviour
+    #   "auto"   — run costmodel, apply decision when gates are passed
+    #   "report" — run costmodel but never apply (report-only)
+    auto_simt_scope_mode: str = "off"
+    auto_simt_scope_dump: str = ""
+    auto_simt_scope_margin: float = 0.10
+    auto_simt_model_profile: str = ""
+    auto_simt_model_assets_hash: str = ""
     mix_mode: str = ""
     simt_stack_limit: int = None
     # use_bytecode:
@@ -1174,6 +1312,17 @@ class NPUOptions:
             object.__setattr__(self, "parallel_mode", "simt")
             if self.shared_mem_dynamic_size is None:
                 object.__setattr__(self, "shared_mem_dynamic_size", 122880)
+
+        # Resolve auto_simt_scope from environment variables
+        auto_mode = _normalize_auto_simt_scope_mode(
+            os.environ.get("TRITON_ASCEND_AUTO_SIMT_SCOPE", self.auto_simt_scope_mode)
+        )
+        object.__setattr__(self, "auto_simt_scope_mode", auto_mode)
+        dump = self.auto_simt_scope_dump or os.environ.get("TRITON_ASCEND_AUTO_SIMT_SCOPE_DUMP", "")
+        object.__setattr__(self, "auto_simt_scope_dump", dump)
+        margin_str = os.environ.get("TRITON_ASCEND_AUTO_SIMT_SCOPE_MARGIN", "")
+        if margin_str:
+            object.__setattr__(self, "auto_simt_scope_margin", float(margin_str))
 
     def hash(self):
         key = "_".join([f"{name}-{val}" for name, val in self.__dict__.items()])

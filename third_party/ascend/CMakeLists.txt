@@ -120,6 +120,8 @@ if(TRITON_ASCEND_HAS_INPROC_COSTMODEL)
     AscendModelIR
     AscendModelTransforms
     AscendModelAnalysis
+    AscendModelRouteModel
+    AscendModelProfile
     MLIROptLib
     MLIRIR
     MLIRParser

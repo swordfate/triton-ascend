@@ -15,6 +15,8 @@ add_mlir_library(AscendModelTransforms
   LINK_LIBS PUBLIC
   AscendModelIR
   AscendModelAnalysis
+  AscendModelRouteModel
+  AscendModelProfile
   MLIRIR
   MLIRPass
   MLIRSupport

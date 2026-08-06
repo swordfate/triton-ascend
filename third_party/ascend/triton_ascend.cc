@@ -18,6 +18,7 @@
 #include "ascend/include/TritonToHIVM/Passes.h"
 #include "ascend/include/TritonToLLVM/Passes.h"
 #include "ascend/include/TritonToLinalg/Passes.h"
+#include "ascend/include/TritonToLinalg/RowCoalescing.h"
 #include "ascend/include/TritonToStructured/Passes.h"
 #include "ascend/include/TritonToUnstructure/Passes.h"
 
@@ -33,6 +34,8 @@
 #include <pybind11/stl.h>
 
 #if TRITON_ASCEND_HAS_INPROC_COSTMODEL
+#include "AscendModel/Analysis/HIVMAnalysis.h"
+#include "AscendModel/Analysis/HardwareConfig.h"
 #include "AscendModel/IR/AscendModelDialect.h"
 #include "AscendModel/Transforms/Passes.h"
 
@@ -367,6 +370,39 @@ void init_triton_ascend_passes_ttir(py::module &&m) {
   m.def("add_triton_control_flow_opt", [](mlir::PassManager &pm) {
     pm.addPass(mlir::triton::createTritonControlFlowOptPass());
   });
+
+  m.def("add_row_coalescing", [](mlir::PassManager &pm) {
+    pm.addPass(RowCoalescing::createRowCoalescingPass());
+  });
+
+#if TRITON_ASCEND_HAS_INPROC_COSTMODEL
+  m.def(
+      "add_select_simd_simt_costmodel",
+      [](mlir::PassManager &pm, const std::string &mode,
+         const std::string &profilePath, const std::string &actualTarget,
+         int64_t numWarps, double marginRatio, bool compileOn91095,
+         const std::string &reportFile) {
+        mlir::ascend::SelectSimdSimtCostModelPassOptions opts;
+        opts.mode = mode;
+        opts.profilePath = profilePath;
+        opts.actualTarget = actualTarget;
+        opts.numWarps = numWarps;
+        opts.marginRatio = marginRatio;
+        opts.compileOn91095 = compileOn91095;
+        opts.reportFile = reportFile;
+        pm.addPass(
+            mlir::ascend::createSelectSimdSimtCostModelPass(opts));
+      },
+      py::arg("pm"), py::arg("mode"), py::arg("profile_path"),
+      py::arg("actual_target"), py::arg("num_warps"),
+      py::arg("margin_ratio"), py::arg("compile_on_910_95"),
+      py::arg("report_file") = "");
+
+  m.def("add_materialize_simt_scopes", [](mlir::PassManager &pm) {
+    pm.addPass(mlir::ascend::createMaterializeSimtScopesPass());
+  });
+#endif
+
 
   m.def("add_triton_to_annotation", [](mlir::PassManager &pm) {
     pm.addPass(mlir::triton::createTritonToAnnotationPass());
