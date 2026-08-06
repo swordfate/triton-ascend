@@ -805,8 +805,6 @@ def linalg_to_bin_enable_npu_compile_910_95(linalg: str, metadata, opt):
         if npu_compiler_path.endswith("bishengir-compile"):
             _compile_option_list += [
                 "--enable-hfusion-compile=true",
-                # CANN 9.1's hivmc-a5 cannot translate hacc.noinline yet
-                "--enable-lib-call-no-inline=false",
                 "--enable-triton-kernel-compile=true",
             ]
         bisheng_options = metadata["bisheng_options"]
