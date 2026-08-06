@@ -2924,8 +2924,19 @@ LogicalResult UnstructuredLoadConverter::matchAndRewrite(
     Value destination = rewriter.create<tensor::EmptyOp>(
         loc, resultType.getShape(), resultType.getElementType());
 
+    // The hfusion.gather_load verifier requires `other` to be a scalar (not a
+    // tensor). After TypeConverter, `other` may have been promoted to a tensor.
+    Value scalarOther = other;
+    if (other) {
+      if (auto otherType = dyn_cast<RankedTensorType>(other.getType())) {
+        Value c0 = rewriter.create<arith::ConstantIndexOp>(loc, 0);
+        scalarOther = rewriter.create<tensor::ExtractOp>(
+            loc, other, ValueRange{c0});
+      }
+    }
+
     auto gather = rewriter.create<hfusion::GatherLoadOp>(
-        loc, base, indices, burstLengthValue, mask, other, destination,
+        loc, base, indices, burstLengthValue, mask, scalarOther, destination,
         hfusion::CacheModifierAttr{}, hfusion::EvictionPolicyAttr{},
         op.getIsVolatileAttr());
     rewriter.replaceOp(op, gather.getResult());
