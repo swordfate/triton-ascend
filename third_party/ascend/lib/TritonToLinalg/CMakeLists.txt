@@ -10,6 +10,7 @@ add_triton_library(TritonToLinalg
         UseAnalysis.cpp
         ImplicitPermute.cpp
         StridedLoadStoreRewrite.cpp
+        RowCoalescing.cpp
         StridedAxisCoalescing.cpp
         TileChunkCoalescing.cpp
         DescriptorConverter.cpp
