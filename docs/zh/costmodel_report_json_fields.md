@@ -191,6 +191,101 @@ simt_anchors.kernel_lowerability       = {all_simd: {...}, all_simt_only: {...},
   → 这三个值直接决定了 allSimdCandidateLegal / allSimtOnlyCandidateLegal / mixedCandidateLegal
 ```
 
+### 0.7 数据传递全链路
+
+从 `buildMixedSimtAnchorPlan` 到 JSON 报告，只经过 4 步：
+
+**步骤 1: `buildMixedSimtAnchorPlan` → 产出 `SimtAnchorPlan`**
+
+```
+SimtAnchorPlan
+  ├─ anchors: [{operation, kind, lowerability, materializable, facts}, ...]
+  └─ kernelLowerability: {allSimd, allSimtOnly, mixed}
+```
+
+**步骤 2: `analyzeSimdSimtFeatures` → Plan 转 FeatureSummary**
+
+```cpp
+// SimdSimtCostModel.cpp line 1790-1810
+anchorRoots = anchorPlan.materializableRoots();    // 只取 materializable=true
+
+features.simtAnchors.recognizedCount     = anchorPlan.anchors.size();
+features.simtAnchors.count               = anchorRoots.size();
+features.simtAnchors.kernelLowerability  = anchorPlan.kernelLowerability; // ← 直接赋值
+
+for (anchor : anchorPlan.anchors) {
+    // enum → 字符串
+    features.simtAnchors.mechanismKinds.push_back(
+        stringifySimtAnchorKind(anchor.kind));  // "plain_1d_cumsum" 等
+
+    // variant facts 拆开存
+    if (holds TensorAtomicFacts) → tensorAtomics.push_back(...)
+    if (holds HistogramFacts)    → histograms.push_back(...)
+    if (holds PlainCumsumFacts)  → plainCumsums.push_back(...)
+}
+```
+
+然后 `module.walk` 遍历时，用 `anchorSet` 判断每个 op 是否在 anchor 内：
+
+```cpp
+// line 1813-1817
+auto isInAnchor = [&](Operation *op) {
+    for (Operation *current = op; current; current = current->getParentOp())
+        if (anchorSet.contains(current))
+            return true;  // op 的某个祖先在 anchor set 里 → SIMT 候选
+    return false;
+};
+
+// line 1863: 每个 op 都用它
+features.loadOps++;                          // 全 kernel
+if (inAnchor) features.simtAnchors.loadOps++;  // anchor 内（只有 inAnchor=true）
+```
+
+**步骤 3: `estimateSimdSimtCandidates` → FeatureSummary 装进 Report**
+
+```cpp
+// SimdSimtCostModel.cpp line 2240
+report.features = features;  // 结构体赋值，无变换
+```
+
+**步骤 4: `toJSON` → 序列化为 JSON 字符串**
+
+```cpp
+// SimdSimtFeatureSummary::toJSON() line 1476
+result["simt_anchors"] = simtAnchors.toJSON();
+
+// SimtAnchorFeatureSummary::toJSON() line 1339
+result["count"]               = count;            // ← 你看到的 JSON 字段
+result["recognized_count"]    = recognizedCount;
+result["mechanism_kinds"]     = mechanismKinds;
+result["kernel_lowerability"] = toLowerabilityJSON(kernelLowerability);
+result["load_ops"]            = loadOps;
+result["scan_ops"]            = scanOps;
+result["covered_operation_count"] = coveredOperationCount;
+```
+
+**一张图总结**：
+
+```
+buildMixedSimtAnchorPlan (SimtAnchorAnalysis.cpp:545)
+  │ 返回 SimtAnchorPlan (C++ 结构体: anchors + kernelLowerability)
+  ▼
+analyzeSimdSimtFeatures (SimdSimtCostModel.cpp:1780)
+  │ anchors → count / mechanismKinds / kernelLowerability (搬运)
+  │ anchorSet → isInAnchor() → loadOps / scanOps / coveredOperationCount (累加)
+  │ 返回 SimdSimtFeatureSummary.simtAnchors
+  ▼
+estimateSimdSimtCandidates (SimdSimtCostModel.cpp:2240)
+  │ report.features = features;  (结构体赋值，搬运)
+  ▼
+report.toJSON()
+  → json["features"]["simt_anchors"]["count"] = 1
+  → json["features"]["simt_anchors"]["mechanism_kinds"] = ["plain_1d_cumsum"]
+  → json["features"]["simt_anchors"]["kernel_lowerability"] = {...}
+```
+
+核心：三个结构体 `SimtAnchorPlan` → `SimtAnchorFeatureSummary` → `SimdSimtCostReport`，中间没有任何 filter 或变换，纯粹的搬运 + 累加。
+
 ---
 
 ## Phase 1: analyzeSimdSimtFeatures — 全 kernel + anchor 双统计
