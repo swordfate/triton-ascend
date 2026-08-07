@@ -9,22 +9,195 @@
 ```
 Python: _run_cpp_simd_simt_costmodel()
   → C++: SelectSimdSimtCostModelPass::runOnOperation()
-    → buildMixedSimtAnchorPlan()           ← Phase 0
-    → analyzeSimdSimtCandidates()
-      → analyzeSimdSimtFeatures()          ← Phase 1
-      → estimateSimdSimtCandidates()       ← Phase 2-8
-    → 写入额外字段到 JSON                   ← Phase 9
-    → materializeSimtAnchorPlan()           ← (如果 mixed)
-    → appendJSONLine()                      ← 写文件
+    ├─ buildMixedSimtAnchorPlan()           ← Phase 0 (独立调用)
+    ├─ analyzeSimdSimtCandidates(module, anchorPlan)  ← 传入同一个 plan
+    │   ├─ analyzeSimdSimtFeatures(module, anchorPlan) ← Phase 1
+    │   └─ estimateSimdSimtCandidates(features)       ← Phase 2-8
+    ├─ 写入额外字段到 JSON                   ← Phase 9
+    ├─ (如果 mixed) materializeSimtAnchorPlan(module, anchorPlan)  ← 同一个 plan!
+    └─ appendJSONLine()                      ← 写文件
 ```
 
+关键设计：`buildMixedSimtAnchorPlan` 在 `runOnOperation` 中调用，返回的 `SimtAnchorPlan` 同时传给 scoring 和 materialization，保证特征提取、评分、materialize 三个阶段看到的是**同一个 anchor 集合**。
+
 下面按代码执行顺序，逐个解释每个字段。
+
+---
+
+## Phase 0: buildMixedSimtAnchorPlan — 构建 Anchor Plan
+
+**文件**: `SimtAnchorAnalysis.cpp:545-589`, `SelectSimdSimtCostModel.cpp:113-114`
+
+Anchor Plan 是 v10 的核心机制：在评分开始之前，先确定"哪些 op 是 SIMT 的候选"。这个 plan 是不可变的，后续所有阶段共享。
+
+### 0.1 入口
+
+```cpp
+// SelectSimdSimtCostModel.cpp line 113-114
+SimtAnchorPlan anchorPlan = buildMixedSimtAnchorPlan(module, options.compileOn91095);
+auto reportOr = analyzeSimdSimtCandidates(module, anchorPlan, options);
+//                  ↑ 传入同一个 anchorPlan
+```
+
+### 0.2 buildMixedSimtAnchorPlan 完整流程
+
+```cpp
+// SimtAnchorAnalysis.cpp line 545-589
+SimtAnchorPlan buildMixedSimtAnchorPlan(ModuleOp module, bool compileOn91095) {
+  SimtAnchorPlan plan;
+
+  // 步骤 1: PreOrder walk，对每个 op 调用 analyzeAnchor
+  module.walk<WalkOrder::PreOrder>([&](Operation *op) {
+    auto descriptor = analyzeAnchor(op, compileOn91095);  // ← 核心：识别 anchor
+    if (!descriptor)
+      return WalkResult::advance();  // 不识别 → 递归进入子 op
+    plan.anchors.push_back(std::move(*descriptor));
+    return WalkResult::skip();       // 识别到了 → 跳过子 op
+  });
+
+  // 步骤 2: 聚合 kernel 级别的 lowerability
+  bool anyMixedNative = false, mixedBlocked = false;
+  for (const auto &anchor : plan.anchors) {
+    // allSimd: 取所有 anchor 中最差的状态
+    plan.kernelLowerability.allSimd = combineWholeKernelStatus(
+        plan.kernelLowerability.allSimd, anchor.lowerability.allSimd);
+    // allSimtOnly: 同上
+    plan.kernelLowerability.allSimtOnly = combineWholeKernelStatus(
+        plan.kernelLowerability.allSimtOnly, anchor.lowerability.allSimtOnly);
+    // 收集 reasons
+    append_range(kernelLowerability.allSimdReasons, anchor.lowerability.allSimdReasons);
+    append_range(kernelLowerability.allSimtOnlyReasons, anchor.lowerability.allSimtOnlyReasons);
+    append_range(kernelLowerability.mixedReasons, anchor.lowerability.mixedReasons);
+
+    if (anchor.lowerability.mixed == Native)
+      anyMixedNative = true;
+    else if (anchor.lowerability.allSimd != Native)
+      mixedBlocked = true;
+  }
+
+  // 步骤 3: 判断 mixed 是否可用
+  if (plan.anchors.empty()) {
+    kernelLowerability.mixed = Unsupported;  // 没有 anchor → mixed 不可用
+  } else if (anyMixedNative && !mixedBlocked) {
+    kernelLowerability.mixed = Native;       // 至少一个 native 且没有 blocked
+  } else {
+    kernelLowerability.mixed = mixedBlocked ? Unsupported : BackendConditional;
+  }
+  return plan;
+}
+```
+
+### 0.3 combineWholeKernelStatus — 取最差状态
+
+```cpp
+// SimtAnchorAnalysis.cpp line 459-476
+static CandidateLoweringStatus combineWholeKernelStatus(
+    CandidateLoweringStatus lhs, CandidateLoweringStatus rhs) {
+  // 严重程度排序: Native(0) < BackendConditional(1) < AliasesMixed(2) < Unsupported(3)
+  return rank(lhs) >= rank(rhs) ? lhs : rhs;  // 取更严重的
+}
+```
+
+举例：kernel 有 3 个 anchor，其中 1 个 Histogram（allSimd=Unsupported, rank=3），另外 2 个都是 Native（rank=0），则 kernel 级别的 allSimd = Unsupported（取最差）。
+
+### 0.4 analyzeAnchor — 6 种锚点识别
+
+**文件**: `SimtAnchorAnalysis.cpp:312-456`
+
+对每个 op 按 `name` 分发：
+
+```
+tt.gather → DirectGather
+  lowerability: allSimd=Native(默认), allSimt=BackendConditional, mixed=Native(默认)
+  materializable = compileOn91095 && mixed==Native → true (on A5)
+
+tt.histogram → Histogram
+  验证: input 是 static rank-1 tensor of i8/i16/i32/i64
+        result 是 rank-1 i32, inputElems>0, numBins>0
+  不满足 → mixed=Unsupported (reasons: "histogram_requires_static_rank1_...")
+  lowerability: allSimd=Unsupported, allSimt=Unsupported, mixed=Native(if valid)
+  materializable = compileOn91095 && mixed==Native
+
+tt.scan → PlainOneDimensionalCumsum
+  调用 analyzePlainOneDimensionalCumsum() (line 45-86):
+    要求: 只有一条轴 extent>1, body 中只有一个真正的 combine op
+         (arith.addf 或 arith.addi), terminator 是 tt.scan.return
+    提取: axisExtent, elementType, reverse
+  lowerability: allSimd=AliasesMixed, allSimt=BackendConditional, mixed=Native
+  如果 axisExtent≤64 → mixedReasons: "template_uses_small_register_path..."
+  如果 dtype 不支持 → mixed=Unsupported
+  materializable = compileOn91095 && mixed==Native
+
+tt.atomic_rmw / tt.atomic_cas → TensorAtomic
+  提取: updateElements, addressRank, valueType, offsetType, operation,
+        hasMask, staticMaskActiveFraction, resultUsed,
+        addressIsLaneVarying, addressDependsOnLoadedIndex, contention
+  验证: supported type/operation 组合 (isSupportedAtomicType)
+        f16/bf16 + resultUsed → Unsupported
+  lowerability: allSimd=Native(默认), allSimt=BackendConditional, mixed=Native(if valid)
+  如果 Unsupported → mixed=Unsupported
+  materializable = compileOn91095 && mixed==Native
+
+scf.for → TriangularSolveLoop (需满足 isTriangularSolveLoop 条件)
+  调用 isTriangularSolveLoop() (line 239-301):
+    条件 1: body 中有 tt.load (rank-1, shape[0]=16) → 向量加载
+    条件 2: body 中有 tt.reduce (axis=0)            → 轴0规约
+    条件 3: body 中有 arith.select                   → 掩码更新
+    条件 4: iter_args 有 16×16 triangular state，或
+            ≥1 个 sibling 循环有同样 load/reduce/select 模式
+  lowerability: allSimd=Native(默认), allSimt=BackendConditional, mixed=Native(默认)
+  materializable = compileOn91095 && mixed==Native
+
+tt.load / tt.store → LoadedIndexDependentMemory (需满足条件)
+  条件: isLoadedIndexDependentMemoryOp() (line 530-535):
+    hasTensorPointerOperand(op) && pointerDependsOnLoadedIndex(op)
+  pointerDependsOnLoadedIndex() (line 96-128):
+    从 memoryOp 的 pointer 开始 BFS:
+    - 遇到 BlockArgument → 追踪 scf.for 的 iter_args
+    - 遇到 tt.load 或 tt.gather → return true (找到了!)
+    - 其他 op → 继续追踪 operands
+  lowerability: allSimd=Native(默认), allSimt=BackendConditional, mixed=Native(默认)
+  materializable = compileOn91095 && mixed==Native
+
+不匹配以上任何一种 → 不识别为 anchor，继续处理子 op
+```
+
+### 0.5 simpleMixedLowerability — 默认 lowerability 模板
+
+大多数 anchor 使用这个模板（line 304-309）：
+
+```cpp
+static CandidateLowerability simpleMixedLowerability(StringRef allSimtReason) {
+  CandidateLowerability result;
+  // allSimd 保持默认 Native
+  // mixed 保持默认 Native
+  result.allSimtOnly = BackendConditional;   // 纯 SIMT 需要后端验证
+  result.allSimtOnlyReasons.push_back(allSimtReason);
+  return result;
+}
+```
+
+只有 Histogram 和 PlainOneDimensionalCumsum 不使用这个模板，它们有自己的特殊 lowerability。
+
+### 0.6 写入的 JSON 字段
+
+`buildMixedSimtAnchorPlan` 的产物通过 `analyzeSimdSimtFeatures` 写入 `features.simtAnchors`：
+
+```
+simt_anchors.count                     = materializable roots 数量
+simt_anchors.recognized_count          = 所有识别出的 anchors 数量
+simt_anchors.mechanism_kinds           = ["direct_gather", "plain_1d_cumsum", ...]
+simt_anchors.kernel_lowerability       = {all_simd: {...}, all_simt_only: {...}, mixed_simd_simt: {...}}
+  → 这三个值直接决定了 allSimdCandidateLegal / allSimtOnlyCandidateLegal / mixedCandidateLegal
+```
 
 ---
 
 ## Phase 1: analyzeSimdSimtFeatures — 全 kernel + anchor 双统计
 
 **文件**: `SimdSimtCostModel.cpp:1780-2208`
+
+接收 Phase 0 构建的 `anchorPlan`，计算每个 op 的 `inAnchor` 标记，然后统计全 kernel 和 anchor 内两份数据。
 
 ```
 line 1787  SimdSimtFeatureSummary features;
@@ -494,9 +667,10 @@ line 208-218  在 report JSON 上叠加额外字段:
 
 | 类别 | 字段前缀 | 填充阶段 |
 |------|---------|---------|
+| Anchor Plan | `features.simt_anchors.count`, `.mechanism_kinds`, `.kernel_lowerability` | Phase 0 |
 | Profile 元数据 | `profile_*`, `score_unit`, `target_*` | Phase 2 |
 | 特征 | `features.*` | Phase 1 |
-| Anchor | `features.simt_anchors.*` | Phase 1 |
+| Anchor 统计 | `features.simt_anchors.*` (op counts) | Phase 1 |
 | SIMT 适用性 | `applicability.*` | Phase 2 |
 | 候选合法性 | `*CandidateLegal`, `candidate_roles`, `selectable_candidates` | Phase 2 (初值) + Phase 3 (Event 修正) |
 | Coverage | `calibration_*`, `selection_score_valid` | Phase 3 |
