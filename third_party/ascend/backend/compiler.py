@@ -27,7 +27,7 @@ import re
 import subprocess
 import tempfile
 import warnings
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Dict, Optional, Tuple
@@ -180,10 +180,11 @@ def _run_cpp_simd_simt_costmodel(mod, metadata, opt) -> str:
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
     # Build arg-bindings from the scalar values captured by jit.py at the
-    # kernel call site.  sig_names[i] maps to TTIR block argument i (only
+    # kernel call site and forwarded through the _scalar_meta channel into
+    # metadata.  sig_names[i] maps to TTIR block argument i (only
     # non-constexpr params), so the bindings string is e.g. "2=131072".
-    sig_names = getattr(opt, '_jit_signature_param_names', [])
-    scalar_vals = getattr(opt, '_jit_scalar_arg_values', {})
+    sig_names = metadata.get('_jit_signature_param_names', [])
+    scalar_vals = metadata.get('_jit_scalar_arg_values', {})
     arg_parts = []
     for idx, name in enumerate(sig_names):
         if name in scalar_vals:
@@ -1166,13 +1167,6 @@ class NPUOptions:
     # compile_mode: "simd" (default), "unstructured_in_simt", "simd_simt", "simt_only"
     # When compile_mode is provided, it automatically sets other fields
     compile_mode: str = "unstructured_in_simt"
-    # Populated by jit.py at the kernel call site with non-constexpr scalar
-    # argument values (name→value) so the C++ costmodel can resolve TTIR block-
-    # argument loop bounds without manual annotation.
-    _jit_scalar_arg_values: dict = field(default_factory=dict)
-    # Ordered list of non-constexpr parameter names from the kernel signature.
-    # The i-th element maps to TTIR block argument i.
-    _jit_signature_param_names: list = field(default_factory=list)
     mix_mode: str = ""
     simt_stack_limit: int = None
     # take effect on the reorder instruction pattern for SIMT. The pattern is disabled by default.

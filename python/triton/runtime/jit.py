@@ -622,14 +622,18 @@ class JITFunction(KernelInterface[T]):
             # Capture non-constexpr scalar argument values so downstream
             # passes (e.g. the Ascend SIMD/SIMT cost model) can resolve
             # TTIR block-argument loop bounds without manual annotations.
+            # Passed through a dedicated _scalar_meta channel (not options)
+            # to avoid polluting NPUOptions and the compile cache key.
             _scalar_vals = {}
             for _i, _param in enumerate(self.params):
                 if _param.name not in constants and isinstance(bound_vals[_i], (int, float, bool)):
                     _scalar_vals[_param.name] = bound_vals[_i]
-            object.__setattr__(options, '_jit_scalar_arg_values', _scalar_vals)
-            object.__setattr__(options, '_jit_signature_param_names', sigkeys)
+            _scalar_meta = {
+                '_jit_scalar_arg_values': _scalar_vals,
+                '_jit_signature_param_names': sigkeys,
+            }
 
-            kernel = self._do_compile(key, signature, device, backend, target, constants, options, configs[0], warmup)
+            kernel = self._do_compile(key, signature, device, backend, target, constants, options, configs[0], warmup, _scalar_meta=_scalar_meta)
             if kernel is None:
                 return None
 
@@ -771,7 +775,8 @@ class JITFunction(KernelInterface[T]):
             warmup=True,
         )
 
-    def _do_compile(self, key, signature, device, backend, target, constants, options, attrs, warmup):
+    def _do_compile(self, key, signature, device, backend, target, constants, options, attrs, warmup,
+                     _scalar_meta=None):
         kernel_cache = self.cache[device]
 
         if self._call_hook(key, signature, device, constants, options, [attrs], warmup, before=True):
@@ -786,7 +791,8 @@ class JITFunction(KernelInterface[T]):
             cache_key = get_cache_key(src, backend, options, env_vars)
 
             def async_compile():
-                return self.compile(src, target=target, options=options.__dict__, _env_vars=env_vars)
+                return self.compile(src, target=target, options=options.__dict__,
+                                    _env_vars=env_vars, _scalar_meta=_scalar_meta)
 
             def finalize_compile(kernel):
                 kernel_cache[key] = kernel
@@ -794,7 +800,7 @@ class JITFunction(KernelInterface[T]):
 
             kernel = async_mode.submit(cache_key, async_compile, finalize_compile)
         else:
-            kernel = self.compile(src, target=target, options=options.__dict__)
+            kernel = self.compile(src, target=target, options=options.__dict__, _scalar_meta=_scalar_meta)
             kernel_cache[key] = kernel
             self._call_hook(key, signature, device, constants, options, [attrs], warmup, before=False)
         return kernel

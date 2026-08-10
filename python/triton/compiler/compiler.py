@@ -221,7 +221,7 @@ def filter_traceback(e: BaseException):
         e.__traceback__ = frames[0]
 
 
-def compile(src, target=None, options=None, _env_vars=None):
+def compile(src, target=None, options=None, _env_vars=None, _scalar_meta=None):
     if target is None:
         target = driver.active.get_current_target()
     assert isinstance(target, GPUTarget), "target must be of GPUTarget type"
@@ -264,6 +264,8 @@ def compile(src, target=None, options=None, _env_vars=None):
         **options.__dict__,
         **env_vars,
     }
+    if _scalar_meta:
+        metadata.update(_scalar_meta)
     # run compilation pipeline  and populate metadata
     stages = dict()
     backend.add_stages(stages, options)
