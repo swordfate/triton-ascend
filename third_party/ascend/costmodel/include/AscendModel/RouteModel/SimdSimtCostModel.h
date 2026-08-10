@@ -9,6 +9,7 @@
 #define ASCENDMODEL_ROUTEMODEL_SIMDSIMTCOSTMODEL_H
 
 #include "AscendModel/RouteModel/SimtAnchorAnalysis.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/JSON.h"
@@ -282,6 +283,10 @@ struct SimdSimtCostModelOptions {
   /// plan.  Candidate costs remain reportable when false, but mixed is not
   /// eligible for selection.
   bool compileOn91095 = false;
+  /// Comma-separated block-argument bindings for loop trip-count evaluation
+  /// (e.g. "0=100,1=64").  Parsed internally by analyzeSimdSimtFeatures; an
+  /// empty string means no external bindings are available.
+  std::string argBindings;
 };
 
 struct SimdSimtCostReport {
@@ -364,6 +369,15 @@ analyzeSimdSimtFeatures(mlir::ModuleOp module,
 llvm::Expected<SimdSimtFeatureSummary>
 analyzeSimdSimtFeatures(mlir::ModuleOp module,
                         const SimtAnchorPlan &anchorPlan);
+
+/// Analyze with external block-argument bindings for evaluating loop trip
+/// counts (see \c SimdSimtCostModelOptions::argBindings for the format).
+/// When bindings is empty this is equivalent to the plain two-argument
+/// overload.
+llvm::Expected<SimdSimtFeatureSummary>
+analyzeSimdSimtFeatures(mlir::ModuleOp module,
+                        const SimtAnchorPlan &anchorPlan,
+                        const llvm::DenseMap<int64_t, int64_t> &bindings);
 
 /// Run the versioned profile formula on an already materialized feature
 /// summary.  By default this preserves full out-of-coverage scoring for

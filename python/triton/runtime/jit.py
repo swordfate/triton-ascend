@@ -619,6 +619,16 @@ class JITFunction(KernelInterface[T]):
                 if callable(arg):
                     raise TypeError(f"Callable constexpr at index {i} is not supported")
 
+            # Capture non-constexpr scalar argument values so downstream
+            # passes (e.g. the Ascend SIMD/SIMT cost model) can resolve
+            # TTIR block-argument loop bounds without manual annotations.
+            _scalar_vals = {}
+            for _i, _param in enumerate(self.params):
+                if _param.name not in constants and isinstance(bound_vals[_i], (int, float, bool)):
+                    _scalar_vals[_param.name] = bound_vals[_i]
+            object.__setattr__(options, '_jit_scalar_arg_values', _scalar_vals)
+            object.__setattr__(options, '_jit_signature_param_names', sigkeys)
+
             kernel = self._do_compile(key, signature, device, backend, target, constants, options, configs[0], warmup)
             if kernel is None:
                 return None

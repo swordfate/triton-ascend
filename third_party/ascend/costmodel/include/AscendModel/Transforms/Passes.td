@@ -226,7 +226,11 @@ def SelectSimdSimtCostModelPass
            "Whether the target exposes the 910/95 SIMT lowering templates">,
     Option<"reportFile", "report-file", "std::string",
            /*default=*/"\"\"",
-           "Optional JSONL path for the C++ selection report">
+           "Optional JSONL path for the C++ selection report">,
+    Option<"argBindingsStr", "arg-bindings", "std::string",
+           /*default=*/"\"\"",
+           "Comma-separated block-argument bindings for loop trip-count "
+           "evaluation (e.g. '0=100,1=64')">
   ];
 }
 

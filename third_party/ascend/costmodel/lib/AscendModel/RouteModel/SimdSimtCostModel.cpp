@@ -335,22 +335,114 @@ static int64_t getOperationElements(Operation *op) {
   return elements;
 }
 
-static std::optional<int64_t> getConstantInteger(Value value) {
-  Operation *definingOp = value.getDefiningOp();
-  if (!definingOp || definingOp->getName().getStringRef() != "arith.constant")
+using IntegerBindingMap = llvm::DenseMap<int64_t, int64_t>;
+
+/// Parse a comma-separated list of "key=value" integer bindings (e.g.
+/// "0=100,1=64") into a lookup map.  Malformed entries are silently skipped.
+static IntegerBindingMap parseIntegerBindings(const std::string &raw) {
+  IntegerBindingMap map;
+  if (raw.empty())
+    return map;
+  llvm::SmallVector<llvm::StringRef> pairs;
+  llvm::StringRef(raw).split(pairs, ',', -1, false);
+  for (llvm::StringRef pair : pairs) {
+    auto [keyStr, valStr] = pair.trim().split('=');
+    int64_t key, val;
+    if (!keyStr.getAsInteger(0, key) && !valStr.getAsInteger(0, val))
+      map[key] = val;
+  }
+  return map;
+}
+
+/// Evaluate an SSA value to a compile-time integer constant by recursing
+/// through arithmetic ops, tensor.dim on static shapes, and type casts.
+/// Block arguments are resolved via \p bindings.  Returns std::nullopt when
+/// the value cannot be reduced to a constant.
+static std::optional<int64_t> evaluateIntegerConstant(
+    Value value, const IntegerBindingMap &bindings, int depth = 0) {
+  if (depth > 16)
     return std::nullopt;
-  if (auto integer = definingOp->getAttrOfType<IntegerAttr>("value"))
-    return integer.getInt();
+
+  Operation *definingOp = value.getDefiningOp();
+  if (definingOp) {
+    llvm::StringRef name = definingOp->getName().getStringRef();
+
+    // 1. Literal constant — the fast path (and the only path before v11).
+    if (name == "arith.constant") {
+      if (auto integer = definingOp->getAttrOfType<IntegerAttr>("value"))
+        return integer.getInt();
+      return std::nullopt;
+    }
+
+    // 2. Binary integer arithmetic: recurse on both operands.
+    if (definingOp->getNumOperands() == 2) {
+      auto lhs =
+          evaluateIntegerConstant(definingOp->getOperand(0), bindings, depth + 1);
+      auto rhs =
+          evaluateIntegerConstant(definingOp->getOperand(1), bindings, depth + 1);
+      if (!lhs || !rhs)
+        return std::nullopt;
+
+      if (name == "arith.addi")
+        return *lhs + *rhs;
+      if (name == "arith.subi")
+        return *lhs - *rhs;
+      if (name == "arith.muli")
+        return *lhs * *rhs;
+      if (name == "arith.divsi" && *rhs != 0)
+        return *lhs / *rhs;
+      if (name == "arith.ceildivsi" && *rhs != 0) {
+        int64_t q = *lhs / *rhs;
+        int64_t r = *lhs % *rhs;
+        return r == 0 ? q : (q >= 0 ? q + 1 : q);
+      }
+      if (name == "arith.remsi" && *rhs != 0)
+        return *lhs % *rhs;
+    }
+
+    // 3. tensor.dim on a statically shaped tensor → extract the dimension.
+    if (name == "tensor.dim") {
+      auto tensorType =
+          dyn_cast<RankedTensorType>(definingOp->getOperand(0).getType());
+      auto dimVal =
+          evaluateIntegerConstant(definingOp->getOperand(1), bindings, depth + 1);
+      if (tensorType && dimVal && tensorType.hasStaticShape() &&
+          *dimVal >= 0 &&
+          *dimVal < static_cast<int64_t>(tensorType.getRank()))
+        return tensorType.getShape()[*dimVal];
+    }
+
+    // 4. Type casts that are value-preserving for integers → recurse through.
+    if (name == "arith.index_cast" || name == "arith.index_castui" ||
+        name == "arith.extsi" || name == "arith.extui" || name == "arith.trunci")
+      return evaluateIntegerConstant(definingOp->getOperand(0), bindings,
+                                     depth + 1);
+  }
+
+  // 5. Block argument → arg-bindings lookup.
+  if (auto blockArg = dyn_cast<BlockArgument>(value)) {
+    auto it = bindings.find(blockArg.getArgNumber());
+    if (it != bindings.end())
+      return it->second;
+  }
+
   return std::nullopt;
 }
 
-static std::optional<int64_t> getKnownStaticLoopTripCount(Operation *op) {
+/// Legacy alias kept for the call-sites that do not thread arg-bindings.
+static std::optional<int64_t> getConstantInteger(Value value) {
+  static const IntegerBindingMap empty;
+  return evaluateIntegerConstant(value, empty);
+}
+
+static std::optional<int64_t> getKnownStaticLoopTripCount(
+    Operation *op, const IntegerBindingMap &bindings) {
   if (!op || op->getName().getStringRef() != "scf.for" ||
       op->getNumOperands() < 3)
     return std::nullopt;
-  auto lower = getConstantInteger(op->getOperand(0));
-  auto upper = getConstantInteger(op->getOperand(1));
-  auto step = getConstantInteger(op->getOperand(2));
+  auto lower = evaluateIntegerConstant(op->getOperand(0), bindings);
+  auto upper = evaluateIntegerConstant(op->getOperand(1), bindings);
+  auto step = evaluateIntegerConstant(op->getOperand(2), bindings);
   if (!lower || !upper || !step || *step == 0)
     return std::nullopt;
   int64_t span = *upper - *lower;
@@ -365,22 +457,39 @@ static std::optional<int64_t> getKnownStaticLoopTripCount(Operation *op) {
   return std::nullopt;
 }
 
+/// Backward-compatible overload that evaluates without any external bindings.
+static std::optional<int64_t> getKnownStaticLoopTripCount(Operation *op) {
+  static const IntegerBindingMap empty;
+  return getKnownStaticLoopTripCount(op, empty);
+}
+
+static int64_t getStaticLoopTripCount(Operation *op,
+                                      const IntegerBindingMap &bindings) {
+  return getKnownStaticLoopTripCount(op, bindings).value_or(1);
+}
+
 static int64_t getStaticLoopTripCount(Operation *op) {
   return getKnownStaticLoopTripCount(op).value_or(1);
 }
 
-static int64_t getLoopMultiplier(Operation *op) {
+static int64_t getLoopMultiplier(Operation *op,
+                                 const IntegerBindingMap &bindings) {
   int64_t multiplier = 1;
   for (Operation *parent = op->getParentOp(); parent;
        parent = parent->getParentOp()) {
     if (parent->getName().getStringRef() != "scf.for")
       continue;
-    int64_t tripCount = getStaticLoopTripCount(parent);
+    int64_t tripCount = getStaticLoopTripCount(parent, bindings);
     if (tripCount > 0 &&
         multiplier <= std::numeric_limits<int64_t>::max() / tripCount)
       multiplier *= tripCount;
   }
   return multiplier;
+}
+
+static int64_t getLoopMultiplier(Operation *op) {
+  static const IntegerBindingMap empty;
+  return getLoopMultiplier(op, empty);
 }
 
 static bool isCastOp(llvm::StringRef name) {
@@ -1779,7 +1888,8 @@ mlir::ascend::analyzeSimdSimtFeatures(ModuleOp module,
 
 llvm::Expected<SimdSimtFeatureSummary>
 mlir::ascend::analyzeSimdSimtFeatures(
-    ModuleOp module, const SimtAnchorPlan &anchorPlan) {
+    ModuleOp module, const SimtAnchorPlan &anchorPlan,
+    const IntegerBindingMap &bindings) {
   if (!module)
     return llvm::createStringError(std::errc::invalid_argument,
                                    "cannot analyze a null ModuleOp");
@@ -1863,7 +1973,7 @@ mlir::ascend::analyzeSimdSimtFeatures(
   module.walk([&](Operation *op) {
     llvm::StringRef name = op->getName().getStringRef();
     const int64_t elements = getOperationElements(op);
-    const int64_t loopMultiplier = getLoopMultiplier(op);
+    const int64_t loopMultiplier = getLoopMultiplier(op, bindings);
     const bool inAnchor = isInAnchor(op);
     if (inAnchor)
       ++features.simtAnchors.coveredOperationCount;
@@ -1966,7 +2076,7 @@ mlir::ascend::analyzeSimdSimtFeatures(
     }
 
     if (name == "scf.for") {
-      auto knownTripCount = getKnownStaticLoopTripCount(op);
+      auto knownTripCount = getKnownStaticLoopTripCount(op, bindings);
       if (!knownTripCount)
         features.hasUnknownTripCount = true;
       int64_t tripCount = knownTripCount.value_or(1);
@@ -2205,6 +2315,13 @@ mlir::ascend::analyzeSimdSimtFeatures(
       features.vectorPtrSplatOps > 0 && features.scalarLoadOps >= 2;
 
   return features;
+}
+
+llvm::Expected<SimdSimtFeatureSummary>
+mlir::ascend::analyzeSimdSimtFeatures(
+    ModuleOp module, const SimtAnchorPlan &anchorPlan) {
+  static const IntegerBindingMap empty;
+  return analyzeSimdSimtFeatures(module, anchorPlan, empty);
 }
 
 llvm::Expected<SimdSimtCostReport>
@@ -2834,7 +2951,8 @@ llvm::Expected<SimdSimtCostReport>
 mlir::ascend::analyzeSimdSimtCandidates(
     ModuleOp module, const SimtAnchorPlan &anchorPlan,
     const SimdSimtCostModelOptions &options) {
-  auto features = analyzeSimdSimtFeatures(module, anchorPlan);
+  IntegerBindingMap bindings = parseIntegerBindings(options.argBindings);
+  auto features = analyzeSimdSimtFeatures(module, anchorPlan, bindings);
   if (!features)
     return features.takeError();
   return estimateSimdSimtCandidates(*features, options);

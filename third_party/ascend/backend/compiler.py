@@ -26,7 +26,8 @@ import os
 import re
 import subprocess
 import tempfile
-from dataclasses import dataclass, replace
+import warnings
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import ModuleType
 from typing import Any, Dict, Optional, Tuple
@@ -178,6 +179,16 @@ def _run_cpp_simd_simt_costmodel(mod, metadata, opt) -> str:
     )
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
+    # Build arg-bindings from the scalar values captured by jit.py at the
+    # kernel call site.  sig_names[i] maps to TTIR block argument i (only
+    # non-constexpr params), so the bindings string is e.g. "2=131072".
+    sig_names = getattr(opt, '_jit_signature_param_names', [])
+    scalar_vals = getattr(opt, '_jit_scalar_arg_values', {})
+    arg_parts = []
+    for idx, name in enumerate(sig_names):
+        if name in scalar_vals:
+            arg_parts.append(f"{idx}={scalar_vals[name]}")
+    arg_bindings = ",".join(arg_parts)
     ascend.passes.ttir.add_select_simd_simt_costmodel(
         pm,
         mode,
@@ -187,6 +198,7 @@ def _run_cpp_simd_simt_costmodel(mod, metadata, opt) -> str:
         float(opt.auto_simt_scope_margin),
         bool(opt.compile_on_910_95),
         str(opt.auto_simt_scope_dump),
+        arg_bindings,
     )
     ascend.passes.ttir.add_materialize_simt_scopes(pm)
     pm.run(mod)
@@ -1154,6 +1166,13 @@ class NPUOptions:
     # compile_mode: "simd" (default), "unstructured_in_simt", "simd_simt", "simt_only"
     # When compile_mode is provided, it automatically sets other fields
     compile_mode: str = "unstructured_in_simt"
+    # Populated by jit.py at the kernel call site with non-constexpr scalar
+    # argument values (name→value) so the C++ costmodel can resolve TTIR block-
+    # argument loop bounds without manual annotation.
+    _jit_scalar_arg_values: dict = field(default_factory=dict)
+    # Ordered list of non-constexpr parameter names from the kernel signature.
+    # The i-th element maps to TTIR block argument i.
+    _jit_signature_param_names: list = field(default_factory=list)
     mix_mode: str = ""
     simt_stack_limit: int = None
     # take effect on the reorder instruction pattern for SIMT. The pattern is disabled by default.
