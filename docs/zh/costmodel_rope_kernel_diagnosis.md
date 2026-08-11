@@ -600,7 +600,122 @@ simtPredicateCycles = 153 × 16 / 0.038 = 64,421
 
 ---
 
-## 四、FAQ：公式细节答疑
+## 四、Mixed 分数中 Predicate 的贡献与 JSON 字段辨析
+
+### 4.1 Mixed = 37463 的构成
+
+mixed 候选分数的计算公式（`SimdSimtCostModel.cpp:2715-2719`）：
+
+```
+mixed = setup + programIssueScale × (regularPayloadWithResidual + anchorPayload)
+```
+
+代入 ROPE kernel 的实际数值（来自 costmodel JSON `.mixed.partition`）：
+
+```
+anchorPayload = max(compute + dot + shuffle, memory) + predicate
+              = max(    0   +  0  +   0   , 300.81 ) + 3789.47
+              = 300.81 + 3789.47
+              = 4090.28              ← 其中 predicate 占 92.6%
+
+regularPayload = max(compute + dot, memory)
+               = max(162.33 + 140, 7.75)
+               = 302.33
+
+remainingStructuralPenalty = 0.868   ← anchor 之外剩余部分的 SIMD 结构惩罚
+
+regularPayloadWithResidual = 302.33 × (1 + 0.868) = 564.75
+
+mixed = 223 + 8.0 × (564.75 + 4090.28)
+      = 223 + 37240.24
+      = 37463  ✓
+```
+
+**Predicate 对 mixed 分数的贡献**：
+
+```
+predicatePerIteration = 3789.47
+afterProgramIssueScale = 3789.47 × 8.0 = 30315.76
+
+30315.76 / 37463 = 80.9%
+```
+
+**对比 pure SIMT：** predicate 占 98.9%（64421 × 8.0 / 521299）。
+
+### 4.2 为什么有多个 mask_rank_sum / predicate 值
+
+核心公式只有一个，但输入不同（`SimdSimtCostModel.cpp:2496-2507`）：
+
+```
+predicateInstructions = maskRankSum × ceil(maxNumel / warpSize)
+predicateCycles       = predicateInstructions / simtPredicateRate(0.038)
+```
+
+**关键区分：全 kernel vs 仅 anchor。**
+
+| 公式输入 | 来源字段 | 值 | 输出 | 用在哪里 |
+|---------|---------|-----|------|---------|
+| `features.maskRankSum` | 全 kernel 所有 mask tensor op 的 rank 累加（不去重） | **153** | `predicateCycles = 64,421` | **pure SIMT** 总分 |
+| `features.simtAnchors.maskRankSum` | 仅 anchor 操作（8 个间接 load）的 mask rank | **9** | `anchorPredicateCycles = 3,789` | **mixed** 总分 |
+
+计算验证：
+
+```
+全 kernel: 153 × ceil(512/32) / 0.038 = 153 × 16 / 0.038 = 2448 / 0.038 = 64,421 ✓
+anchor  :   9 × ceil(512/32) / 0.038 =   9 × 16 / 0.038 =  144 / 0.038 =  3,789 ✓
+```
+
+**为什么 mixed 只有 9 而全 kernel 是 153？** 因为 anchor 是那 8 个间接 load（`K_Buffer[ kv_loc * stride + ... ]`），它们的 mask 就是 `offs_n < split_kv_end` 这几个 rank-1 mask。而全 kernel 包含所有 mask tensor（Q 的 mask、cos/sin 的 mask、store 的 mask、tl.where 的 mask 等），累计 153。混合路线把 anchor 按 SIMT 算（含 predicate），其余按 SIMD + structural penalty 算——所以 mixed 的 predicate 远小于 pure SIMT。
+
+### 4.3 JSON 中所有 mask/predicate 相关字段速查
+
+#### 全 kernel 特征（`.features.*`）
+
+| 字段 | 值 | 含义 | 代码位置 |
+|------|-----|------|---------|
+| `mask_rank_sum` | **153** | 所有 mask tensor op 的 operand+result rank 累加，每次出现都算 | 遍历所有 op，`maskRanks.push_back(rank)` |
+| `unique_mask_rank_sum` | **66** | 按 SSA value 去重后的 mask rank 累加 | 同一 mask value 被多处使用只算一次 |
+| `mask_tensor_ops` | **53** | 涉及 mask tensor 的操作数量（每次出现都算） | `features.maskTensorOps++` |
+| `unique_mask_values` | **37** | 去重后的 mask tensor SSA value 数量 | — |
+| `predicate_elements` | **8,032** | 需要 predicate 的总元素数 | SIMD 侧使用的 predicate element 估计 |
+
+#### Anchor 特征（`.features.simt_anchors.*`）
+
+| 字段 | 值 | 含义 |
+|------|-----|------|
+| `mask_rank_sum` | **9** | 仅 anchor 操作的 mask rank 累加（不去重） |
+| `unique_mask_rank_sum` | **8** | 仅 anchor 操作去重后的 mask rank 累加 |
+| `unique_mask_values` | **5** | 仅 anchor 操作去重后的 mask SSA value 数量 |
+| `predicate_elements` | **1,584** | 仅 anchor 的 predicate 元素数 |
+
+#### SIMT 执行层（`.simt_execution.*`）
+
+| 字段 | 值 | 公式 |
+|------|-----|------|
+| `predicate_warp_instructions` | **2,448** | `mask_rank_sum(153) × ceil(512/32) = 2448` |
+| `predicate_system_cycles` | **64,421** | `2448 / 0.038` |
+
+#### Mixed 分区（`.mixed.partition.*`）
+
+| 字段 | 值 | 公式 |
+|------|-----|------|
+| `simt_anchor_predicate_system_cycles` | **3,789.47** | `anchorMaskRankSum(9) × ceil(512/32) / 0.038` |
+
+### 4.4 完整分数构成一览
+
+```
+                      SIMD part          SIMT part         Predicate part
+                      ─────────          ─────────         ──────────────
+pure SIMD (4460):     all SIMD           —                 structural penalty only
+pure SIMT (521299):   —                  compute+mem+dot   64421 × 8 = 515368 (99%)
+mixed    (37463):     regular(564.75)×8  anchor mem×8      anchor pred 3789×8 = 30316 (81%)
+```
+
+Mixed 之所以比 pure SIMT 低一个数量级（37k vs 521k），是因为只对 8 个 anchor 操作按 SIMT 算 predicate（9 rank → 3789 cycles/iter），而不是全 kernel 所有 53 个 mask op（153 rank → 64421 cycles/iter）。
+
+---
+
+## 五、FAQ：公式细节答疑
 
 ### Q1: compute scoring 是向量计算，dot scoring 是 Cube 计算？为什么 Block 10 要 compute+dot？
 
