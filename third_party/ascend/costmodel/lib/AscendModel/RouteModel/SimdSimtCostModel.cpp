@@ -61,6 +61,11 @@ struct CoverageProfile {
   int64_t rowwiseMaxTensorNumel = 0;
   int64_t rank1WeightedReductionsMax = 0;
   int64_t rank1MaxTensorNumel = 0;
+  // attention_indirect_gqa domain boundaries
+  int64_t attentionMinIndirectMemoryOps = 2;
+  int64_t attentionMinDotOps = 1;
+  int64_t attentionMaxTensorNumel = 2048;
+  int64_t attentionMaskRankSumMax = 200;
 };
 
 struct StructuralProfile {
@@ -742,6 +747,15 @@ loadCandidateProfile(llvm::StringRef requestedPath) {
           *coverage, "rank1_weighted_reductions_max", "coverage");
       profile.coverage.rank1MaxTensorNumel =
           reader.integer(*coverage, "rank1_max_tensor_numel", "coverage");
+      // attention_indirect_gqa domain
+      profile.coverage.attentionMinIndirectMemoryOps = reader.integer(
+          *coverage, "attention_min_indirect_memory_ops", "coverage");
+      profile.coverage.attentionMinDotOps =
+          reader.integer(*coverage, "attention_min_dot_ops", "coverage");
+      profile.coverage.attentionMaxTensorNumel =
+          reader.integer(*coverage, "attention_max_tensor_numel", "coverage");
+      profile.coverage.attentionMaskRankSumMax =
+          reader.integer(*coverage, "attention_mask_rank_sum_max", "coverage");
     }
 
     if (const auto *structural =
@@ -1142,6 +1156,24 @@ rankingCalibrationCoverage(const SimdSimtFeatureSummary &features,
       maskRankSum <= coverage.rowwiseMaskRankSumMax + 16 &&
       weightedReductions <= coverage.rowwiseWeightedReductionsMax)
     return {true, "triangular_solve_loop"};
+  // Flash Attention / GQA with indirect KV lookup: the kernel loads KV
+  // indices from a structured buffer (e.g. kv_indices), then uses those
+  // values to index into K/V tensors inside a dynamic loop whose body
+  // also contains dots and row-local reductions (softmax).
+  // Distinguished from masked_rowwise_reduction by the presence of dots
+  // and larger tensors, and from tiny_irregular_dot by larger dot scale
+  // plus softmax-like row_local_reduce.  Unknown trip count is admitted
+  // because domain-specific event calibration absorbs the loop penalty
+  // rather than relying on a structural per-trip term.
+  if (dotFlops > 0 &&
+      features.loadedIndexDependentMemoryOps > 0 &&
+      features.rowLocalReduceOps > 0 &&
+      maxNumel <= coverage.attentionMaxTensorNumel &&
+      maskRankSum <= coverage.attentionMaskRankSumMax &&
+      features.dotOps >= coverage.attentionMinDotOps &&
+      features.simtAnchors.loadedIndexDependentMemoryOps >=
+          coverage.attentionMinIndirectMemoryOps)
+    return {true, "attention_indirect_gqa"};
   if (features.hasUnknownTripCount)
     return {false, "unknown_loop_trip_count"};
   if (dotFlops > 0 && dotFlops <= coverage.tinyDotFlopsMax &&
