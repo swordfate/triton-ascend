@@ -388,6 +388,109 @@ auto facts = analyzePlainOneDimensionalCumsum(op);
 
 ---
 
+### 4.7 为什么 Anchor 识别必须放在特征提取之前
+
+这是一个设计决策，不是实现细节。核心原因：**特征提取内部需要知道每个 op 是否在 anchor 内部**，这决定了统计维度的分叉方式，不可事后推算。
+
+#### 直接依赖：`inAnchor` 标志
+
+特征提取的 `module.walk` 中对每个 op 都调用 `isInAnchor` 判定（`SimdSimtCostModel.cpp` line 1813-1818）：
+
+```cpp
+auto isInAnchor = [&](Operation *op) {
+    for (Operation *current = op; current; current = current->getParentOp())
+        if (anchorSet.contains(current))
+            return true;
+    return false;
+};
+```
+
+`isInAnchor` 在遍历中决定了下面所有计数走哪个分支：
+
+```cpp
+// 全局统计 + anchor 内统计，同时进行
+features.weightedOps[weightedKind] += loopMultiplier;         // ← 全局
+features.opElements[weightedKind] += elements * loopMultiplier;  // ← 全局
+if (inAnchor) {
+    features.simtAnchors.weightedOps[weightedKind] += loopMultiplier;  // ← anchor 内
+    features.simtAnchors.opElements[weightedKind] += elements * loopMultiplier;  // ← anchor 内
+}
+```
+
+**这不是"先全局统计，再从中过滤出 anchor 子集"——而是两类计数同时进行**，在同一个 `module.walk` 中完成。整个特征提取有 **20+ 个字段** 都按这个分叉模式统计：
+
+| 统计项 | 全局（用于 all-SIMD / all-SIMT 评分） | Anchor 内（用于 mixed 评分） |
+|--------|---------------------------------------|------------------------------|
+| weightedOps | `features.weightedOps` | `features.simtAnchors.weightedOps` |
+| opElements | `features.opElements` | `features.simtAnchors.opElements` |
+| loadBytes | `features.loadBytes` | `features.simtAnchors.loadBytes` |
+| maskRankSum | `features.maskRankSum` | `features.simtAnchors.maskRankSum` |
+| predicateElements | `features.predicateElements` | `features.simtAnchors.predicateElements` |
+| staticLoopCount | `features.staticLoopCount` | `features.simtAnchors.staticLoopCount` |
+| loadedIndexDependentMemoryOps | `features.loadedIndexDependentMemoryOps` | `features.simtAnchors.loadedIndexDependentMemoryOps` |
+| ... | ... | ... |
+
+#### 如果顺序反过来会怎样
+
+**选择 A：事后过滤**
+
+`module.walk` 完成后 SSA 上下文已丢弃，feature extraction 不保存 op→anchor 的映射。事后无法推算哪些 op 在 anchor 内部——因为 anchor 的判定依赖 `isLoadedIndexDependentMemoryOp` 的 BFS 分析（需要 traverse SSA graph），而 feature summary 只保存聚合数字，不保存 SSA 关系。
+
+**选择 B：分两次 walk**
+
+先走全量 feature extraction（不区分 anchor），再 walk 一次只走 anchor 子树提取 anchor 特征。两个问题：
+
+1. **两次 walk 的 `loopMultiplier` 可能不一致**——anchor 嵌套处理（`scf.for` 在 anchor 内 vs 外）会影响 `isInAnchor` 的传播，两次 walk 看到的拓扑不同时 anchor 内的计数就不可靠。
+2. **效率**：虽然影响不大，但违反"数据只产生一次"的原则。更重要的是它**引入了一致性 bug 的可能性**——比如 anchor 识别逻辑的改动可能导致两次 walk 中同一个 op 的归属不同。
+
+#### 更根本的依赖：物化（Materialization）
+
+```cpp
+// SelectSimdSimtCostModel.cpp line 202-206
+if (effective == kMixedSimdSimt &&
+    failed(materializeSimtAnchorPlan(module, anchorPlan))) {
+    signalPassFailure();
+    return;
+}
+```
+
+`anchorPlan` 不光用于评分，评分决定了 `mixed` 之后，**同一个 `anchorPlan`** 被传给 `materializeSimtAnchorPlan`，用它 `materializableRoots()` 的 Operation 指针列表把具体 op 包进 `scope.scope{vec_mode="simt"}`。
+
+#### 循环依赖：mixed 评分需要 anchor 信息
+
+mixed 候选的计费方式（`SimdSimtCostModel.cpp` line 2736-2740）：
+
+```cpp
+// 把 anchor 内 ops 按 SIMT 费率计，其余按 SIMD 费率计
+mixedSimdRegularComputeCycles = simdCompute(all ops) - simdCompute(anchor ops);
+mixedSimtAnchorComputeCycles  = simtCompute(anchor ops);
+mixedCost = mixedSimdRegular + mixedSimtAnchor + boundary;
+```
+
+如果没有 anchor 特征（`features.simtAnchors.*`），mixed 候选根本无法评分。如果评分在前、识别在后，就会形成循环依赖：
+
+```
+评分 → 决定 mixed → 需要知道哪些 op 是 anchor → 需要先识别
+识别 → 为了什么？ → 为了评分用的分叉特征 → 需要在评分之前
+```
+
+#### 总结
+
+整个 pipeline 的顺序是**硬依赖链**，不是可选优化：
+
+```
+识别 anchor → 提取特征（分叉）→ 评分（含 mixed）→ 物化（复用 anchor plan）
+     │               │                   │                  │
+     │               │                   │                  └── 需要 Operation* 列表
+     │               │                   └── mixed 评分需要 anchor 特征
+     │               └── inAnchor 标志决定 20+ 字段的分叉统计
+     └── BFS 分析 SSA 依赖链，结果是不可变的 Operation* 集合
+```
+
+每个后续步骤都消费前一步的输出。颠倒任何一步都会导致上一步的输出无法产生。
+
+---
+
 ## 五、Phase 1：特征提取（Feature Extraction）
 
 文件：`SimdSimtCostModel.cpp:analyzeSimdSimtFeatures(module, anchorPlan)`，约 430 行
