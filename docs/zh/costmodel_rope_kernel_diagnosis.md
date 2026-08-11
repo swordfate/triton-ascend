@@ -64,10 +64,23 @@ Step 1: 加载 Q 和 Q_PE（结构化，不依赖其他 tensor load）
   q    = Q[batch, head, :kv_lora_rank]              ← structured
   q_pe = Q[batch, head, kv_lora_rank:kv_lora_rank+BLOCK_R]  ← structured
 
-Step 2: 加载 RoPE cos/sin 值（间接，依赖 positions tensor）
-  pos = positions[batch]                             ← structured scalar load
-  cos = cos_sin_cache[pos * stride + offs_rotary]    ← ★ 间接：地址用 pos
-  sin = cos_sin_cache[pos * stride + offs_rotary + rotary_dim//2]  ← ★ 间接
+Step 2: 加载 RoPE cos/sin 值（间接，因为 offs_rotary 产生 per-lane 不同列偏移）
+  pos = positions[batch]                             ← structured scalar load（所有 lane 相同）
+  offs_rotary = tl.arange(0, BLOCK_R) % (rotary_dim // 2)
+  cos = cos_sin_cache[pos * stride + offs_rotary]    ← ★ 间接：offs_rotary 来自 arange % mod，
+                                                          每次 lane 的列索引不同，
+                                                          Triton 编译器无法 coalesce
+                                                          为一条连续向量 load
+  sin = cos_sin_cache[pos * stride + offs_rotary + rotary_dim//2]  ← ★ 同上
+
+  注意：pos 是 scalar（tl.load 返回一个标量 i32），所有 lane 用它计算
+  同一个基地址（cos_sin_cache 的行偏移）。真正造成 per-lane divergence 的
+  是 offs_rotary——每个 lane 的 rotary dimension 列索引不同。但 Triton 编译
+  器看到的是 16 个不同地址，无法 coalesce，因此视作离散访存。
+  标量 pos 也参与了地址，所以 costmodel 的 pointerDependsOnLoadedIndex 的
+  BFS 会追溯到 pos（tt.load 的结果）→ 判为 LoadedIndexDependentMemory 的
+  直接原因确实是 BFS 追溯到了 pos。但更深层的原因是 offs_rotary 的 strided
+  模式让 Triton 编译器无法优化，即使 BFS 没有追溯到 pos 也会是离散性质。
 
 Step 3: 循环遍历 KV blocks
   for start_n in range(split_kv_start, split_kv_end, BLOCK_N):
@@ -102,8 +115,8 @@ Step 4: 写输出
 
 | # | 变量 | TTIR 行号 | 依赖的 load 结果 | 在循环内？ |
 |---|------|----------|-----------------|----------|
-| A1 | `cos` (line 135) | ~96 | `pos` (line 90, 从 `positions` load) | 否 |
-| A2 | `sin` (line 140) | ~98 | `pos` | 否 |
+| A1 | `cos` (line 135) | ~96 | `pos` (scalar load，BFS 追溯到)；深层原因：`offs_rotary = arange % (rotary_dim//2)` 产生 per-lane 不同列偏移 | 否 |
+| A2 | `sin` (line 140) | ~98 | `pos`（同上）；深层原因同上 | 否 |
 | A3 | `k_pe_last_token` (line 172) | ~133 | `kv_indices[last]` (line 123) | 否（scf.if 内） |
 | A4 | `k_pe_rot_last_token` (line 177) | ~135 | `kv_indices[last]` | 否（scf.if 内） |
 | A5 | `k_pe` (line 202) | ~192 | `kv_loc` (line 181, 从 `kv_indices` load) | **是** |
