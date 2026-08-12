@@ -36,7 +36,9 @@
       "attention_min_indirect_memory_ops": 2,
       "attention_min_dot_ops": 2,
       "attention_max_tensor_numel": 2048,
-      "attention_mask_rank_sum_max": 200
+      "attention_mask_rank_sum_max": 200,
+      "indirect_elem_max_tensor_numel": 4096,
+      "indirect_elem_mask_rank_sum_max": 400
     },
     "simd_structural_penalty_ratio": {
       "description": "Additive SIMD-only residual ratios for irregular addressing, mask materialization, reductions, loops, control flow, tiny dot, and rank-1 indirect reduction patterns. Their sum multiplies A_SIMD; A_SIMT never participates in the all-SIMD cost.",
@@ -92,6 +94,15 @@
           "all_simt_only_validated": false,
           "mixed_simd_simt_validated": true,
           "source": "A5 card 0, ROPE GQA fwd T16/R16/N16/num_warps4/BS=1, compile_mode routes measured separately: median SIMD 241 us, SIMT-only 50 us, C++-materialized mixed 17 us; all routes correctness PASS. Mixed is 14.2x faster than SIMD. Multipliers derived from latency ratios: m_simd=119.1, m_simt=0.211, m_mixed=1.0.",
+          "confidence": "low"
+        },
+        "indirect_elementwise": {
+          "all_simd": 67.65,
+          "all_simt_only": 0.123,
+          "mixed_simd_simt": 1.0,
+          "all_simt_only_validated": false,
+          "mixed_simd_simt_validated": true,
+          "source": "A5 card 0, causal_conv1d_fwd T256/D16/num_warps4, compile_mode routes measured separately: median SIMD 4.5 us, SIMT-only 4.7 us, C++-materialized mixed 4.4 us; all routes correctness PASS. Mixed advantage is below the 10% production switch margin, so Post Check keeps the all-SIMD baseline. Multipliers derived from latency ratios: m_simd=67.65, m_simt=0.123, m_mixed=1.0.",
           "confidence": "low"
         }
       }

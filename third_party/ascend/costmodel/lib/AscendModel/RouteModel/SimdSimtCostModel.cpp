@@ -66,6 +66,9 @@ struct CoverageProfile {
   int64_t attentionMinDotOps = 1;
   int64_t attentionMaxTensorNumel = 2048;
   int64_t attentionMaskRankSumMax = 200;
+  // indirect_elementwise domain boundaries
+  int64_t indirectElemMaxTensorNumel = 4096;
+  int64_t indirectElemMaskRankSumMax = 400;
 };
 
 struct StructuralProfile {
@@ -756,6 +759,11 @@ loadCandidateProfile(llvm::StringRef requestedPath) {
           reader.integer(*coverage, "attention_max_tensor_numel", "coverage");
       profile.coverage.attentionMaskRankSumMax =
           reader.integer(*coverage, "attention_mask_rank_sum_max", "coverage");
+      // indirect_elementwise domain
+      profile.coverage.indirectElemMaxTensorNumel = reader.integer(
+          *coverage, "indirect_elem_max_tensor_numel", "coverage");
+      profile.coverage.indirectElemMaskRankSumMax = reader.integer(
+          *coverage, "indirect_elem_mask_rank_sum_max", "coverage");
     }
 
     if (const auto *structural =
@@ -1174,6 +1182,19 @@ rankingCalibrationCoverage(const SimdSimtFeatureSummary &features,
       features.simtAnchors.loadedIndexDependentMemoryOps >=
           coverage.attentionMinIndirectMemoryOps)
     return {true, "attention_indirect_gqa"};
+  // Indirect loads with pure element-wise compute (no dots, no reductions).
+  // Characteristic of tiled 1D convolution / gather-elementwise kernels
+  // where indices are computed dynamically (e.g. from task_id decomposition)
+  // and each lane loads a value at a computed offset, then applies
+  // element-wise ops (mul, add, slice).  Distinguished from
+  // masked_rowwise_reduction by the absence of reduction ops, and from
+  // attention_indirect_gqa by the absence of dot products.
+  if (dotFlops == 0 &&
+      features.loadedIndexDependentMemoryOps > 0 &&
+      weightedReductions == 0 &&
+      maxNumel <= coverage.indirectElemMaxTensorNumel &&
+      maskRankSum <= coverage.indirectElemMaskRankSumMax)
+    return {true, "indirect_elementwise"};
   if (features.hasUnknownTripCount)
     return {false, "unknown_loop_trip_count"};
   if (dotFlops > 0 && dotFlops <= coverage.tinyDotFlopsMax &&
