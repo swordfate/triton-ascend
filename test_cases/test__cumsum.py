@@ -18,7 +18,7 @@ sys.path.append("..")
 from test_common import convert_tensor_with_device_type, profiling_test, validate_cmp, cal_precision, compare_data_precision
 
 
-@triton.jit
+@tl.constexpr
 def get_scan_accum_type(inp_dtype: tl.dtype) -> tl.dtype:
     if inp_dtype.is_bf16() or inp_dtype.is_fp16():
         return tl.float32
