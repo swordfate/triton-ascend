@@ -38,7 +38,8 @@
       "attention_max_tensor_numel": 2048,
       "attention_mask_rank_sum_max": 200,
       "indirect_elem_max_tensor_numel": 4096,
-      "indirect_elem_mask_rank_sum_max": 400
+      "indirect_elem_mask_rank_sum_max": 400,
+      "dynamic_elem_max_tensor_numel": 2048
     },
     "simd_structural_penalty_ratio": {
       "description": "Additive SIMD-only residual ratios for irregular addressing, mask materialization, reductions, loops, control flow, tiny dot, and rank-1 indirect reduction patterns. Their sum multiplies A_SIMD; A_SIMT never participates in the all-SIMD cost.",
@@ -103,6 +104,15 @@
           "all_simt_only_validated": false,
           "mixed_simd_simt_validated": true,
           "source": "A5 card 0, causal_conv1d_fwd T256/D16/num_warps4, compile_mode routes measured separately: median SIMD 4.5 us, SIMT-only 4.7 us, C++-materialized mixed 4.4 us; all routes correctness PASS. Mixed advantage is below the 10% production switch margin, so Post Check keeps the all-SIMD baseline. Multipliers derived from latency ratios: m_simd=67.65, m_simt=0.123, m_mixed=1.0.",
+          "confidence": "low"
+        },
+        "dynamic_loop_elementwise": {
+          "all_simd": 67.52,
+          "all_simt_only": 1.0,
+          "mixed_simd_simt": 1.0,
+          "all_simt_only_validated": false,
+          "mixed_simd_simt_validated": false,
+          "source": "A5 card 0, silu_mul_static_tensorwise_quant for cutlass_moe T256/num_warps4, compile_mode routes measured separately: median SIMD 16.3 us, SIMT-only 3.9 us, legacy simd_simt 3.7 us. Kernel has no SIMT anchor (mixed inapplicable), whole-kernel pure SIMT is native. SIMT-only is 4.2x faster than SIMD. Multipliers derived from latency ratios anchored on all_simt_only: m_simd=67.52, m_simt=1.0, m_mixed=1.0.",
           "confidence": "low"
         }
       }

@@ -69,6 +69,8 @@ struct CoverageProfile {
   // indirect_elementwise domain boundaries
   int64_t indirectElemMaxTensorNumel = 4096;
   int64_t indirectElemMaskRankSumMax = 400;
+  // dynamic_loop_elementwise domain boundaries
+  int64_t dynamicElemMaxTensorNumel = 2048;
 };
 
 struct StructuralProfile {
@@ -764,6 +766,9 @@ loadCandidateProfile(llvm::StringRef requestedPath) {
           *coverage, "indirect_elem_max_tensor_numel", "coverage");
       profile.coverage.indirectElemMaskRankSumMax = reader.integer(
           *coverage, "indirect_elem_mask_rank_sum_max", "coverage");
+      // dynamic_loop_elementwise domain
+      profile.coverage.dynamicElemMaxTensorNumel = reader.integer(
+          *coverage, "dynamic_elem_max_tensor_numel", "coverage");
     }
 
     if (const auto *structural =
@@ -1195,6 +1200,18 @@ rankingCalibrationCoverage(const SimdSimtFeatureSummary &features,
       maxNumel <= coverage.indirectElemMaxTensorNumel &&
       maskRankSum <= coverage.indirectElemMaskRankSumMax)
     return {true, "indirect_elementwise"};
+  // Dynamic-loop element-wise kernels with no SIMT mechanism at all.
+  // Characteristic of silu/mul/quantize-style MoE activation kernels where
+  // a runtime-bounded loop walks small structured tiles, no load qualifies
+  // as an indirect anchor, and whole-kernel pure SIMT is the faster route.
+  // Distinguished from indirect_elementwise by the absence of any SIMT
+  // anchor (loaded-index-dep memory, gather, histogram, scan, atomic).
+  if (dotFlops == 0 &&
+      features.simtAnchors.count == 0 &&
+      weightedReductions == 0 &&
+      features.hasUnknownTripCount &&
+      maxNumel <= coverage.dynamicElemMaxTensorNumel)
+    return {true, "dynamic_loop_elementwise"};
   if (features.hasUnknownTripCount)
     return {false, "unknown_loop_trip_count"};
   if (dotFlops > 0 && dotFlops <= coverage.tinyDotFlopsMax &&
