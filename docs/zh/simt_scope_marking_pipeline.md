@@ -303,6 +303,85 @@ adapter 输入: hfusion.gather_load（无任何 SIMT 标记）
 
 ---
 
+## 三点五、路线 B vs C 的本质区别
+
+一句话：**模板路径把"这是 SIMT"写进了 IR（函数调用 ABI），非模板路径什么都不写、靠后端重新认出来。**
+
+### 3.5.1 triton-ascend 前端的区别
+
+**标记机制：显式 ABI vs 无标记**
+
+```mlir
+// B 模板：SIMT 身份挂在函数名上
+func.func private @triton_indirect_load(memref<?xf32>, tensor<256xi64>, ...)   // 前端只给 ABI
+%r = func.call @triton_indirect_load(%base, %indices, %mask, %other)          // 函数体由 BiShengIR 模板库提供
+
+// C 非模板：SIMT 身份完全不存在
+%r = hfusion.gather_load(%base, %indices, %burst, %mask, %other)              // 普通 op，无任何 SIMT 属性
+```
+
+**触发条件：精选 vs 宽泛**
+
+| | B 模板 | C 非模板 |
+|---|---|---|
+| 条件 | 非结构化 **且 size<64B 且 rank≤5**（精选） | **只要有非结构化维**（宽泛，无 size 限制） |
+| atomic | 走 `__builtin_indirect_atomic` custom 模板 | 回退 scf.for 标量循环 |
+
+**index 计算留在哪里：范围不同**（最微妙的区别）
+
+B 的间接 load 是**自包含调用**——index 的 div/mod 算术在调用之前算完（SIMD 侧），调用只携带 index 作为 operand：
+
+```mlir
+%19 = arith.divsi ...                                   // ← index 计算留在 SIMD
+%24 = func.call @triton_indirect_load(%base, %23, ...)  // ← 只有 load 本身进 SIMT
+```
+
+C 的 gather_load 靠 AutoScope **反向切片**——把 index 计算**一起拉进** SIMT scope（切片沿 SSA 反向走，直到 memref 边界才停）：
+
+```mlir
+scope.scope {vector_type = "simt"} {
+  %19 = arith.divsi ...     // ← index 计算也被包进 SIMT
+  %r = hivm.gather_load ...
+}
+```
+
+### 3.5.2 npu-ir 后端的区别
+
+**B：1:1 翻译（身份跟着走）**
+
+```
+call @triton_indirect_load
+  → AdaptTritonKernel 按函数名匹配（AdaptTritonKernel.cpp:365-477）
+  → hfusion.indirect_load
+  → HFusionToHIVM → hivm.hir.indirect_load + 逐 op 盖章 vf_mode=SIMT（:1576-1604）
+```
+
+每一步都由**上一个标记**驱动——函数名 → op → 属性，链条完整。
+
+**C：重新发现（身份丢了再找回来）**
+
+```
+hfusion.gather_load（无标记）
+  → HFusionToHIVM → hivm.gather_load（只搬 attrs，不盖章 vf_mode）
+  → AutoScope 扫描 op 类型：isa<GatherLoadOp, ScatterStoreOp>（AutoScope.cpp:64-66）
+  → 反向切片建子图 → 自建 scope + vf_mode=SIMT
+  → 之后与 A 路线共用 OutlineScope/SplitSimtModule 链
+```
+
+### 3.5.3 设计哲学对比
+
+| | B 模板 | C 非模板 |
+|---|---|---|
+| 决策者 | **前端**（编译期明确点名） | **后端**（AutoScope 启发式） |
+| SIMT 代码来源 | 手写 template 库（known-good fast path） | 通用 lowering（gather_load 正常降级路径） |
+| 可控性 | 精确——选哪个、包多大，前端说了算 | 粗放——靠 seed 类型 + 反向切片启发式 |
+| 覆盖面 | 只覆盖 size<64 的小 load | 覆盖所有非结构化 load |
+| 语义 | "这条 load 请求 SIMT 模板" | "这条 load 是非结构化的，后端看着办" |
+
+历史沿革：kanuak 两个模式并存（`simd_simt` = C，`simd_simt_template` = B）；kx 把 `simd_simt` 直接映射到模板模式（B），等于**放弃了 C 路径**。所以 kx 上跑 `simd_simt` 拿到的都是 `@triton_indirect_load` 产物。
+
+---
+
 ## 四、总对照表
 
 ### 4.1 op × 路线 → 标记
