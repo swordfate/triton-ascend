@@ -4,6 +4,45 @@
 > `david_v100_simd_simt_v1.json` 中“单点 cce 微基准 + 小样本 Event 乘数”的
 > 粗糙标定方式，最终让 SIMT auto-scope 能自动找出真正有用的 mixed/simt 路由。
 
+## 0. 路线图与当前进度
+
+> 当前处于 **Step 4：A5 采集 rate 训练数据**。已完成 Step 1-3，待完成 Step 5-8。
+
+| Step | 内容 | 状态 |
+|---|---|---|
+| 1 | 读懂现有 SIMT auto-scope costmodel 的 anchor 识别、特征抽取、三路线打分、gate、scope 物化链路 | ✅ 已完成 |
+| 2 | 设计需要重测的 rate、影响 rate 的 feature、以及 5 个代表性 Triton 内置 kernel | ✅ 已完成 |
+| 3 | 编写测量工具：`run_triton_benchmark.py`、`analyze_residuals.py`、`microbench_simd_memory.py`、`microbench_simd_components.py`、`simt_predicate.cce`、`simt_gm_memory_pattern.cce`，并恢复 baseline `data_provider/` cce probe | ✅ 已完成，已推送 `kx_simt_costmodel` |
+| 4 | 在 A5 上运行测量工具，采集 rate 训练数据 | ◀◀◀ **当前在这里** |
+| 5 | 根据 A5 数据拟合 `rate = f(pattern_features)`，替换 profile JSON 中写死的单点 rate | 待完成 |
+| 6 | 将拟合结果接入 C++ costmodel / profile JSON，使运行时按 TTIR 特征在线计算 rate | 待完成 |
+| 7 | 重跑 5 个代表性 Triton kernel，检查 `predicted_ratio` 与 `measured_ratio` 是否接近 | 待完成 |
+| 8 | 在 `auto` 模式下做真实路由决策验证 | 待完成（最终目标） |
+
+### Step 4 需要在 A5 采集的清单
+
+1. `simt_predicate_host` 的输出（重测 SIMT predicate rate）；
+2. `simt_gm_memory_pattern_host` 的输出（重测 SIMT GM load/store rate）；
+3. `ascend_results/simd_memory_microbench.jsonl`（重测 SIMD memory 行为）；
+4. `ascend_results/simd_components_microbench.jsonl`（重测 SIMD compute / dot）。
+
+### Step 1-3 已完成的具体内容
+
+- 已理清三路线评分公式：`all_simd = (setup + payload*8)*(1+penalty)`，
+  `all_simt_only = setup + payload*8`，`mixed = setup_fallback + 8*(regular_payload*(1+residual_penalty) + anchor_payload)`；
+- 已确认 `simtPredicate` 的 `maskRankSum * ceil(maxNumel/32) / 0.038` 是
+  ROPE 类 kernel 中 SIMT 分数虚高的主要原因；
+- 已确认 `simdMemory` 的 `202.25 B/cycle` 对 indirect/gather 完全失效；
+- 已确认 `simdDot` 和 `simtDot` 在当前 matmul 上两侧都有明显偏差；
+- 已把第一批 5 case 的实测诊断写入本文档第 7 节；
+- 已产出测量代码和文档：
+  - `bench/simt_autoscope/run_triton_benchmark.py`
+  - `bench/simt_autoscope/analyze_residuals.py`
+  - `bench/simt_autoscope/microbench_simd_memory.py`
+  - `bench/simt_autoscope/microbench_simd_components.py`
+  - `third_party/ascend/costmodel/profiles/microbench/data_provider/simt_predicate.cce`
+  - `third_party/ascend/costmodel/profiles/microbench/data_provider/simt_gm_memory_pattern.cce`
+
 ## 1. 当前模型的问题（简要）
 
 - 解析分数由固定 rate + 手工 penalty 组成，rate 是单点微基准测量；
