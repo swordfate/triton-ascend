@@ -283,3 +283,156 @@ simt_dot = 3782 cycles, simt_issue_payload = 3784.6 => dot 占 payload 99.9%
 | SIMT memory 当前只有 contiguous 的 0.176/0.129 两个单点；indirect case 的 SIMT 实际很快但公式只用顺序带宽估计 | SIMT GM rate 需要按 contiguous/stride/gather 重测 | `simt_gm_memory_pattern.cce` |
 | `block_matmul` 中 dot 占 SIMD/SIMT payload 均超过 99%，且模型两侧偏差方向相反 | `simd.ops.*`、`simd.dot.*`、`simt.dot.*` 都需要实测 | `microbench_simd_components.py` |
 | `run_triton_benchmark.py` 的 5 个内置 kernel 是第一步诊断数据来源 | 它们负责产生组件占比表，不是测量工具本身 | 已在第一批采集完成 |
+
+### 7.7 `simt.gm.load=0.176 / store=0.129` 为什么说是顺序访存
+
+证据在微基准 profile 和 cce 源码里。
+
+`ascend_davidv100_v1.json` 中这两个 measurement 的描述是：
+
+```text
+simt.gm.load.throughput:
+  "Effective source GM-load rate for the stated 32-warp sequential rotating
+   runtime-loop workload ..."
+
+simt.gm.store.throughput:
+  "Effective source GM-store rate for the stated 32-warp sequential rotating
+   runtime-loop workload ..."
+```
+
+对应 `simt_gm_memory.cce` 的地址生成是：
+
+```cpp
+int base = (i & 4095) * threads * 8 + tid;   // 顺序旋转地址
+x0 = gm[base + threads * 0];
+x1 = gm[base + threads * 1];
+...
+```
+
+所以它们只能代表 **contiguous/sequential** 访存，不能代表 strided 或 gather。
+
+### 7.8 把现有 penalty 乘到 memory/dot 上会变准吗
+
+用第一批 5 case 数据验证，结论是：**只靠现有 penalty 乘法不够，必须换 rate 函数。**
+
+#### 7.8.1 indirect SIMD：penalty 根本没触发
+
+`indirect_elementwise` 的 report 显示：
+
+```text
+irregular_density = 0
+irregular_addressing = 0
+penalty_ratio = 0.088   // 只有 mask_materialization 0.088
+```
+
+为什么 `irregular_density=0`？因为当前 irregular 特征来自
+`laneDependentPointerOps`（rank>1 的 pointer 代理），而我们的 gather 是
+rank-1 索引，`laneDependentPointerOps=0`。但同一 report 里
+`loaded_index_dependent_memory_ops=1` 其实已经识别出了 indirect。
+
+因此即使把 `irregular_addressing` 从“乘整个 SIMD analytical”改成“只乘
+memory”，这个 case 也不会有任何变化——因为 penalty 项是 0。
+
+数值上：
+
+```text
+measured_simd_cycles = 0.5048 ms * 988900 = 499239 cycles
+raw_all_simd         = 375.6 cycles
+measured / raw       = 1329x
+```
+
+要把 memory 从当前 `40.5 cycles` 抬到实测水平，需要：
+
+```text
+implied_payload = (499239 / 1.088 - 21.2) / 8 = 57354 cycles
+implied_simd_mte2_rate ≈ 8192 / 57354 = 0.143 B/cycle
+```
+
+而当前写死的是 `202.25 B/cycle`。这不是 `min(0.5, irregularDensity*0.8)`
+这种量级的惩罚能解决的，必须按 `loaded_index_dependent_memory_ops` 等特征
+重新定义 SIMD memory rate。
+
+#### 7.8.2 dot：现有 penalty 已含但仍然差 5.3x
+
+`block_matmul` 的 dotFlops=524288，超过 `tiny_dot_flops_max=16384`，所以
+`tiny_dot` penalty 没触发；它实际触发的是 irregular penalty 0.5：
+
+```text
+irregular_density = 1
+penalty_ratio = 0.5
+raw_all_simd = (21.2 + 8*257.8) * (1 + 0.5) = 3125.6 cycles
+measured_simd_cycles = 0.01672 ms * 988900 = 16536 cycles
+measured / raw = 5.29x
+```
+
+也就是说，**当前公式已经把 irregular penalty 乘进去了，仍然低估 5.29 倍**。
+SIMT 侧没有 dot penalty：
+
+```text
+raw_all_simt = 30418.1 cycles
+measured_simt_cycles = 0.01505 ms * 988900 = 14878 cycles
+raw / measured = 2.04x
+```
+
+所以正确做法不是继续加大惩罚系数，而是分别重测：
+- SIMD dot 的有效 flops/cycle（按 M/N/K 分档）；
+- SIMT dot 的有效 flops/cycle（按 M/N/K 分档）。
+
+### 7.9 四个测量文件的 feature 设计逻辑
+
+`analyze_residuals` 的结论指向“某个组件不可信”后，需要进一步拆解该组件
+由哪些 feature 决定。四个测量文件就是按这个逻辑设计的。
+
+#### 1) `simt_predicate.cce`
+
+- 目标组件：`simt_predicate_cycles = predicate_warp_instructions / predicate_rate`
+- 当前公式的两处问题：
+  1. `predicate_warp_instructions = maskRankSum * ceil(maxNumel/32)` 不合理；
+  2. `predicate_rate = 0.038` 是单个 workload 的旧数据。
+- 需要测量的 feature：
+  - `mode`：无 mask / bounds-mask / predicated select / masked load，对应
+    Triton 中 `mask = offs < n`、`tl.where(cond, a, b)`、masked `tl.load` 等模式；
+  - `active_lanes`：mask 激活比例，对应 TTIR 中 mask 的 true 比例；
+  - `warps`：warp 数，对应 `num_warps`。
+- 输出 target：`cycles_per_iter`，后续拟合成 `predicate_warp_instructions` 和
+  `predicate_rate` 的 feature 函数。
+
+#### 2) `simt_gm_memory_pattern.cce`
+
+- 目标组件：`simt_load_cycles = load_warp_instructions / simt_load_rate`
+  和 `simt_store_cycles = store_warp_instructions / simt_store_rate`。
+- 当前公式问题：`simt_load_rate=0.176`、`simt_store_rate=0.129` 只有顺序
+  访存单点。
+- 需要测量的 feature：
+  - `pattern`：contiguous / strided / gather，对应 TTIR 中
+    `loaded_index_dependent_memory_ops`、`lane_dependent_pointer_ops` 的不同取值；
+  - `stride`：stride 大小，对应 pointer/访问步长；
+  - `mode`：load / store；
+  - `warps`：对应 `num_warps`。
+- 输出 target：`bytes_per_cycle` 和 `warp_instructions_per_cycle`。
+
+#### 3) `microbench_simd_memory.py`
+
+- 目标组件：`simd_memory = max(load_bytes / mte2_rate, store_bytes / mte3_rate)`。
+- 当前公式问题：`mte2_rate = mte3_rate = 202.25` 是 legacy 单点，且对
+  irregular 完全不成立。
+- 需要测量的 feature：
+  - `pattern`：contiguous / strided / gather / masked，对应 TTIR 中
+    `loaded_index_dependent_memory_ops`、`lane_dependent_pointer_ops` 和 mask 特征；
+  - `stride`：访问步长；
+  - `n`：tensor 元素数，控制 working set。
+- 输出 target：`bytes_per_second`，后续换算成 `bytes_per_cycle`。
+
+#### 4) `microbench_simd_components.py`
+
+- 目标组件：`simd_compute_cycles = Σ ceil(elements/vector_width)/op_rate*factor`
+  和 `simd_dot_cycles = dot_setup + dot_flops / simd_dot_flops_per_cycle`。
+- 当前公式问题：`simd.ops.*` 中只有 `f32.add` 是实测，其余 op 用固定
+  factor；`simd.dot.*` 是 legacy 种子。
+- 需要测量的 feature：
+  - `op`：add / mul / div / exp / cmp / select，对应 TTIR op 类型；
+  - `dtype`：f32 / f16；
+  - `n`：元素数；
+  - dot 的 `M/N/K`：对应 `tt.dot` 的 shape。
+- 输出 target：`elements_per_second` 和 `flops_per_second`，后续换算为
+  `vector_instructions_per_cycle` 和 `flops_per_cycle`。
