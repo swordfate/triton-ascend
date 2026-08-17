@@ -8,6 +8,8 @@
 
 - `run_triton_benchmark.py`：跑内置代表性 kernel，输出 JSONL；
 - `analyze_residuals.py`：读取 JSONL，输出“组件可疑度排序”；
+- `microbench_simd_memory.py`：SIMD memory 微基准（contiguous/stride/gather/masked）；
+- `microbench_simd_components.py`：SIMD compute/dot 微基准（add/mul/div/exp/cmp/select + matmul）；
 - `docs/simt-costmodel-dataset-plan.md`：完整计划。
 
 ## 在 A5 上运行
