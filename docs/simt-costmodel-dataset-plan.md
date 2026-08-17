@@ -436,3 +436,25 @@ raw / measured = 2.04x
   - dot 的 `M/N/K`：对应 `tt.dot` 的 shape。
 - 输出 target：`elements_per_second` 和 `flops_per_second`，后续换算为
   `vector_instructions_per_cycle` 和 `flops_per_cycle`。
+
+### 7.10 四个测量脚本的目标值与特征含义
+
+| 脚本 | 目标值（被拟合变量） | 特征 | 特征含义 |
+|---|---|---|---|
+| `simt_predicate.cce` | `warp_instructions_per_cycle`（由 `cycles_per_iter` 换算） | `mode` | 0 无 mask 基线；1 bounds-mask add；2 predicated select；3 masked GM load |
+| | | `active_lanes` | 活跃 lane 数：32/24/16/8/4/1，对应 mask 激活比例 |
+| | | `warps` | warp 数：1/2/4/8/16/32，对应 `num_warps` |
+| `simt_gm_memory_pattern.cce` | `bytes_per_cycle`、`warp_instructions_per_cycle` | `mode` | 0 load；1 store |
+| | | `pattern` | 0 contiguous；1 strided；2 gather |
+| | | `stride` | strided 模式下的步长：1/2/4/8/16 |
+| | | `warps` | warp 数：1/2/4/8/16/32 |
+| `microbench_simd_memory.py` | `bytes_per_second`（后续换算 `bytes_per_cycle`） | `pattern` | contiguous / strided / gather / masked |
+| | | `stride` | strided 模式下的步长：2/4/8/16 |
+| | | `n` | 元素数：1M / 4M，控制 working set 大小 |
+| `microbench_simd_components.py` | elementwise：`elements_per_second`；dot：`flops_per_second` | `op` | add / mul / div / exp / cmp / select，对应 TTIR op 类型 |
+| | | `dtype` | f32 / f16 |
+| | | `n` | elementwise 元素数：1M / 4M |
+| | | `M,N,K` | dot shape：(128,128,64) / (256,256,128) / (512,512,128) |
+
+这些目标值最终会换算成 profile 中对应的 rate 或 flops_per_cycle，再按特征
+拟合成在线可查的 `rate = f(features)`。
