@@ -1,0 +1,120 @@
+// SIMT global-memory pattern probe for dav-c310.
+//
+// pattern 0: contiguous 8 independent accesses per thread/iteration
+// pattern 1: strided    8 independent accesses, column distance = stride
+// pattern 2: gather     pseudo-random LCG address within the 128 MiB buffer
+//
+// The host takes the slope over iters and computes bytes/cycle and effective
+// warp-instruction throughput for every pattern/stride/warp-count combination.
+#include "RegBase/VecUtils.h"
+#include "Vector/VecUtils.h"
+#include "Utils.h"
+
+using DT = float;
+
+template <typename T>
+__simt_vf__ LAUNCH_BOUND(1024) __aiv__ __attribute__((always_inline)) static void
+simt_gm_memory_pattern_core(__gm__ T *gm, __ubuf__ T *sink, int nlane,
+                            int nwarp, int iters, int mode, int pattern,
+                            int stride) {
+  int lane = threadIdx.x;
+  int warp = threadIdx.y;
+  if (lane >= nlane || warp >= nwarp)
+    return;
+
+  int tid = warp * 32 + lane;
+  int threads = nwarp * 32;
+  unsigned int state = (unsigned int)(tid + 1);
+  T acc = (T)(tid + 1);
+
+  for (int i = 0; i < iters; ++i) {
+    int base = (i & 4095) * threads * 8 + tid;
+    if (pattern == 0) {
+      base = (i & 4095) * threads * 8 + tid;
+    } else if (pattern == 1) {
+      base = ((i & 4095) * threads * 8 + tid) * stride;
+    } else {
+      base = 0;
+    }
+
+    if (mode == 0) {
+      T x0, x1, x2, x3, x4, x5, x6, x7;
+      if (pattern == 2) {
+        state = state * 1103515245u + 12345u;
+        x0 = gm[state & 0x1FFFFF];
+        state = state * 1103515245u + 12345u;
+        x1 = gm[state & 0x1FFFFF];
+        state = state * 1103515245u + 12345u;
+        x2 = gm[state & 0x1FFFFF];
+        state = state * 1103515245u + 12345u;
+        x3 = gm[state & 0x1FFFFF];
+        state = state * 1103515245u + 12345u;
+        x4 = gm[state & 0x1FFFFF];
+        state = state * 1103515245u + 12345u;
+        x5 = gm[state & 0x1FFFFF];
+        state = state * 1103515245u + 12345u;
+        x6 = gm[state & 0x1FFFFF];
+        state = state * 1103515245u + 12345u;
+        x7 = gm[state & 0x1FFFFF];
+      } else {
+        x0 = gm[base + threads * 0];
+        x1 = gm[base + threads * 1];
+        x2 = gm[base + threads * 2];
+        x3 = gm[base + threads * 3];
+        x4 = gm[base + threads * 4];
+        x5 = gm[base + threads * 5];
+        x6 = gm[base + threads * 6];
+        x7 = gm[base + threads * 7];
+      }
+      acc += x0 + x1 + x2 + x3 + x4 + x5 + x6 + x7;
+    } else {
+      if (pattern == 2) {
+        state = state * 1103515245u + 12345u;
+        gm[state & 0x1FFFFF] = acc;
+        state = state * 1103515245u + 12345u;
+        gm[state & 0x1FFFFF] = acc + (T)1;
+        state = state * 1103515245u + 12345u;
+        gm[state & 0x1FFFFF] = acc + (T)2;
+        state = state * 1103515245u + 12345u;
+        gm[state & 0x1FFFFF] = acc + (T)3;
+        state = state * 1103515245u + 12345u;
+        gm[state & 0x1FFFFF] = acc + (T)4;
+        state = state * 1103515245u + 12345u;
+        gm[state & 0x1FFFFF] = acc + (T)5;
+        state = state * 1103515245u + 12345u;
+        gm[state & 0x1FFFFF] = acc + (T)6;
+        state = state * 1103515245u + 12345u;
+        gm[state & 0x1FFFFF] = acc + (T)7;
+      } else {
+        gm[base + threads * 0] = acc;
+        gm[base + threads * 1] = acc + (T)1;
+        gm[base + threads * 2] = acc + (T)2;
+        gm[base + threads * 3] = acc + (T)3;
+        gm[base + threads * 4] = acc + (T)4;
+        gm[base + threads * 5] = acc + (T)5;
+        gm[base + threads * 6] = acc + (T)6;
+        gm[base + threads * 7] = acc + (T)7;
+      }
+      acc += (T)1;
+    }
+  }
+  sink[tid] = acc;
+}
+
+extern "C" __global__ [aicore] void measure(__gm__ long long *out,
+                                             __gm__ DT *gm, int K, int nlane,
+                                             int nwarp, int iters, int mode,
+                                             int pattern, int stride) {
+  auto sink = reinterpret_cast<__ubuf__ DT *>(0);
+  pipe_barrier(PIPE_ALL);
+  long long t0 = get_sys_cnt();
+  for (int i = 0; i < K; ++i) {
+    cce::async_invoke<simt_gm_memory_pattern_core<DT>>(
+        cce::dim3{32, (unsigned)nwarp, 1}, gm, sink, nlane, nwarp, iters, mode,
+        pattern, stride);
+    pipe_barrier(PIPE_ALL);
+  }
+  long long t1 = get_sys_cnt();
+  pipe_barrier(PIPE_ALL);
+  out[0] = t1 - t0;
+}

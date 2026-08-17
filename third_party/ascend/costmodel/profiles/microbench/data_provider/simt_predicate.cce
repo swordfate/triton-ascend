@@ -1,0 +1,65 @@
+// SIMT masked/predicated execution probe for dav-c310.
+//
+// Modes:
+//   0: baseline add, no mask (all active lanes)
+//   1: bounds-mask add    (if (pred) x += k)
+//   2: predicated select  (x = pred ? x + k : x)
+//   3: masked GM load     (if (pred) x += gm[tid])
+//
+// The host sweeps active_lanes, nwarp and mode, and takes the slope over
+// iters so async_invoke and barrier overhead cancel out.  The raw CSV output
+// is intentionally low-level; the route model fits these values later.
+#include "RegBase/VecUtils.h"
+#include "Vector/VecUtils.h"
+#include "Utils.h"
+
+using DT = float;
+
+template <typename T>
+__simt_vf__ LAUNCH_BOUND(1024) __aiv__ __attribute__((always_inline)) static void
+simt_predicate_core(__gm__ T *gm, __ubuf__ T *sink, int nlane, int nwarp,
+                    int iters, int active_lanes, int mode) {
+  int lane = threadIdx.x;
+  int warp = threadIdx.y;
+  if (lane >= nlane || warp >= nwarp) return;
+
+  int tid = warp * 32 + lane;
+  bool pred = lane < active_lanes;
+  T x = (T)(lane + warp + 1);
+  T k = (T)1.0000001;
+
+  for (int i = 0; i < iters; ++i) {
+    if (mode == 0) {
+      x += k;
+    } else if (mode == 1) {
+      if (pred) {
+        x += k;
+      }
+    } else if (mode == 2) {
+      x = pred ? (x + k) : x;
+    } else {
+      if (pred) {
+        x += gm[tid];
+      }
+    }
+  }
+  sink[tid] = x;
+}
+
+extern "C" __global__ [aicore] void measure(__gm__ long long *out,
+                                             __gm__ DT *gm, int K, int nlane,
+                                             int nwarp, int iters,
+                                             int active_lanes, int mode) {
+  auto sink = reinterpret_cast<__ubuf__ DT *>(0);
+  pipe_barrier(PIPE_ALL);
+  long long t0 = get_sys_cnt();
+  for (int i = 0; i < K; ++i) {
+    cce::async_invoke<simt_predicate_core<DT>>(
+        cce::dim3{32, (unsigned)nwarp, 1}, gm, sink, nlane, nwarp, iters,
+        active_lanes, mode);
+    pipe_barrier(PIPE_ALL);
+  }
+  long long t1 = get_sys_cnt();
+  pipe_barrier(PIPE_ALL);
+  out[0] = t1 - t0;
+}

@@ -149,3 +149,57 @@ Triton 样本跑完后，不能直接从 Triton 样本“读出” cce rate，�
 6. launch/setup/transition
 
 每个 rate 都拟合成 `rate = f(pattern_features)`，不直接存单点常数。
+
+
+## 7. 第一批实测诊断（2026-08-17）
+
+数据文件：`ascend_results/simt_autoscope_bench.jsonl`（A5 实测，内置 5 case）。
+
+### 7.1 模型预测比 vs 实测比
+
+| case | 实测 SIMD ms | 实测 SIMT ms | 实测 simd/simt | 模型 raw simd/simt | 模型 calibrated simd/simt |
+|---|---|---|---|---|---|
+| block_matmul | 0.0167 | 0.0150 | 1.111 | 0.103 | 0.103 |
+| elementwise_silu_mul | 0.0229 | 0.0321 | 0.713 | 0.036 | 0.036 |
+| indirect_elementwise | 0.5048 | 0.0140 | 36.087 | 0.012 | 6.461 |
+| rowwise_reduce_masked | 0.0233 | 0.0131 | 1.781 | 0.028 | 0.028 |
+| single_block_cumsum | 0.0610 | 0.0133 | 4.577 | 0.008 | 0.008 |
+
+结论：raw 公式系统性低估 SIMD / 高估 SIMT；domain multiplier 只能修正
+indirect_elementwise 的一部分，且修正后仍远低于实测比。
+
+### 7.2 组件占比暴露的问题
+
+`simt_predicate_share` 在所有带 bounds mask 的 case 中占 SIMT payload 的
+84.6%~87.3%。例如 `single_block_cumsum` 没有任何业务 mask，仅
+`offs < n_elements` 一个边界 mask 就贡献了：
+
+```text
+predicate_warp_instructions = 3 * ceil(4096/32) = 384
+predicate_system_cycles = 384 / 0.038 = 10105
+simt_issue_payload = 11822   // predicate 占 85.5%
+```
+
+这正是 `_fwd_grouped_kernel_stage1_rope` 中 predicate 成本虚高的同一个问题。
+
+### 7.3 主要结论
+
+1. **最优先修 `simtPredicate`**：当前 `maskRankSum * maxNumel/32 / 0.038`
+   把边界 mask 当成主要成本，必须改为按“实际被 mask 的 warp 指令数”计算，
+   并重测 predicate rate。
+2. **SIMD memory 对 indirect 完全失效**：`indirect_elementwise` 实测 SIMD
+   0.5048 ms，raw 公式只用 40.5 cycles 估计 memory，偏差约 1000 倍。
+   202.25 B/cycle 的 legacy 带宽必须替换为按访问模式区分的 SIMD memory
+   模型。
+3. **dot 模型两侧都有偏**：`block_matmul` 中 SIMD dot 被低估约 5 倍，
+   SIMT dot 被高估约 2 倍。需要按 M/N/K 重测 dot 吞吐。
+
+### 7.4 下一步 cce / 微基准
+
+按优先级：
+
+1. `simt_predicate.cce`：masked add / predicated select / masked load，
+   扫描 active_ratio 和 warp 数；
+2. `microbench_simd_memory.py`：Triton SIMD memory contiguous/stride/gather/masked；
+3. `simt_gm_memory_pattern.cce`：SIMT GM load/store 的 contiguous/stride/gather；
+4. dot 微基准：SIMD cube 和 SIMT scalar FMA 分 M/N/K 重测。
