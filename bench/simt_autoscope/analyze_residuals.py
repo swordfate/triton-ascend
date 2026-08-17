@@ -98,39 +98,41 @@ def main():
 
     cases = sorted({row.get("case") for row in rows if row.get("case")})
 
+    # NOTE: SimdSimtCostReport::toJSON flattens the breakdown into the
+    # report top-level, e.g. report["memory"], report["simt_execution"].
     components = [
         ("simd_memory_share", "simd memory roofline share",
          lambda r: safe_div(
-             num(r, "breakdown", "memory", "simd_roofline_system_cycles"),
-             num(r, "breakdown", "simt_execution", "simd_issue_payload_system_cycles"))),
+             num(r, "memory", "simd_roofline_system_cycles"),
+             num(r, "simt_execution", "simd_issue_payload_system_cycles"))),
         ("simd_dot_share", "simd dot share",
          lambda r: safe_div(
-             num(r, "breakdown", "compute_only", "simd_dot"),
-             num(r, "breakdown", "simt_execution", "simd_issue_payload_system_cycles"))),
+             num(r, "compute_only", "simd_dot"),
+             num(r, "simt_execution", "simd_issue_payload_system_cycles"))),
         ("simd_penalty_share", "simd structural penalty share",
          lambda r: safe_div(
-             num(r, "breakdown", "structure", "simd_structural_penalty_system_cycles"),
+             num(r, "structure", "simd_structural_penalty_system_cycles"),
              num(r, "analytical_candidate_costs", "all_simd"))),
         ("simt_compute_share", "simt compute share",
          lambda r: safe_div(
-             num(r, "breakdown", "compute_only", "simt"),
-             num(r, "breakdown", "simt_execution", "simt_issue_payload_system_cycles"))),
+             num(r, "compute_only", "simt"),
+             num(r, "simt_execution", "simt_issue_payload_system_cycles"))),
         ("simt_dot_share", "simt dot share",
          lambda r: safe_div(
-             num(r, "breakdown", "compute_only", "simt_dot"),
-             num(r, "breakdown", "simt_execution", "simt_issue_payload_system_cycles"))),
+             num(r, "compute_only", "simt_dot"),
+             num(r, "simt_execution", "simt_issue_payload_system_cycles"))),
         ("simt_memory_share", "simt memory share",
          lambda r: safe_div(
-             num(r, "breakdown", "memory", "simt_roofline_system_cycles"),
-             num(r, "breakdown", "simt_execution", "simt_issue_payload_system_cycles"))),
+             num(r, "memory", "simt_roofline_system_cycles"),
+             num(r, "simt_execution", "simt_issue_payload_system_cycles"))),
         ("simt_shuffle_share", "simt shuffle share",
          lambda r: safe_div(
-             num(r, "breakdown", "simt_execution", "shuffle_system_cycles"),
-             num(r, "breakdown", "simt_execution", "simt_issue_payload_system_cycles"))),
+             num(r, "simt_execution", "shuffle_system_cycles"),
+             num(r, "simt_execution", "simt_issue_payload_system_cycles"))),
         ("simt_predicate_share", "simt predicate share",
          lambda r: safe_div(
-             num(r, "breakdown", "simt_execution", "predicate_system_cycles"),
-             num(r, "breakdown", "simt_execution", "simt_issue_payload_system_cycles"))),
+             num(r, "simt_execution", "predicate_system_cycles"),
+             num(r, "simt_execution", "simt_issue_payload_system_cycles"))),
     ]
 
     print("=" * 100)
