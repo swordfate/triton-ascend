@@ -70,94 +70,24 @@ def run_builtin_case(name: str, route: str, args) -> dict:
     import triton
     import triton.language as tl
 
-    @triton.jit
-    def elementwise_silu_mul_kernel(
-        x_ptr, y_ptr, out_ptr, n_elements, BLOCK: tl.constexpr
-    ):
-        pid = tl.program_id(0)
-        offs = pid * BLOCK + tl.arange(0, BLOCK)
-        mask = offs < n_elements
-        x = tl.load(x_ptr + offs, mask=mask)
-        y = tl.load(y_ptr + offs, mask=mask)
-        z = x * tl.sigmoid(x) * y
-        tl.store(out_ptr + offs, z, mask=mask)
+    # Load kernels from the sibling kernels.py module.  That module has
+    # module-level ``import triton.language as tl``, which is required by the
+    # Triton JIT AST resolver; defining kernels inside this function makes
+    # ``tl`` a closure variable and fails with "tl is not defined".
+    import importlib.util
 
-    @triton.jit
-    def rowwise_reduce_masked_kernel(
-        x_ptr,
-        mask_ptr,
-        out_ptr,
-        R,
-        C,
-        BLOCK_C: tl.constexpr,
-        NEG_INF: tl.constexpr,
-    ):
-        row = tl.program_id(0)
-        cols = tl.arange(0, BLOCK_C)
-        c_mask = cols < C
-        offs = row * C + cols
-        m = tl.load(mask_ptr + offs, mask=c_mask, other=0).to(tl.int1)
-        x = tl.load(x_ptr + offs, mask=c_mask, other=0.0)
-        x = tl.where(m, x, NEG_INF)
-        row_max = tl.max(x, axis=0)
-        tl.store(out_ptr + row, row_max)
+    _kernels_path = Path(__file__).with_name("kernels.py")
+    _kernels_spec = importlib.util.spec_from_file_location(
+        "simt_autoscope_kernels", _kernels_path
+    )
+    _builtin_kernels = importlib.util.module_from_spec(_kernels_spec)
+    _kernels_spec.loader.exec_module(_builtin_kernels)
 
-    @triton.jit
-    def indirect_elementwise_kernel(
-        src_ptr, idx_ptr, out_ptr, n_elements, BLOCK: tl.constexpr
-    ):
-        pid = tl.program_id(0)
-        offs = pid * BLOCK + tl.arange(0, BLOCK)
-        mask = offs < n_elements
-        idx = tl.load(idx_ptr + offs, mask=mask, other=0)
-        val = tl.load(src_ptr + idx, mask=mask, other=0.0)
-        out = val * 2.0 + 1.0
-        tl.store(out_ptr + offs, out, mask=mask)
-
-    @triton.jit
-    def block_matmul_kernel(
-        a_ptr,
-        b_ptr,
-        c_ptr,
-        M,
-        N,
-        K,
-        stride_am,
-        stride_ak,
-        stride_bk,
-        stride_bn,
-        stride_cm,
-        stride_cn,
-        BLOCK_M: tl.constexpr,
-        BLOCK_N: tl.constexpr,
-        BLOCK_K: tl.constexpr,
-    ):
-        pid_m = tl.program_id(0)
-        pid_n = tl.program_id(1)
-        rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-        rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-        rk = tl.arange(0, BLOCK_K)
-        a_ptrs = a_ptr + rm[:, None] * stride_am + rk[None, :] * stride_ak
-        b_ptrs = b_ptr + rk[:, None] * stride_bk + rn[None, :] * stride_bn
-        acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-        for _ in range(0, K, BLOCK_K):
-            a = tl.load(a_ptrs)
-            b = tl.load(b_ptrs)
-            acc = tl.dot(a, b, acc)
-            a_ptrs += BLOCK_K * stride_ak
-            b_ptrs += BLOCK_K * stride_bk
-        c_ptrs = c_ptr + rm[:, None] * stride_cm + rn[None, :] * stride_cn
-        tl.store(c_ptrs, acc)
-
-    @triton.jit
-    def single_block_cumsum_kernel(
-        in_ptr, out_ptr, n_elements, BLOCK: tl.constexpr
-    ):
-        offs = tl.arange(0, BLOCK)
-        mask = offs < n_elements
-        x = tl.load(in_ptr + offs, mask=mask, other=0.0)
-        y = tl.cumsum(x, axis=0)
-        tl.store(out_ptr + offs, y, mask=mask)
+    elementwise_silu_mul_kernel = _builtin_kernels.elementwise_silu_mul_kernel
+    rowwise_reduce_masked_kernel = _builtin_kernels.rowwise_reduce_masked_kernel
+    indirect_elementwise_kernel = _builtin_kernels.indirect_elementwise_kernel
+    block_matmul_kernel = _builtin_kernels.block_matmul_kernel
+    single_block_cumsum_kernel = _builtin_kernels.single_block_cumsum_kernel
 
     device = "npu" if hasattr(torch, "npu") else "cuda"
 
@@ -207,7 +137,7 @@ def run_builtin_case(name: str, route: str, args) -> dict:
         )
 
     def make_block_matmul():
-        M, N, K = 256, 256, 128
+        M, N, K = 256, 256, 64
         BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 64
         a = torch.randn(M, K, dtype=torch.float32, device=device)
         b = torch.randn(K, N, dtype=torch.float32, device=device)
@@ -216,7 +146,7 @@ def run_builtin_case(name: str, route: str, args) -> dict:
         return (
             block_matmul_kernel,
             grid,
-            (a, b, c, M, N, K, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1)),
+            (a, b, c, M, N, a.stride(0), a.stride(1), b.stride(0), b.stride(1), c.stride(0), c.stride(1)),
             {"BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "BLOCK_K": BLOCK_K, "num_warps": 4, "num_stages": 2},
             {"M": M, "N": N, "K": K, "BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "BLOCK_K": BLOCK_K, "dtype": "f32", "shape": f"[{M},{K}]x[{K},{N}]"},
         )
@@ -275,11 +205,17 @@ def run_builtin_case(name: str, route: str, args) -> dict:
         elapsed_ms = start.elapsed_time(end)
         latency_ms = elapsed_ms / args.reps
     else:
-        torch.cuda.synchronize()
+        if hasattr(torch, "npu"):
+            torch.npu.synchronize()
+        elif hasattr(torch, "cuda"):
+            torch.cuda.synchronize()
         t0 = time.perf_counter()
         for _ in range(args.reps):
             kernel[grid_shape](*kargs, **constexpr_kwargs, num_warps=num_warps, num_stages=num_stages)
-        torch.cuda.synchronize()
+        if hasattr(torch, "npu"):
+            torch.npu.synchronize()
+        elif hasattr(torch, "cuda"):
+            torch.cuda.synchronize()
         latency_ms = (time.perf_counter() - t0) * 1000.0 / args.reps
 
     return {
@@ -349,8 +285,13 @@ def parent_main(args):
                 "--reps", str(args.reps),
                 "--no-fresh",
             ]
+            child_env = route_env(route)
+            cmd_str = " ".join(f'"{part}"' if " " in part else part for part in cmd)
             print(f"[run] {case} {route}")
-            subprocess.run(cmd, check=True, env=route_env(route))
+            print(f"  env TRITON_ASCEND_COMPILE_MODE={child_env.get('TRITON_ASCEND_COMPILE_MODE')} "
+                  f"TRITON_ASCEND_AUTO_SIMT_SCOPE={child_env.get('TRITON_ASCEND_AUTO_SIMT_SCOPE')}")
+            print(f"  cmd {cmd_str}")
+            subprocess.run(cmd, check=True, env=child_env)
 
 
 def main():
