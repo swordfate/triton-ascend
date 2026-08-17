@@ -14,22 +14,25 @@
 # (a login shell is required so conda + CANN env are set up; do NOT hack LD_LIBRARY_PATH).
 set -e
 
-# --- environment (kaixin conda for toolchain, CANN env for ccec + runtime) ---
-conda activate kaixin 2>/dev/null || true
-if [[ -f /data/kaixin/set_env.sh ]]; then
-  source /data/kaixin/set_env.sh >/dev/null 2>&1
-else
-  source /home/kaixin/set_env.sh >/dev/null 2>&1
-fi
+# --- environment (wj_autoscope conda for toolchain, CANN env for ccec + runtime) ---
+conda activate wj_autoscope 2>/dev/null || true
+source /usr/local/Ascend/cann-9.1.0-beta.3/set_env.sh
 
 # Template headers (RegBase/VecUtils.h, RegBase/Cumulative/SIMTCumsumCore.h, ...).
-# Override by exporting INC=... if your catfood checkout lives elsewhere.
-INC="${INC:-/data/kaixin/AscendNPU-IR-Dev/bishengir/lib/Template/include}"
+# Override by exporting INC=... if your checkout lives elsewhere.
+INC="${INC:-/home/c00946898/triton-ascend/third_party/ascend/AscendNPU-IR/bishengir/lib/Template/include}"
 TK="${ASCEND_TOOLKIT_HOME:?ASCEND_TOOLKIT_HOME unset - did set_env.sh run?}"
 
 echo "INC = $INC"
 echo "TK  = $TK"
-[ -f "$INC/RegBase/VecUtils.h" ] || { echo "!! RegBase/VecUtils.h not found under INC"; exit 1; }
+if [ -f "$INC/RegBase/VecUtils.h" ]; then
+  :
+elif [ -f "$INC/Vector/VecUtils.h" ]; then
+  :
+else
+  echo "!! neither RegBase/VecUtils.h nor Vector/VecUtils.h found under INC"
+  exit 1
+fi
 
 # build one probe: <name>.cce -> <name>.o (device) and <name>_host.cpp -> <name>_host (host)
 build_probe() {
