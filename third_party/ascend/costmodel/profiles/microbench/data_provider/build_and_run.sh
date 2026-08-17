@@ -53,7 +53,10 @@ run_probe() {
   echo
 }
 
-targets="${*:-tput concur2 meas simt_memory simt_gm_memory simt_gm_memory_pattern simt_shuffle simt_predicate transition}"
+# Default to SIMT-only probes that compile with the current AscendNPU-IR header
+# layout.  The legacy SIMD probes (tput/concur2/meas/transition) need the old
+# RegBase/VecUtils.h API and are only built when explicitly requested.
+targets="${*:-simt_predicate simt_gm_memory_pattern simt_gm_memory simt_shuffle simt_memory}"
 for t in $targets; do
   build_probe "$t"
 done
