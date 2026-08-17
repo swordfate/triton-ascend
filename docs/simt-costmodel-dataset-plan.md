@@ -170,11 +170,15 @@ Triton 样本跑完后，不能直接从 Triton 样本“读出” cce rate，�
    - `simt_execution.predicate_system_cycles`
    - `simt_execution.program_issue_scale`
    - `event_route_calibration.raw_candidate_costs` 和 `candidate_costs`
-5. 对每个组件构造 `measured_latency ~ sum(component_j)` 的线性/岭回归，
-   拟合系数与 profile 中隐含系数偏差最大的组件，就是最需要重测/重拟合的 rate。
+5. 当前实现是：对每个组件，计算 `component_share`（组件占 `issue_payload`
+   的比例）与 `residual = predicted_ratio - measured_ratio` 的 **Pearson 相关系数**，
+   按 `|corr|` 排序。相关性最强的组件，就是最需要重测/重拟合的 rate。
 
-`bench/simt_autoscope/analyze_residuals.py` 会自动完成 1-4 步，并输出
-每个组件的“实际拟合系数 vs 当前 profile 隐含系数”的排序。
+   这是小样本阶段（当前 5 个 case）的稳健做法；当 A5 样本达到约 20 个以上后，
+   会升级为 `measured_latency ~ sum(component_j)` 的线性/岭回归，直接拟合
+   每个组件在线公式中的系数。
+
+`bench/simt_autoscope/analyze_residuals.py` 自动完成以上计算，并输出组件可疑度排序。
 
 ## 6. CCE sweep 矩阵
 
@@ -242,3 +246,40 @@ simt_issue_payload = 11822   // predicate 占 85.5%
 2. `microbench_simd_memory.py`：Triton SIMD memory contiguous/stride/gather/masked；
 3. `simt_gm_memory_pattern.cce`：SIMT GM load/store 的 contiguous/stride/gather；
 4. dot 微基准：SIMD cube 和 SIMT scalar FMA 分 M/N/K 重测。
+
+### 7.5 dot 低估/高估倍数的计算依据
+
+`block_matmul` 实测与模型 raw 分数如下（SYS_CNT 频率按 microbench 配置
+988.9 MHz，cycle = latency_ms * 988900）：
+
+```text
+measured_simd_cycles = 0.0167 ms * 988900 = 16514 cycles
+model_raw_simd       = 3125.6 cycles
+=> SIMD 侧模型低估约 16514 / 3125.6 = 5.28x
+
+measured_simt_cycles = 0.0150 ms * 988900 = 14833 cycles
+model_raw_simt       = 30418.1 cycles
+=> SIMT 侧模型高估约 30418.1 / 14833 = 2.05x
+```
+
+再看 `block_matmul` 的 breakdown：
+
+```text
+simd_dot = 256 cycles, simd_issue_payload = 257.8  => dot 占 payload 99%
+simt_dot = 3782 cycles, simt_issue_payload = 3784.6 => dot 占 payload 99.9%
+```
+
+所以这次 matmul 的模型误差几乎全部来自 dot 公式，因此可近似归因为：
+**SIMD dot 被低估约 5 倍，SIMT dot 被高估约 2 倍。**
+
+### 7.6 从 analyze_residuals 输出到 Step 4 测量清单的推理链
+
+`analyze_residuals.py` 输出组件占比表和可疑度排序后，按以下推理选择重测对象：
+
+| 观测到的证据 | 推理 | 选择的测量工具 |
+|---|---|---|
+| 4 个 case 中 `simt_predicate_share` 高达 84.6%~87.3%；`single_block_cumsum` 仅一个边界 mask 就按 `3 * ceil(4096/32) = 384` 个 predicate warp 指令计费 | 当前 predicate 指令数公式和 0.038 rate 都不合理，必须重测 masked/predicated 执行成本 | `simt_predicate.cce` |
+| `indirect_elementwise` 实测 SIMD 0.5048 ms，raw 公式的 SIMD memory 仅 40.5 cycles；`simd_memory_share` 与残差相关性 -0.641 | SIMD memory 的 202.25 B/cycle 对 irregular/gather 完全失效 | `microbench_simd_memory.py` |
+| SIMT memory 当前只有 contiguous 的 0.176/0.129 两个单点；indirect case 的 SIMT 实际很快但公式只用顺序带宽估计 | SIMT GM rate 需要按 contiguous/stride/gather 重测 | `simt_gm_memory_pattern.cce` |
+| `block_matmul` 中 dot 占 SIMD/SIMT payload 均超过 99%，且模型两侧偏差方向相反 | `simd.ops.*`、`simd.dot.*`、`simt.dot.*` 都需要实测 | `microbench_simd_components.py` |
+| `run_triton_benchmark.py` 的 5 个内置 kernel 是第一步诊断数据来源 | 它们负责产生组件占比表，不是测量工具本身 | 已在第一批采集完成 |
