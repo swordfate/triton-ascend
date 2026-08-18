@@ -97,7 +97,8 @@ def main():
     for r in simd_rows:
         lab = r["label"]
         cyc = ms_to_cycles(r["latency_ms"])
-        read_bpc = r["read_bytes"] / cyc
+        full_read = float(lab.get("full_tensor_read_bytes", r["read_bytes"]))
+        read_bpc = full_read / cyc
         key = (lab.get("pattern"), lab.get("stride"), lab.get("n"))
         if lab["pattern"] == "strided" and lab["n"] == 4194304:
             simd_mem[("strided", lab["stride"])] = read_bpc
@@ -106,7 +107,9 @@ def main():
         elif lab["pattern"] == "gather" and lab["n"] == 4194304:
             simd_mem[("gather", 0)] = read_bpc
         elif lab["pattern"] == "masked" and lab["n"] == 4194304:
-            simd_mem[("masked", lab.get("active_ratio"))] = read_bpc
+            active = float(lab.get("active_ratio", 1.0))
+            simd_mem[("masked_full_tensor", active)] = full_read / cyc
+            simd_mem[("masked_requested", active)] = (full_read * active) / cyc
 
     contig_read = simd_mem[("contiguous", 1)]
     stride_xs = [s for (p, s) in simd_mem if p == "strided"]
@@ -119,8 +122,9 @@ def main():
         "strided_power_fit": {"A": round(stride_a, 3), "exponent": round(stride_b, 3)},
         "strided_read_B_per_cycle": {str(s): round(simd_mem[("strided", s)], 3) for s in stride_xs},
         "gather_read_B_per_cycle": round(gather_read, 3),
-        "masked_50_read_B_per_cycle": round(simd_mem[("masked", 0.5)], 3),
-        "note": "B/cycle is one-direction read bytes; copy kernel has symmetric read+write.",
+        "masked_50_read_B_per_cycle_full_tensor": round(simd_mem[("masked_full_tensor", 0.5)], 3),
+        "masked_50_read_B_per_cycle_requested": round(simd_mem[("masked_requested", 0.5)], 3),
+        "note": "B/cycle is one-direction read bytes; copy kernel has symmetric read+write. full_tensor matches current C++ loadBytes semantics; requested is active_ratio*n*4.",
     }
 
     # ---------------- SIMT GM memory pattern ----------------

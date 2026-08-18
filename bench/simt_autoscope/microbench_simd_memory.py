@@ -81,10 +81,15 @@ def main():
     def bench(kernel, grid, kargs, constexpr_kwargs, num_warps, num_stages,
               label):
         label = dict(label)
-        # ``masked`` loads only active_ratio of the elements, but stores all n
-        # elements.  The label can override read_bytes directly.
+        full_tensor_read_bytes = label["n"] * 4
         if "read_bytes" not in label and "active_ratio" in label:
-            label["read_bytes"] = int(label["n"] * 4 * label["active_ratio"])
+            # Report requested read bytes first, but keep the full-tensor
+            # byte count too: the C++ costmodel currently charges full tensor
+            # bytes for masked tt.load, so both definitions are useful.
+            label["read_bytes"] = int(full_tensor_read_bytes * label["active_ratio"])
+            label["full_tensor_read_bytes"] = full_tensor_read_bytes
+        else:
+            label["full_tensor_read_bytes"] = full_tensor_read_bytes
         kernel[grid](*kargs, **constexpr_kwargs, num_warps=num_warps,
                      num_stages=num_stages)
         if hasattr(torch, "npu"):
