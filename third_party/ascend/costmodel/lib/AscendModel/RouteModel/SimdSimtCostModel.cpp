@@ -2775,7 +2775,8 @@ mlir::ascend::estimateSimdSimtCandidates(
                    report.breakdown.simtShuffleCycles +
                    report.breakdown.simtDotCycles,
                report.breakdown.simtMemoryCycles) +
-      report.breakdown.simtPredicateCycles;
+      report.breakdown.simtPredicateCycles +
+      report.breakdown.simtScanCycles;
   report.breakdown.programIssueScale = profile.programIssueScale;
   report.breakdown.simdAnalyticalCycles =
       profile.simdSetupCycles +
