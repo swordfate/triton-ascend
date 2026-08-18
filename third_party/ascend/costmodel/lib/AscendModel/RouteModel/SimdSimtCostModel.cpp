@@ -2598,17 +2598,15 @@ mlir::ascend::estimateSimdSimtCandidates(
   const double simtStoreRate = hasIndirectMemory
                                    ? profile.simtStoreGatherWarpRate
                                    : profile.simtStoreContiguousWarpRate;
-  const double totalLoadWarpInstructions = loadWarpInstructions * gridSize;
-  const double totalStoreWarpInstructions = storeWarpInstructions * gridSize;
   report.breakdown.simtLoadCycles =
-      totalLoadWarpInstructions / simtLoadRate;
+      loadWarpInstructions / simtLoadRate;
   report.breakdown.simtStoreCycles =
-      totalStoreWarpInstructions / simtStoreRate;
+      storeWarpInstructions / simtStoreRate;
   report.breakdown.simtMemoryCycles =
       report.breakdown.simtLoadCycles + report.breakdown.simtStoreCycles;
   report.breakdown.mixedSimtAnchorMemoryCycles =
-      features.simtAnchors.loadWarpInstructions * gridSize / simtLoadRate +
-      features.simtAnchors.storeWarpInstructions * gridSize / simtStoreRate;
+      features.simtAnchors.loadWarpInstructions / simtLoadRate +
+      features.simtAnchors.storeWarpInstructions / simtStoreRate;
   if (loadWarpInstructions != 0 || storeWarpInstructions != 0)
     resourceConfidence.push_back(profile.simtMemoryConfidence);
 
