@@ -127,8 +127,8 @@ def main():
                     default="ascend_results/simd_strided_patterns_microbench.jsonl")
     ap.add_argument("--ttir-dir",
                     default="ascend_results/ttir_strided_patterns")
-    ap.add_argument("--warmup", type=int, default=10)
-    ap.add_argument("--reps", type=int, default=50)
+    ap.add_argument("--warmup", type=int, default=5)
+    ap.add_argument("--reps", type=int, default=20)
     ap.add_argument(
         "--pattern",
         default=None,
@@ -149,8 +149,11 @@ def main():
         if args.pattern and label["pattern"] != args.pattern:
             return
         print(f"=== running {label} ===", flush=True)
+        import time as _time
+        _t0 = _time.perf_counter()
         kernel[grid](*kargs, **constexpr_kwargs, num_warps=num_warps,
                      num_stages=num_stages)
+        print(f"    first launch/compile done in {_time.perf_counter()-_t0:.2f}s", flush=True)
         if device == "npu":
             torch.npu.synchronize()
         else:
@@ -213,7 +216,8 @@ def main():
     num_stages = 2
 
     # --- rope_interleaved: stride-2 interleave (constant stride in TTIR) ---
-    for n in [512 * 1024, 1024 * 1024, 4 * 1024 * 1024, 8 * 1024 * 1024]:
+    # Keep sizes moderate; the pattern is much slower than a plain copy.
+    for n in [512 * 1024, 1024 * 1024, 2 * 1024 * 1024, 4 * 1024 * 1024]:
         grid = (triton.cdiv(n, BLOCK),)
         src = torch.randn(n, dtype=torch.float32, device=device)
         dst = torch.empty_like(src)
@@ -222,10 +226,9 @@ def main():
         bench(rope_interleaved_kernel, grid, (src, dst, n), {"BLOCK": BLOCK},
               num_warps, num_stages, label, dump=(n == 1024 * 1024))
 
-    # --- column_access: stride is runtime `cols`.  Keep sizes small:
-    # reading one element per row is extremely slow (one cache line per
-    # 4-byte read when cols is large). ---
-    for rows, cols in [(256, 4096), (1024, 1024), (1024, 4096)]:
+    # --- column_access: stride is runtime `cols`.  One element per row is
+    # extremely slow; use only tiny sizes here so the sweep terminates. ---
+    for rows, cols in [(128, 1024), (256, 1024), (256, 4096)]:
         BLOCK_C = min(1024, triton.next_power_of_2(rows))
         grid = (cols,)
         src = torch.randn(rows, cols, dtype=torch.float32, device=device)
@@ -235,11 +238,11 @@ def main():
                  "stride": cols, "read_bytes": n * 4, "write_bytes": n * 4}
         bench(column_access_kernel, grid, (src, dst, rows, cols),
               {"BLOCK": BLOCK_C}, num_warps, num_stages, label,
-              dump=(rows == 1024 and cols == 4096))
+              dump=(rows == 256 and cols == 4096))
 
     # --- strided_store: contiguous load, strided store ---
     for n, stride in [(1024 * 1024, 2), (1024 * 1024, 8),
-                      (4 * 1024 * 1024, 4), (4 * 1024 * 1024, 16)]:
+                      (1024 * 1024, 16), (4 * 1024 * 1024, 4)]:
         grid = (triton.cdiv(n, BLOCK),)
         src = torch.randn(n, dtype=torch.float32, device=device)
         dst = torch.empty(n * stride, dtype=torch.float32, device=device)
@@ -250,8 +253,8 @@ def main():
               dump=(n == 1024 * 1024 and stride == 2))
 
     # --- strided_general: existing pattern, for continuity ---
-    for n, stride in [(4 * 1024 * 1024, 2), (4 * 1024 * 1024, 4),
-                      (4 * 1024 * 1024, 8), (4 * 1024 * 1024, 16)]:
+    for n, stride in [(1024 * 1024, 2), (1024 * 1024, 4),
+                      (1024 * 1024, 8), (1024 * 1024, 16)]:
         grid = (triton.cdiv(n, BLOCK),)
         src = torch.randn(n, dtype=torch.float32, device=device)
         dst = torch.empty_like(src)
