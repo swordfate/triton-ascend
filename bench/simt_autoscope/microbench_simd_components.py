@@ -19,6 +19,60 @@ import json
 import time
 from pathlib import Path
 
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def elementwise_kernel(
+    x_ptr, y_ptr, out_ptr, n, OP: tl.constexpr, BLOCK: tl.constexpr
+):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < n
+    x = tl.load(x_ptr + offs, mask=mask)
+    y = tl.load(y_ptr + offs, mask=mask)
+    if OP == 0:
+        out = x + y
+    elif OP == 1:
+        out = x * y
+    elif OP == 2:
+        out = x / (y + 1.0)
+    elif OP == 3:
+        out = tl.exp(x)
+    elif OP == 4:
+        out = (x > y).to(tl.float32)
+    elif OP == 5:
+        out = tl.where(x > y, x, y)
+    else:
+        out = x
+    tl.store(out_ptr + offs, out, mask=mask)
+
+@triton.jit
+def matmul_kernel(
+    a_ptr, b_ptr, c_ptr,
+    M, N,
+    stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
+    K: tl.constexpr,
+    BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
+):
+    pid_m = tl.program_id(0)
+    pid_n = tl.program_id(1)
+    rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
+    rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    rk = tl.arange(0, BLOCK_K)
+    a_ptrs = a_ptr + rm[:, None] * stride_am + rk[None, :] * stride_ak
+    b_ptrs = b_ptr + rk[:, None] * stride_bk + rn[None, :] * stride_bn
+    acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
+    for _ in range(0, K, BLOCK_K):
+        a = tl.load(a_ptrs)
+        b = tl.load(b_ptrs)
+        acc = tl.dot(a, b, acc)
+        a_ptrs += BLOCK_K * stride_ak
+        b_ptrs += BLOCK_K * stride_bk
+    c_ptrs = c_ptr + rm[:, None] * stride_cm + rn[None, :] * stride_cn
+    tl.store(c_ptrs, acc)
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
@@ -27,61 +81,7 @@ def main():
     ap.add_argument("--reps", type=int, default=50)
     args = ap.parse_args()
 
-    import torch
-    import triton
-    import triton.language as tl
-
     device = "npu" if hasattr(torch, "npu") else "cuda"
-
-    @triton.jit
-    def elementwise_kernel(
-        x_ptr, y_ptr, out_ptr, n, OP: tl.constexpr, BLOCK: tl.constexpr
-    ):
-        pid = tl.program_id(0)
-        offs = pid * BLOCK + tl.arange(0, BLOCK)
-        mask = offs < n
-        x = tl.load(x_ptr + offs, mask=mask)
-        y = tl.load(y_ptr + offs, mask=mask)
-        if OP == 0:
-            out = x + y
-        elif OP == 1:
-            out = x * y
-        elif OP == 2:
-            out = x / (y + 1.0)
-        elif OP == 3:
-            out = tl.exp(x)
-        elif OP == 4:
-            out = (x > y).to(tl.float32)
-        elif OP == 5:
-            out = tl.where(x > y, x, y)
-        else:
-            out = x
-        tl.store(out_ptr + offs, out, mask=mask)
-
-    @triton.jit
-    def matmul_kernel(
-        a_ptr, b_ptr, c_ptr,
-        M, N,
-        stride_am, stride_ak, stride_bk, stride_bn, stride_cm, stride_cn,
-        K: tl.constexpr,
-        BLOCK_M: tl.constexpr, BLOCK_N: tl.constexpr, BLOCK_K: tl.constexpr,
-    ):
-        pid_m = tl.program_id(0)
-        pid_n = tl.program_id(1)
-        rm = pid_m * BLOCK_M + tl.arange(0, BLOCK_M)
-        rn = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
-        rk = tl.arange(0, BLOCK_K)
-        a_ptrs = a_ptr + rm[:, None] * stride_am + rk[None, :] * stride_ak
-        b_ptrs = b_ptr + rk[:, None] * stride_bk + rn[None, :] * stride_bn
-        acc = tl.zeros((BLOCK_M, BLOCK_N), dtype=tl.float32)
-        for _ in range(0, K, BLOCK_K):
-            a = tl.load(a_ptrs)
-            b = tl.load(b_ptrs)
-            acc = tl.dot(a, b, acc)
-            a_ptrs += BLOCK_K * stride_ak
-            b_ptrs += BLOCK_K * stride_bk
-        c_ptrs = c_ptr + rm[:, None] * stride_cm + rn[None, :] * stride_cn
-        tl.store(c_ptrs, acc)
 
     def sync():
         if hasattr(torch, "npu"):

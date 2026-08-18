@@ -29,6 +29,45 @@ import os
 import sys
 from pathlib import Path
 
+import torch
+import triton
+import triton.language as tl
+
+@triton.jit
+def contiguous_copy_kernel(src, dst, n, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < n
+    x = tl.load(src + offs, mask=mask)
+    tl.store(dst + offs, x, mask=mask)
+
+@triton.jit
+def strided_copy_kernel(src, dst, n, stride, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < n
+    idx = (offs * stride) % n
+    x = tl.load(src + idx, mask=mask)
+    tl.store(dst + offs, x, mask=mask)
+
+@triton.jit
+def gather_copy_kernel(src, idx, dst, n, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < n
+    i = tl.load(idx + offs, mask=mask, other=0)
+    x = tl.load(src + i, mask=mask, other=0.0)
+    tl.store(dst + offs, x, mask=mask)
+
+@triton.jit
+def masked_copy_kernel(src, mask_tensor, dst, n, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < n
+    m = tl.load(mask_tensor + offs, mask=mask, other=0).to(tl.int1)
+    x = tl.load(src + offs, mask=mask & m, other=0.0)
+    tl.store(dst + offs, x, mask=mask)
+
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
@@ -37,46 +76,7 @@ def main():
     ap.add_argument("--reps", type=int, default=50)
     args = ap.parse_args()
 
-    import torch
-    import triton
-    import triton.language as tl
-
     device = "npu" if hasattr(torch, "npu") else "cuda"
-
-    @triton.jit
-    def contiguous_copy_kernel(src, dst, n, BLOCK: tl.constexpr):
-        pid = tl.program_id(0)
-        offs = pid * BLOCK + tl.arange(0, BLOCK)
-        mask = offs < n
-        x = tl.load(src + offs, mask=mask)
-        tl.store(dst + offs, x, mask=mask)
-
-    @triton.jit
-    def strided_copy_kernel(src, dst, n, stride, BLOCK: tl.constexpr):
-        pid = tl.program_id(0)
-        offs = pid * BLOCK + tl.arange(0, BLOCK)
-        mask = offs < n
-        idx = (offs * stride) % n
-        x = tl.load(src + idx, mask=mask)
-        tl.store(dst + offs, x, mask=mask)
-
-    @triton.jit
-    def gather_copy_kernel(src, idx, dst, n, BLOCK: tl.constexpr):
-        pid = tl.program_id(0)
-        offs = pid * BLOCK + tl.arange(0, BLOCK)
-        mask = offs < n
-        i = tl.load(idx + offs, mask=mask, other=0)
-        x = tl.load(src + i, mask=mask, other=0.0)
-        tl.store(dst + offs, x, mask=mask)
-
-    @triton.jit
-    def masked_copy_kernel(src, mask_tensor, dst, n, BLOCK: tl.constexpr):
-        pid = tl.program_id(0)
-        offs = pid * BLOCK + tl.arange(0, BLOCK)
-        mask = offs < n
-        m = tl.load(mask_tensor + offs, mask=mask, other=0).to(tl.int1)
-        x = tl.load(src + offs, mask=mask & m, other=0.0)
-        tl.store(dst + offs, x, mask=mask)
 
     def bench(kernel, grid, kargs, constexpr_kwargs, num_warps, num_stages,
               label):
