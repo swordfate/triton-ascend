@@ -2568,38 +2568,59 @@ mlir::ascend::estimateSimdSimtCandidates(
       features.loadedIndexDependentMemoryOps > 0;
   const double totalLoadBytes = features.loadBytes * gridSize;
   const double totalStoreBytes = features.storeBytes * gridSize;
-  double simdLoadRate = profile.simdMemoryGatherBps;
-  double simdStoreRate = profile.simdMemoryGatherBps;
-  if (!hasIndirectMemory) {
-    if (profile.simdMemoryContiguousPowerA > 0.0) {
-      simdLoadRate = profile.simdMemoryContiguousPowerA *
-                     std::pow(totalLoadBytes,
-                              profile.simdMemoryContiguousPowerExponent);
-      simdStoreRate = profile.simdMemoryContiguousPowerA *
-                      std::pow(totalStoreBytes,
-                               profile.simdMemoryContiguousPowerExponent);
-    } else {
-      simdLoadRate = profile.simdMemoryContiguousBps;
-      simdStoreRate = profile.simdMemoryContiguousBps;
-    }
-    simdLoadRate = std::max(1.0e-9, simdLoadRate);
-    simdStoreRate = std::max(1.0e-9, simdStoreRate);
-  }
+
+  auto contiguousSimdRate = [&](double bytes) {
+    if (profile.simdMemoryContiguousPowerA > 0.0)
+      return std::max(
+          1.0e-9, profile.simdMemoryContiguousPowerA *
+                      std::pow(bytes,
+                               profile.simdMemoryContiguousPowerExponent));
+    return std::max(1.0e-9, profile.simdMemoryContiguousBps);
+  };
+  const double simdContiguousLoadRate = contiguousSimdRate(totalLoadBytes);
+  const double simdContiguousStoreRate = contiguousSimdRate(totalStoreBytes);
+  const double simdGatherLoadRate =
+      std::max(1.0e-9, profile.simdMemoryGatherBps);
+
+  // Split load bytes into contiguous and gather-backed parts.  Without this,
+  // kernels that first load an index tensor contiguously and then load data
+  // through those indices are charged as if every byte were a gather.
+  const double perCtaGatherBytes =
+      hasIndirectMemory
+          ? static_cast<double>(features.loadedIndexDependentMemoryOps) *
+                maxNumel * (elementBits / 8.0)
+          : 0.0;
+  const double totalGatherLoadBytes =
+      std::min(totalLoadBytes, perCtaGatherBytes * gridSize);
+  const double totalContiguousLoadBytes =
+      totalLoadBytes - totalGatherLoadBytes;
+
   report.breakdown.simdLoadCycles =
-      totalLoadBytes / simdLoadRate;
+      totalContiguousLoadBytes / simdContiguousLoadRate +
+      totalGatherLoadBytes / simdGatherLoadRate;
   report.breakdown.simdStoreCycles =
-      totalStoreBytes / simdStoreRate;
+      totalStoreBytes / simdContiguousStoreRate;
   report.breakdown.simdMemoryCycles =
       std::max(report.breakdown.simdLoadCycles,
                report.breakdown.simdStoreCycles);
-  const double mixedSimdRegularLoadCycles =
+
+  const double regularTotalLoadBytes =
       std::max(0.0, totalLoadBytes -
-                        features.simtAnchors.loadBytes * gridSize) /
-      simdLoadRate;
+                        features.simtAnchors.loadBytes * gridSize);
+  const double gatherRatio = totalLoadBytes > 0.0
+                                 ? totalGatherLoadBytes / totalLoadBytes
+                                 : 0.0;
+  const double regularGatherLoadBytes =
+      regularTotalLoadBytes * gatherRatio;
+  const double regularContiguousLoadBytes =
+      regularTotalLoadBytes - regularGatherLoadBytes;
+  const double mixedSimdRegularLoadCycles =
+      regularContiguousLoadBytes / simdContiguousLoadRate +
+      regularGatherLoadBytes / simdGatherLoadRate;
   const double mixedSimdRegularStoreCycles =
       std::max(0.0, totalStoreBytes -
                         features.simtAnchors.storeBytes * gridSize) /
-      simdStoreRate;
+      simdContiguousStoreRate;
   report.breakdown.mixedSimdRegularMemoryCycles =
       std::max(mixedSimdRegularLoadCycles,
                mixedSimdRegularStoreCycles);
