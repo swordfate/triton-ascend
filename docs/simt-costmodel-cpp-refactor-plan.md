@@ -180,3 +180,50 @@ allSimtRaw = simtSetup + programIssueScale * simtPayload
 - indirect 仍差很远，说明还需要更细的 SIMD indirect 建模（可能不仅是 memory rate，
   还包括 SIMD scatter/control 开销）；
 - matmul / cumsum 还需要修正 dot floor 和 scan 的 SIMD/SIMT 建模。
+
+
+## 6. 已落地的 C++ 公式（v6 基线）
+
+以下公式已经实现并验证有效：
+
+```text
+totalWork = per-CTA feature × gridSize
+
+simdContiguousRate(bytes) = A × bytes^exponent        // size-dependent
+simdGatherRate            = 2.27 B/cycle
+
+simdLoadCycles = contiguousBytes / simdContiguousRate(contiguousBytes)
+               + gatherBytes / simdGatherRate
+simdStoreCycles = totalStoreBytes / simdContiguousRate(totalStoreBytes)
+simdMemoryCycles = max(simdLoadCycles, simdStoreCycles) × (1 + irregularPenalty)
+
+simdDotCycles = max(dotSetup + totalDotFlops / 4096, 16200) × (1 + tinyDotPenalty)
+simtDotCycles = max(dotSetup + totalDotFlops / 4096, 16200)
+
+simdComputeCycles = computeOnlyCycles × (1 + loweringPenalty)
+simtMemoryCycles = loadWarpInstr / loadRate + storeWarpInstr / storeRate
+simtPredicateCycles = predicatedWarpInstr / 0.2356
+simtShuffleCycles = shuffleWarpInstr / 0.817
+simtScanCycles = 12800 (single-block)
+simdScanCycles = 1000 + scanElements / 0.0682
+
+allSimdRaw = max(simdSetup + simdIssuePayload, simdMinKernelCycles)
+allSimtRaw = max(simtSetup + simtIssuePayload, simtMinKernelCycles)
+```
+
+关键点：
+- `programIssueScale = 1.0`，所有组件均为实际 cycle 口径；
+- 只有 whole-kernel 测得的 rate（SIMD memory、dot）乘 grid；
+- CTA 级 rate（SIMT GM、shuffle、predicate、scan、ALU）不乘 grid。
+
+## 7. 距离最终目标的剩余优化点
+
+1. 外部 25 个真实算子验证；
+2. dot 形状/floor 细化；
+3. SIMT GM rate 按 num_warps 查表；
+4. SIMD strided rate 接入 C++；
+5. predicate / shuffle 指令数细化；
+6. mixed transition 成本实测；
+7. domain coverage / multiplier 重校；
+8. auto 模式端到端验证；
+9. 建立多 shape/grid 回归集。
