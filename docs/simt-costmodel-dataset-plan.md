@@ -546,6 +546,91 @@ raw / measured = 2.04x
 | single_block_cumsum | ~4.904 | ~4.811 |
 | indirect_elementwise | ~44.6 | ~45 左右（SIMD 分数 466k） |
 
+## 8.5 设计考量：为什么这样做，而不是那样做
+
+### 1) 为什么 SIMD memory / dot 用 Triton 微基准，而 SIMT GM / shuffle / predicate 用 cce
+
+- **SIMD 侧**：旧 cce probe 依赖 `RegBase/VecUtils.h` 里的 `VectorReg` /
+  `CREATE_MASK_BY_SIZE` 旧 API，而当前 AscendNPU-IR 已删除该头文件并重写了
+  SIMD intrinsic。要让旧 cce probe 编译，必须把 NPU-IR 回退到 `d4405acb`，
+  或手工把 probe 移植到新 `Vector/VecUtils.h`。两者成本都高，而且本地没有
+  ccec 工具链，无法验证。
+  同时，costmodel 的输入本来就是 Triton 生成的 TTIR；用 Triton 微基准去测
+  SIMD memory/dot 更接近真实 codegen，并自动适配当前 NPU-IR。
+- **SIMT 侧**：cce probe 只依赖 SIMT 指令，不依赖旧 SIMD vector API，能直接
+  编译；而且 cce 的 slope-over-iters 方法能把 launch/barrier 开销从
+  instruction rate 中剥离，得到单 AIV 的 ALU/LSU/shuffle/predicate rate。
+  这类“纯指令级 rate”用 Triton kernel 很难隔离，因为 Triton kernel 一定包含
+  循环、mask 和固定开销。
+
+备选方案：
+- SIMD 侧也可以把旧 cce probe 移植到新 SIMD API，或使用双 INC 指向旧 NPU-IR；
+  后续如果需要隔离“纯 ALU rate”（不含 load/store），再做这件事。
+- SIMT 侧也可以用 Triton 微基准，但后续需要做额外处理，把 kernel 固定开销
+  和指令 rate 分离。
+
+### 2) 为什么把 `program_issue_scale` 设成 1.0
+
+原来的 8.0 是 legacy 经验比例。引入 grid 和 whole-program work 后，如果继续
+保留 8.0，所有 whole-kernel rate 都会被多乘一个 8，组件单位难以解释。
+
+改成 1.0 后，所有组件都是实际 cycle 口径，拟合 rate 时可以直接和微基准实测
+cycle 比较，避免“payload 单位”带来的换算错误。
+
+备选方案：保留 8.0，但把每个 rate 先换算成 payload 单位。这样公式不用改，
+但每次更新 rate 都要额外换算，容易再次出现“total/per-CTA”和“8 倍”混合错误。
+
+### 3) 为什么暂时把 domain multiplier 置 1.0
+
+当前阶段是验证解析公式本身，不应该让旧的 domain 常数把公式误差掩盖掉。
+multiplier 保留在报告中，但不参与这次验证。
+
+备选方案：不置 1，直接重拟合 multiplier。但那样会把公式误差吸收进 multiplier，
+我们就无法知道公式哪里还不准。
+
+### 4) 为什么要把 launch grid 传进 C++
+
+TTIR 特征是 block-local 的，而 SIMD memory / dot 的 rate 是 whole-kernel 测的。
+没有 grid，就无法把 `loadBytes_per_cta` 换算成 `totalLoadBytes`。这是 v1-v4
+中 SIMD 被系统性低估的根因。
+
+备选方案：把 whole-kernel rate 换算成 per-CTA rate。但 per-CTA rate 随 grid /
+资源饱和变化，不是常数；grid 传递是更稳定的方案。
+
+### 5) 为什么 SIMT GM rate 不乘 grid，而 SIMD memory / dot 要乘
+
+- `simt_gm_memory_pattern.cce` 测的是单 AIV（单 CTA）的 rate；
+- `microbench_simd_memory.py` / `microbench_simd_components.py` 测的是整个
+  kernel 的 total rate。
+两者口径不同：CTA 级 rate 应直接作用于 per-CTA 工作量；kernel 级 rate 应作用
+于 `per-CTA × grid` 的总工作量。
+
+### 6) 为什么 SIMD memory 要拆 contiguous / gather bytes
+
+`indirect_elementwise` 这类 kernel 有两次 load：
+一次连续读索引，一次按索引 gather 数据。若全部按 gather rate 计，SIMD 会被
+高估。当前特征里只有 `loadedIndexDependentMemoryOps`，没有字节级区分，所以
+用 `ops × maxTensorNumel × elementBytes` 估算 gather 字节数，剩余部分按
+contiguous 处理。
+
+备选方案：在特征抽取阶段就为每个 `tt.load` 标注是否为 loaded-index-dependent，
+并单独累加 gather bytes；这是更精确的长期方案。
+
+### 7) 为什么加入 min kernel cycle floor
+
+小 kernel 的实测 Event 延迟有一大部分是固定开销（launch/wave/control），而
+当前模型没有显式建模它。用 `max(analytical, floor)` 是工程上的简单近似。
+
+备选方案：分别测 SIMD/SIMT 的 device-side launch overhead，放进 `setup` 或
+单独加一个 `fixedOverhead` 项；这比 floor 更有解释性，后续应替换。
+
+### 8) 为什么 scan 只测单 block
+
+单 block scan 没有跨 CTA carry，模型简单可解释。多 block scan 需要 carry 传播
+和 grid 依赖，当前缺少可靠的多 block scan microbench。
+
+备选方案：扩展 `microbench_scan.py` 支持多 block + carry，再拟合 grid 相关的
+scan 模型。
 ## 9. 距离最终目标还需要优化/验证的点
 
 1. **外部 25 个真实算子验证**
