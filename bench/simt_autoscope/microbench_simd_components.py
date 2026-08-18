@@ -89,35 +89,45 @@ def main():
         else:
             torch.cuda.synchronize()
 
+    def write_row(row):
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with out_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(row, sort_keys=True) + "\n")
+        print(json.dumps(row, sort_keys=True))
+
     def measure(kernel, grid, kargs, constexpr_kwargs, num_warps, num_stages,
                 row):
-        kernel[grid](*kargs, **constexpr_kwargs, num_warps=num_warps,
-                     num_stages=num_stages)
-        sync()
-        for _ in range(args.warmup):
+        row = dict(row)
+        try:
             kernel[grid](*kargs, **constexpr_kwargs, num_warps=num_warps,
                          num_stages=num_stages)
-        sync()
-        if hasattr(torch, "npu") and hasattr(torch.npu, "Event"):
-            start = torch.npu.Event(enable_timing=True)
-            end = torch.npu.Event(enable_timing=True)
-            start.record()
-            for _ in range(args.reps):
-                kernel[grid](*kargs, **constexpr_kwargs, num_warps=num_warps,
-                             num_stages=num_stages)
-            end.record()
             sync()
-            latency_ms = start.elapsed_time(end) / args.reps
-        else:
-            t0 = time.perf_counter()
-            for _ in range(args.reps):
+            for _ in range(args.warmup):
                 kernel[grid](*kargs, **constexpr_kwargs, num_warps=num_warps,
                              num_stages=num_stages)
             sync()
-            latency_ms = (time.perf_counter() - t0) * 1000.0 / args.reps
-
-        row = dict(row)
-        row["latency_ms"] = latency_ms
+            if hasattr(torch, "npu") and hasattr(torch.npu, "Event"):
+                start = torch.npu.Event(enable_timing=True)
+                end = torch.npu.Event(enable_timing=True)
+                start.record()
+                for _ in range(args.reps):
+                    kernel[grid](*kargs, **constexpr_kwargs, num_warps=num_warps,
+                                 num_stages=num_stages)
+                end.record()
+                sync()
+                latency_ms = start.elapsed_time(end) / args.reps
+            else:
+                t0 = time.perf_counter()
+                for _ in range(args.reps):
+                    kernel[grid](*kargs, **constexpr_kwargs, num_warps=num_warps,
+                                 num_stages=num_stages)
+                sync()
+                latency_ms = (time.perf_counter() - t0) * 1000.0 / args.reps
+            row["latency_ms"] = latency_ms
+        except Exception as exc:  # keep going if a shape/route fails
+            row["error"] = str(exc)
+            row["latency_ms"] = None
         num_ctas = 1
         if isinstance(grid, tuple):
             for dim in grid:
@@ -129,11 +139,7 @@ def main():
             row["elements_per_cta"] = row["elements"] / num_ctas
         if "flops" in row and row["flops"]:
             row["flops_per_cta"] = row["flops"] / num_ctas
-        out_path = Path(args.out)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
-        with out_path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(row, sort_keys=True) + "\n")
-        print(json.dumps(row, sort_keys=True))
+        write_row(row)
 
     op_names = {0: "add", 1: "mul", 2: "div", 3: "exp", 4: "cmp", 5: "select"}
     BLOCK = 1024

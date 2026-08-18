@@ -305,9 +305,9 @@
     },
     "dot": {
       "description": "All-SIMT dot setup and scalar-FMA throughput seed used for every dot operation; current calibrated admission is narrower and covers only tiny irregular dot.",
-      "startup_system_cycles": 64.0,
-      "flops_per_system_cycle": 141.0,
-      "source": "SIMT scalar FMA issue seed plus fixed tiny-dot setup; calibrated by gather-dot ranking",
+      "startup_system_cycles": 128.0,
+      "flops_per_system_cycle": 4096.0,
+      "source": "SIMT tl.dot lowers to the same cube unit as SIMD on A5; first SIMT dot microbench (128x128x64) measured 0.0159 ms vs SIMD 0.0164 ms.",
       "confidence": "low"
     },
     "camodel_effective": {
