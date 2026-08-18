@@ -19,7 +19,7 @@
   },
   "selection_calibration": {
     "description": "Route-specific calibration that converts analytical resource costs into relative selection scores and bounds where those scores may make decisions. Mixed cost is partitioned from the materializable anchor plan; the removed legacy mixed_simd_fraction blend no longer participates.",
-    "program_issue_scale": 8.0,
+    "program_issue_scale": 1.0,
     "ranking_confidence": "low",
     "source": "Bounded development activation fitted to repeated Ascend950PR Event runs for masked-rowwise, tiny-gather-dot, and triangular-solve sample domains. In v10, all-SIMD raw cost became A_SIMD * (1 + Pstruct); domain all_simd multipliers preserve the v9 Event-anchored score scale without an online dependency on A_SIMT. Mixed scoring uses the exact materializable anchor resource partition. Setup proxies were reclassified on 2026-07-30; no directional SIMD/SIMT boundary latency has been measured.",
     "coverage": {
@@ -62,35 +62,35 @@
       "description": "Low-confidence route-relative residual calibration. For each bounded feature domain, calibrated_score = raw_analytical_structural_score * route_multiplier. The v10 all_simd multiplier migrates the independently computed A_SIMD * (1 + Pstruct) raw score onto the existing Event-anchored domain scale; the other route multipliers retain the measured median NPU Event ratios on A5 card 0. Raw scores and multipliers are both emitted in the report. all_simt_only_validated may promote only a BackendConditional pure-SIMT route whose whole-kernel correctness was independently verified.",
       "domains": {
         "masked_rowwise_reduction": {
-          "all_simd": 67.628046,
-          "all_simt_only": 0.807671,
-          "mixed_simd_simt": 3.537276,
+          "all_simd": 1.0,
+          "all_simt_only": 1.0,
+          "mixed_simd_simt": 1.0,
           "all_simt_only_validated": true,
           "mixed_simd_simt_validated": true,
           "source": "A5 card 0, FBGEMM T128/D128/H8/num_warps4, 30 warmup + 100 NPU Event samples: median all-SIMD 68.9340 us, all-SIMT 26.7795 us, Auto mixed 36.0365 us; all routes correctness PASS.",
           "confidence": "low"
         },
         "tiny_irregular_dot": {
-          "all_simd": 1.321185,
+          "all_simd": 1.0,
           "all_simt_only": 1.0,
-          "mixed_simd_simt": 0.666478,
+          "mixed_simd_simt": 1.0,
           "all_simt_only_validated": false,
           "mixed_simd_simt_validated": true,
           "source": "A5 card 0, gather-dot-min M16/N16/K16/num_warps4, one process with routes interleaved after 50 warmup, 200 NPU Event samples each: median all-SIMD 29.2525 us and correctness PASS; all-SIMT 25.1570 us but mismatched 256/256 elements; C++-materialized 2-scope mixed 25.3980 us and correctness PASS after lowering buffer-semantics identity vtranspose to copy and using cross-core GSS instead of the delayed variant whose split-side anchor interval is reversed. Mixed is 13.18% faster than all-SIMD.",
           "confidence": "low"
         },
         "triangular_solve_loop": {
-          "all_simd": 290.881045,
-          "all_simt_only": 1.713584,
-          "mixed_simd_simt": 2.892885,
+          "all_simd": 1.0,
+          "all_simt_only": 1.0,
+          "mixed_simd_simt": 1.0,
           "all_simt_only_validated": true,
           "mixed_simd_simt_validated": true,
           "source": "A5 card 0, solve-tril BT16/num_warps4, one process with routes interleaved after 50 warmup, 200 NPU Event samples each: median all-SIMD 22.1160 us, all-SIMT 21.9315 us, C++-materialized mixed 22.3130 us; all routes correctness PASS. The all-SIMT advantage is below the 10% production switch margin, so Post Check keeps the all-SIMD baseline.",
           "confidence": "low"
         },
         "attention_indirect_gqa": {
-          "all_simd": 119.1,
-          "all_simt_only": 0.211,
+          "all_simd": 1.0,
+          "all_simt_only": 1.0,
           "mixed_simd_simt": 1.0,
           "all_simt_only_validated": false,
           "mixed_simd_simt_validated": true,
@@ -98,8 +98,8 @@
           "confidence": "low"
         },
         "indirect_elementwise": {
-          "all_simd": 67.65,
-          "all_simt_only": 0.123,
+          "all_simd": 1.0,
+          "all_simt_only": 1.0,
           "mixed_simd_simt": 1.0,
           "all_simt_only_validated": false,
           "mixed_simd_simt_validated": true,
@@ -107,7 +107,7 @@
           "confidence": "low"
         },
         "dynamic_loop_elementwise": {
-          "all_simd": 67.52,
+          "all_simd": 1.0,
           "all_simt_only": 1.0,
           "mixed_simd_simt": 1.0,
           "all_simt_only_validated": false,
@@ -211,9 +211,11 @@
       "confidence": "low",
       "note": "Model-specific fallback, not shared microbenchmark evidence",
       "contiguous_bytes_per_system_cycle": 1250.76,
-      "gather_bytes_per_system_cycle": 2.272,
+      "gather_bytes_per_system_cycle": 2.27,
       "strided_power_fit_A": 27.034,
-      "strided_power_fit_exponent": -0.631
+      "strided_power_fit_exponent": -0.631,
+      "contiguous_power_A": 0.0014055,
+      "contiguous_power_exponent": 0.8235
     },
     "dot": {
       "description": "All-SIMD dot setup and throughput seed used for every dot operation; current calibrated admission is narrower and covers only tiny irregular dot.",
@@ -221,15 +223,16 @@
       "flops_per_system_cycle": 4096.0,
       "source": "AscendModel cube startup/throughput seed; DES feedback is expected to refine scheduled lowering",
       "confidence": "low",
-      "small_kernel_min_cycles": 0
+      "small_kernel_min_cycles": 16200
     },
     "scan": {
       "description": "Single-block cumsum microbenchmark on A5, fitted in issue-payload units before program_issue_scale.",
-      "fixed_system_cycles": 125.0,
-      "elements_per_system_cycle": 0.55,
+      "fixed_system_cycles": 1000.0,
+      "elements_per_system_cycle": 0.0682,
       "source": "A5 scan_simd.jsonl n=1024/4096/8192",
       "confidence": "low"
-    }
+    },
+    "min_kernel_cycles": 11000
   },
   "simt": {
     "description": "Inputs used to estimate the all-SIMT candidate and the SIMT portion of a mixed candidate.",
@@ -315,7 +318,8 @@
       "startup_system_cycles": 128.0,
       "flops_per_system_cycle": 4096.0,
       "source": "SIMT tl.dot lowers to the same cube unit as SIMD on A5; first SIMT dot microbench (128x128x64) measured 0.0159 ms vs SIMD 0.0164 ms.",
-      "confidence": "low"
+      "confidence": "low",
+      "small_kernel_min_cycles": 16200
     },
     "camodel_effective": {
       "description": "Workload-effective CaModel issue rates retained as fallback calibration context. The current Route Model consumes only the predicate rate from the nested rate map.",
@@ -380,9 +384,10 @@
     },
     "scan": {
       "description": "Single-block cumsum microbenchmark on A5; latency is nearly flat for n>=1024.",
-      "fixed_system_cycles": 1000.0,
+      "fixed_system_cycles": 12800.0,
       "source": "A5 scan_simt.jsonl n=1024/4096/8192",
       "confidence": "low"
-    }
+    },
+    "min_kernel_cycles": 12500
   }
 }

@@ -131,8 +131,11 @@ struct CandidateProfile {
   double simdMte3BytesPerCycle = 0.0;
   double simdMemoryContiguousBps = 0.0;
   double simdMemoryGatherBps = 0.0;
+  double simdMemoryContiguousPowerA = 1.0;
+  double simdMemoryContiguousPowerExponent = 0.0;
   double simdMemoryStridedPowerA = 1.0;
   double simdMemoryStridedPowerExponent = 0.0;
+  double simdMinKernelCycles = 0.0;
   std::string simdMemoryConfidence = "none";
   double simdDotSetupCycles = 0.0;
   double simdDotFlopsPerCycle = 0.0;
@@ -158,6 +161,8 @@ struct CandidateProfile {
   double simtStoreContiguousWarpRate = 0.0;
   double simtLoadGatherWarpRate = 0.0;
   double simtStoreGatherWarpRate = 0.0;
+  double simtMinKernelCycles = 0.0;
+  double simtDotSmallKernelMinCycles = 0.0;
   std::string simtMemoryConfidence = "none";
   std::vector<MixedSetupFallbackProfile> mixedSetupFallbacks;
   std::string mixedSetupFallbackConfidence = "none";
@@ -908,6 +913,10 @@ loadCandidateProfile(llvm::StringRef requestedPath) {
           *memory, "strided_power_fit_A", 1.0);
       profile.simdMemoryStridedPowerExponent = reader.optionalNumber(
           *memory, "strided_power_fit_exponent", 0.0);
+      profile.simdMemoryContiguousPowerA = reader.optionalNumber(
+          *memory, "contiguous_power_A", 0.0);
+      profile.simdMemoryContiguousPowerExponent = reader.optionalNumber(
+          *memory, "contiguous_power_exponent", 1.0);
       profile.simdMemoryConfidence =
           reader.optionalString(*memory, "confidence", "none");
     }
@@ -927,6 +936,8 @@ loadCandidateProfile(llvm::StringRef requestedPath) {
       profile.simdScanElementsPerCycle =
           reader.number(*scan, "elements_per_system_cycle", "simd.scan");
     }
+    profile.simdMinKernelCycles =
+        reader.optionalNumber(*simd, "min_kernel_cycles", 0.0);
   }
 
   const auto *simt = reader.object(*root, "simt", "profile");
@@ -1010,6 +1021,12 @@ loadCandidateProfile(llvm::StringRef requestedPath) {
       profile.simtMemoryConfidence = reader.optionalString(
           *memory, "confidence",
           minimumConfidence({loadConfidence, storeConfidence}));
+    }
+    profile.simtMinKernelCycles =
+        reader.optionalNumber(*simt, "min_kernel_cycles", 0.0);
+    if (const auto *dot = reader.object(*simt, "dot", "simt")) {
+      profile.simtDotSmallKernelMinCycles =
+          reader.optionalNumber(*dot, "small_kernel_min_cycles", 0.0);
     }
     const llvm::json::Object *mixedSetupFallback = nullptr;
     if (usesAnchorPartitionProfile)
@@ -2549,14 +2566,25 @@ mlir::ascend::estimateSimdSimtCandidates(
 
   const bool hasIndirectMemory =
       features.loadedIndexDependentMemoryOps > 0;
-  const double simdLoadRate = hasIndirectMemory
-                                  ? profile.simdMemoryGatherBps
-                                  : profile.simdMemoryContiguousBps;
-  const double simdStoreRate = hasIndirectMemory
-                                   ? profile.simdMemoryGatherBps
-                                   : profile.simdMemoryContiguousBps;
   const double totalLoadBytes = features.loadBytes * gridSize;
   const double totalStoreBytes = features.storeBytes * gridSize;
+  double simdLoadRate = profile.simdMemoryGatherBps;
+  double simdStoreRate = profile.simdMemoryGatherBps;
+  if (!hasIndirectMemory) {
+    if (profile.simdMemoryContiguousPowerA > 0.0) {
+      simdLoadRate = profile.simdMemoryContiguousPowerA *
+                     std::pow(totalLoadBytes,
+                              profile.simdMemoryContiguousPowerExponent);
+      simdStoreRate = profile.simdMemoryContiguousPowerA *
+                      std::pow(totalStoreBytes,
+                               profile.simdMemoryContiguousPowerExponent);
+    } else {
+      simdLoadRate = profile.simdMemoryContiguousBps;
+      simdStoreRate = profile.simdMemoryContiguousBps;
+    }
+    simdLoadRate = std::max(1.0e-9, simdLoadRate);
+    simdStoreRate = std::max(1.0e-9, simdStoreRate);
+  }
   report.breakdown.simdLoadCycles =
       totalLoadBytes / simdLoadRate;
   report.breakdown.simdStoreCycles =
@@ -2784,6 +2812,15 @@ mlir::ascend::estimateSimdSimtCandidates(
       report.breakdown.simdMemoryCycles * (1.0 + irregularPenalty);
   double simdDotWithPenalty =
       report.breakdown.simdDotCycles * (1.0 + tinyDotPenalty);
+  if (profile.simdDotSmallKernelMinCycles > 0.0 &&
+      simdDotWithPenalty > 0.0)
+    simdDotWithPenalty =
+        std::max(simdDotWithPenalty, profile.simdDotSmallKernelMinCycles);
+  double simtDotWithPenalty = report.breakdown.simtDotCycles;
+  if (profile.simtDotSmallKernelMinCycles > 0.0 &&
+      simtDotWithPenalty > 0.0)
+    simtDotWithPenalty =
+        std::max(simtDotWithPenalty, profile.simtDotSmallKernelMinCycles);
 
   const double unpenalizedSimdPayload =
       std::max(report.breakdown.simdComputeCycles +
@@ -2797,7 +2834,7 @@ mlir::ascend::estimateSimdSimtCandidates(
   report.breakdown.simtIssuePayloadCycles =
       std::max(report.breakdown.simtComputeCycles +
                    report.breakdown.simtShuffleCycles +
-                   report.breakdown.simtDotCycles,
+                   simtDotWithPenalty,
                report.breakdown.simtMemoryCycles) +
       report.breakdown.simtPredicateCycles +
       report.breakdown.simtScanCycles;
@@ -2817,8 +2854,10 @@ mlir::ascend::estimateSimdSimtCandidates(
   report.breakdown.simdStructuralPenaltyCycles =
       (report.breakdown.simdIssuePayloadCycles - unpenalizedSimdPayload) *
       profile.programIssueScale;
-  report.candidateCosts.allSimd = report.breakdown.simdAnalyticalCycles;
-  report.candidateCosts.allSimtOnly = report.breakdown.simtAnalyticalCycles;
+  report.candidateCosts.allSimd = std::max(
+      report.breakdown.simdAnalyticalCycles, profile.simdMinKernelCycles);
+  report.candidateCosts.allSimtOnly = std::max(
+      report.breakdown.simtAnalyticalCycles, profile.simtMinKernelCycles);
 
   const MixedSetupFallbackProfile *nearestSetupFallback = nullptr;
   for (const MixedSetupFallbackProfile &fallback :
