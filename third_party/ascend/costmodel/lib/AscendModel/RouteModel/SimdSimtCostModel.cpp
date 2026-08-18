@@ -2719,10 +2719,6 @@ mlir::ascend::estimateSimdSimtCandidates(
       report.breakdown.simdMemoryCycles * (1.0 + irregularPenalty);
   double simdDotWithPenalty =
       report.breakdown.simdDotCycles * (1.0 + tinyDotPenalty);
-  if (profile.simdDotSmallKernelMinCycles > 0.0 &&
-      simdDotWithPenalty > 0.0)
-    simdDotWithPenalty =
-        std::max(simdDotWithPenalty, profile.simdDotSmallKernelMinCycles);
 
   const double unpenalizedSimdPayload =
       std::max(report.breakdown.simdComputeCycles +
@@ -2862,10 +2858,6 @@ mlir::ascend::estimateSimdSimtCandidates(
   double regularDotCycles =
       report.breakdown.mixedSimdRegularDotCycles *
       (1.0 + remainingTinyDotPenalty);
-  if (profile.simdDotSmallKernelMinCycles > 0.0 &&
-      regularDotCycles > 0.0)
-    regularDotCycles =
-        std::max(regularDotCycles, profile.simdDotSmallKernelMinCycles);
   report.breakdown.mixedSimdRegularPayloadCycles =
       std::max(regularComputeCycles + regularDotCycles,
                regularMemoryCycles);
