@@ -582,6 +582,13 @@ class JITFunction(KernelInterface[T]):
 
         bound_args, sig_and_spec, constexpr_vals, non_constexpr_vals, excess_kwargs = self.binder(*args, **kwargs)
 
+        # Canonicalize the launch grid before option parsing so backend
+        # costmodel passes can see it.
+        if grid is not None and callable(grid):
+            grid = grid(bound_args)
+        if grid is not None:
+            kwargs["launch_grid"] = tuple(int(g) for g in grid)
+
         # compute cache key
         key = ''.join(sig_and_spec) + str((constexpr_vals, excess_kwargs))
         kernel = self.cache[device].get(key, None)

@@ -109,6 +109,7 @@ struct SelectSimdSimtCostModelPass
     options.includeFeaturesInJSON = true;
     options.scoreOutsideCalibrationCoverage = !autoMode;
     options.compileOn91095 = compileOn91095.getValue();
+    options.launchGridSpec = grid.getValue();
 
     SimtAnchorPlan anchorPlan =
         buildMixedSimtAnchorPlan(module, options.compileOn91095);

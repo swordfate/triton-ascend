@@ -1145,6 +1145,23 @@ static int64_t mapValue(const llvm::StringMap<int64_t> &values,
   return iterator == values.end() ? fallback : iterator->second;
 }
 
+static int64_t parseLaunchGridSize(llvm::StringRef spec) {
+  if (spec.trim().empty())
+    return 1;
+  llvm::SmallVector<llvm::StringRef> dims;
+  spec.split(dims, 'x', -1, false);
+  int64_t size = 1;
+  for (llvm::StringRef dim : dims) {
+    int64_t value = 0;
+    if (dim.trim().getAsInteger(10, value) || value <= 0)
+      return 1;
+    if (size > std::numeric_limits<int64_t>::max() / value)
+      return 1;
+    size *= value;
+  }
+  return std::max<int64_t>(1, size);
+}
+
 static std::vector<std::pair<llvm::StringRef, int64_t>>
 getProfileOpElements(const SimdSimtFeatureSummary &features) {
   const int64_t maxNumel = std::max<int64_t>(1, features.maxTensorNumel);
@@ -2436,6 +2453,8 @@ mlir::ascend::estimateSimdSimtCandidates(
 
   const int64_t numWarps =
       std::max<int64_t>(1, static_cast<int64_t>(options.numWarps));
+  const int64_t gridSize =
+      parseLaunchGridSize(options.launchGridSpec);
   const int64_t maxNumel = std::max<int64_t>(1, features.maxTensorNumel);
   const int64_t elementBits =
       features.maxElementBits > 0
@@ -2536,18 +2555,22 @@ mlir::ascend::estimateSimdSimtCandidates(
   const double simdStoreRate = hasIndirectMemory
                                    ? profile.simdMemoryGatherBps
                                    : profile.simdMemoryContiguousBps;
+  const double totalLoadBytes = features.loadBytes * gridSize;
+  const double totalStoreBytes = features.storeBytes * gridSize;
   report.breakdown.simdLoadCycles =
-      features.loadBytes / simdLoadRate;
+      totalLoadBytes / simdLoadRate;
   report.breakdown.simdStoreCycles =
-      features.storeBytes / simdStoreRate;
+      totalStoreBytes / simdStoreRate;
   report.breakdown.simdMemoryCycles =
       std::max(report.breakdown.simdLoadCycles,
                report.breakdown.simdStoreCycles);
   const double mixedSimdRegularLoadCycles =
-      std::max(0.0, features.loadBytes - features.simtAnchors.loadBytes) /
+      std::max(0.0, totalLoadBytes -
+                        features.simtAnchors.loadBytes * gridSize) /
       simdLoadRate;
   const double mixedSimdRegularStoreCycles =
-      std::max(0.0, features.storeBytes - features.simtAnchors.storeBytes) /
+      std::max(0.0, totalStoreBytes -
+                        features.simtAnchors.storeBytes * gridSize) /
       simdStoreRate;
   report.breakdown.mixedSimdRegularMemoryCycles =
       std::max(mixedSimdRegularLoadCycles,
@@ -2575,15 +2598,17 @@ mlir::ascend::estimateSimdSimtCandidates(
   const double simtStoreRate = hasIndirectMemory
                                    ? profile.simtStoreGatherWarpRate
                                    : profile.simtStoreContiguousWarpRate;
+  const double totalLoadWarpInstructions = loadWarpInstructions * gridSize;
+  const double totalStoreWarpInstructions = storeWarpInstructions * gridSize;
   report.breakdown.simtLoadCycles =
-      loadWarpInstructions / simtLoadRate;
+      totalLoadWarpInstructions / simtLoadRate;
   report.breakdown.simtStoreCycles =
-      storeWarpInstructions / simtStoreRate;
+      totalStoreWarpInstructions / simtStoreRate;
   report.breakdown.simtMemoryCycles =
       report.breakdown.simtLoadCycles + report.breakdown.simtStoreCycles;
   report.breakdown.mixedSimtAnchorMemoryCycles =
-      features.simtAnchors.loadWarpInstructions / simtLoadRate +
-      features.simtAnchors.storeWarpInstructions / simtStoreRate;
+      features.simtAnchors.loadWarpInstructions * gridSize / simtLoadRate +
+      features.simtAnchors.storeWarpInstructions * gridSize / simtStoreRate;
   if (loadWarpInstructions != 0 || storeWarpInstructions != 0)
     resourceConfidence.push_back(profile.simtMemoryConfidence);
 
@@ -2676,13 +2701,14 @@ mlir::ascend::estimateSimdSimtCandidates(
   report.breakdown.mixedSimtAnchorPredicateCycles =
       anchorPredicateInstructions / profile.simtPredicateRate;
 
+  const double totalDotFlops = static_cast<double>(dotFlops) * gridSize;
   if (dotFlops) {
     report.breakdown.simdDotCycles =
         profile.simdDotSetupCycles +
-        static_cast<double>(dotFlops) / profile.simdDotFlopsPerCycle;
+        totalDotFlops / profile.simdDotFlopsPerCycle;
     report.breakdown.simtDotCycles =
         profile.simtDotSetupCycles +
-        static_cast<double>(dotFlops) / profile.simtDotFlopsPerCycle;
+        totalDotFlops / profile.simtDotFlopsPerCycle;
     resourceConfidence.push_back(profile.simdDotConfidence);
     resourceConfidence.push_back(profile.simtDotConfidence);
   }
@@ -2691,12 +2717,12 @@ mlir::ascend::estimateSimdSimtCandidates(
   if (regularDotFlops)
     report.breakdown.mixedSimdRegularDotCycles =
         profile.simdDotSetupCycles +
-        static_cast<double>(regularDotFlops) /
+        static_cast<double>(regularDotFlops) * gridSize /
             profile.simdDotFlopsPerCycle;
   if (features.simtAnchors.dotFlops)
     report.breakdown.mixedSimtAnchorDotCycles =
         profile.simtDotSetupCycles +
-        static_cast<double>(features.simtAnchors.dotFlops) /
+        static_cast<double>(features.simtAnchors.dotFlops) * gridSize /
             profile.simtDotFlopsPerCycle;
 
   const bool tinyDot =

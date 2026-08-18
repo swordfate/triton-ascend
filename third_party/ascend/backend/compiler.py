@@ -178,6 +178,10 @@ def _run_cpp_simd_simt_costmodel(mod, metadata, opt) -> str:
     )
     pm = ir.pass_manager(mod.context)
     pm.enable_debug()
+    grid_spec = ""
+    launch_grid = getattr(opt, "launch_grid", None)
+    if launch_grid:
+        grid_spec = "x".join(str(int(dim)) for dim in launch_grid)
     ascend.passes.ttir.add_select_simd_simt_costmodel(
         pm,
         mode,
@@ -187,6 +191,7 @@ def _run_cpp_simd_simt_costmodel(mod, metadata, opt) -> str:
         float(opt.auto_simt_scope_margin),
         bool(opt.compile_on_910_95),
         str(opt.auto_simt_scope_dump),
+        grid_spec,
     )
     ascend.passes.ttir.add_materialize_simt_scopes(pm)
     pm.run(mod)
@@ -1172,6 +1177,9 @@ class NPUOptions:
 
     # superblocking factor
     superblock_factor: int = 1
+    # Launch grid passed through from JITFunction.run; used by the SIMD/SIMT
+    # costmodel pass to scale per-CTA TTIR features to whole-program work.
+    launch_grid: tuple = ()
 
     def __post_init__(self):
         mode = self.auto_simt_scope_mode or os.environ.get(

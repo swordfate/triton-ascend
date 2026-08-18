@@ -285,6 +285,9 @@ struct SimdSimtCostModelOptions {
   /// plan.  Candidate costs remain reportable when false, but mixed is not
   /// eligible for selection.
   bool compileOn91095 = false;
+  /// Launch grid as a string "Gx x Gy x Gz" (e.g. "128x1x1").  Empty when
+  /// unknown.  Used to scale block-local TTIR features to whole-program work.
+  std::string launchGridSpec;
 };
 
 struct SimdSimtCostReport {
