@@ -168,7 +168,9 @@ def main():
                     out_path.write_text("\n".join(lines) + "\n")
 
     # Dot sweeps: K must be constexpr and divisible by BLOCK_K.
-    dot_shapes = [(128, 128, 64), (256, 256, 128), (512, 512, 128)]
+    # Prefer K=64 shapes; K=128 was observed to fail on SIMT with NPU 507035.
+    dot_shapes = [(64, 64, 64), (128, 128, 64), (256, 256, 64),
+                  (512, 512, 64), (512, 512, 128)]
     for M, N, K in dot_shapes:
         BLOCK_M, BLOCK_N, BLOCK_K = 64, 64, 64
         a = torch.randn(M, K, dtype=torch.float32, device=device)

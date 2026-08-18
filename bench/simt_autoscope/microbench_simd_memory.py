@@ -151,7 +151,9 @@ def main():
         print(json.dumps(row, sort_keys=True))
 
     # Sweep matrix: total elements and patterns.
-    for n in [1024 * 1024, 4 * 1024 * 1024]:
+    for n in [256 * 1024, 512 * 1024, 1024 * 1024,
+              2 * 1024 * 1024, 4 * 1024 * 1024,
+              8 * 1024 * 1024, 16 * 1024 * 1024]:
         BLOCK = 1024
         grid = (triton.cdiv(n, BLOCK),)
         src = torch.randn(n, dtype=torch.float32, device=device)
