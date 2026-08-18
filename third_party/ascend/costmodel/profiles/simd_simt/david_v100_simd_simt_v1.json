@@ -124,7 +124,7 @@
     "startup_system_cycles": {
       "description": "Legacy SIMD pipeline startup priors in SYS_CNT cycles. Only vector is currently consumed by Route Model scoring.",
       "vector": 21.212121,
-      "mte2": 30.303030,
+      "mte2": 30.30303,
       "mte3": 24.242424,
       "source": "Legacy selection-model seed inherited from device-cycle startup values",
       "confidence": "low",
@@ -209,14 +209,19 @@
       "mte3_bytes_per_system_cycle": 202.25,
       "source": "Selection-model seed retained for v4 score continuity; 202.25 B/SYS_CNT-cycle corresponds to 200 GB/s and must not be presented as the davidV100 75/71 GB/s data-mover specification",
       "confidence": "low",
-      "note": "Model-specific fallback, not shared microbenchmark evidence"
+      "note": "Model-specific fallback, not shared microbenchmark evidence",
+      "contiguous_bytes_per_system_cycle": 1250.76,
+      "gather_bytes_per_system_cycle": 2.272,
+      "strided_power_fit_A": 27.034,
+      "strided_power_fit_exponent": -0.631
     },
     "dot": {
       "description": "All-SIMD dot setup and throughput seed used for every dot operation; current calibrated admission is narrower and covers only tiny irregular dot.",
       "startup_system_cycles": 128.0,
       "flops_per_system_cycle": 4096.0,
       "source": "AscendModel cube startup/throughput seed; DES feedback is expected to refine scheduled lowering",
-      "confidence": "low"
+      "confidence": "low",
+      "small_kernel_min_cycles": 16233
     }
   },
   "simt": {
@@ -314,7 +319,7 @@
         "memory": 2.1411,
         "float_alu": 0.6429,
         "shuffle": 0.3763,
-        "predicate": 0.0380,
+        "predicate": 0.2356,
         "control": 0.2431,
         "int_alu": 0.2325
       },
@@ -332,7 +337,11 @@
       "description": "SIMT workload-effective GM load/store rates resolved from sequential rotating runtime-loop measurements. Indirect/random/coalescing behavior is not calibrated by these rates.",
       "load_throughput_measurement": "simt.gm.load.throughput",
       "store_throughput_measurement": "simt.gm.store.throughput",
-      "confidence": "low"
+      "confidence": "low",
+      "load_contiguous_warp_instructions_per_system_cycle": 0.4004,
+      "store_contiguous_warp_instructions_per_system_cycle": 0.4638,
+      "load_gather_warp_instructions_per_system_cycle": 0.0201,
+      "store_gather_warp_instructions_per_system_cycle": 0.0207
     },
     "mixed_setup_fallback": {
       "1": {
