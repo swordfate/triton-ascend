@@ -1,0 +1,124 @@
+{
+  "_comment": "Fitted from A5 microbenchmarks; SYS_CNT_MHZ=988.9",
+  "simd_memory": {
+    "mte2_mte3_bytes_per_cycle_contiguous": 1250.76,
+    "strided_power_fit": {
+      "A": 27.034,
+      "exponent": -0.631
+    },
+    "strided_read_B_per_cycle": {
+      "2": 16.475,
+      "4": 11.707,
+      "8": 8.025,
+      "16": 4.348
+    },
+    "gather_read_B_per_cycle": 2.272,
+    "masked_50_read_B_per_cycle": 1204.589,
+    "note": "B/cycle is one-direction read bytes; copy kernel has symmetric read+write."
+  },
+  "simt_gm_memory": {
+    "load": {
+      "contiguous_warp_instr_per_cycle_32warps": 0.4004,
+      "strided_power_fit": {
+        "A": 0.4471,
+        "exponent": -0.8461
+      },
+      "strided_warp_instr_per_cycle": {
+        "2": 0.2231,
+        "4": 0.1594,
+        "8": 0.0804,
+        "16": 0.0397
+      },
+      "gather_warp_instr_per_cycle": 0.0201
+    },
+    "store": {
+      "contiguous_warp_instr_per_cycle_32warps": 0.4638,
+      "strided_power_fit": {
+        "A": 0.5377,
+        "exponent": -0.9581
+      },
+      "strided_warp_instr_per_cycle": {
+        "2": 0.2722,
+        "4": 0.1453,
+        "8": 0.0741,
+        "16": 0.0372
+      },
+      "gather_warp_instr_per_cycle": 0.0207
+    }
+  },
+  "simt_predicate": {
+    "no_mask_add": {
+      "effective_warps_per_cycle_32warps": 0.2061,
+      "by_warps": {
+        "1": 0.0162,
+        "2": 0.0323,
+        "4": 0.0622,
+        "8": 0.108,
+        "16": 0.1499,
+        "32": 0.2061
+      }
+    },
+    "bounds_mask_add": {
+      "effective_warps_per_cycle_32warps": 0.2356,
+      "by_warps": {
+        "1": 0.0177,
+        "2": 0.0355,
+        "4": 0.0694,
+        "8": 0.136,
+        "16": 0.1701,
+        "32": 0.2356
+      }
+    },
+    "predicated_select": {
+      "effective_warps_per_cycle_32warps": 0.1851,
+      "by_warps": {
+        "1": 0.0133,
+        "2": 0.0266,
+        "4": 0.0515,
+        "8": 0.0977,
+        "16": 0.1312,
+        "32": 0.1851
+      }
+    },
+    "masked_gm_load": {
+      "effective_warps_per_cycle_32warps": 0.1602,
+      "by_warps": {
+        "1": 0.0099,
+        "2": 0.0197,
+        "4": 0.0391,
+        "8": 0.0758,
+        "16": 0.132,
+        "32": 0.1602
+      }
+    }
+  },
+  "simd_elementwise_vector_instr_per_cycle_n4M": {
+    "torch.float32": {
+      "add": 4.6572,
+      "mul": 4.6646,
+      "div": 4.5509,
+      "exp": 4.5812,
+      "cmp": 4.6266,
+      "select": 4.6498
+    },
+    "torch.float16": {
+      "add": 4.7256,
+      "mul": 4.7191,
+      "div": 4.7563,
+      "exp": 4.5719,
+      "cmp": 4.8028,
+      "select": 4.7297
+    }
+  },
+  "simd_dot": {
+    "measured_cycles": {
+      "128x128x64": 16258,
+      "256x256x128": 16395,
+      "512x512x128": 16233
+    },
+    "keep_flops_per_system_cycle": 4096.0,
+    "keep_startup_system_cycles": 128.0,
+    "small_kernel_min_cycles": 16233,
+    "note": "All three measured shapes are latency-floor dominated (~16.3k SYS_CNT cycles). Keep 4096/128 and add max(..., min_cycles)."
+  }
+}
