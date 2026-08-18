@@ -85,7 +85,7 @@ def strided_store_kernel(src, dst, n, stride, BLOCK: tl.constexpr):
     offs = pid * BLOCK + tl.arange(0, BLOCK)
     mask = offs < n
     x = tl.load(src + offs, mask=mask)
-    idx = pid + offs * stride
+    idx = offs * stride
     tl.store(dst + idx, x, mask=mask)
 
 
@@ -129,6 +129,12 @@ def main():
                     default="ascend_results/ttir_strided_patterns")
     ap.add_argument("--warmup", type=int, default=10)
     ap.add_argument("--reps", type=int, default=50)
+    ap.add_argument(
+        "--pattern",
+        default=None,
+        help="only run this pattern: rope_interleaved, column_access, "
+             "strided_store, strided_general (default: all)",
+    )
     args = ap.parse_args()
 
     device = "npu" if hasattr(torch, "npu") else "cuda"
@@ -140,6 +146,9 @@ def main():
     def bench(kernel, grid, kargs, constexpr_kwargs, num_warps, num_stages,
               label, dump=False):
         label = dict(label)
+        if args.pattern and label["pattern"] != args.pattern:
+            return
+        print(f"=== running {label} ===", flush=True)
         kernel[grid](*kargs, **constexpr_kwargs, num_warps=num_warps,
                      num_stages=num_stages)
         if device == "npu":
@@ -213,8 +222,10 @@ def main():
         bench(rope_interleaved_kernel, grid, (src, dst, n), {"BLOCK": BLOCK},
               num_warps, num_stages, label, dump=(n == 1024 * 1024))
 
-    # --- column_access: stride is runtime `cols` ---
-    for rows, cols in [(1024, 1024), (1024, 4096), (4096, 1024), (4096, 4096)]:
+    # --- column_access: stride is runtime `cols`.  Keep sizes small:
+    # reading one element per row is extremely slow (one cache line per
+    # 4-byte read when cols is large). ---
+    for rows, cols in [(256, 4096), (1024, 1024), (1024, 4096)]:
         BLOCK_C = min(1024, triton.next_power_of_2(rows))
         grid = (cols,)
         src = torch.randn(rows, cols, dtype=torch.float32, device=device)
