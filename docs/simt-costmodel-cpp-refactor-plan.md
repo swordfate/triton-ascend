@@ -125,6 +125,32 @@ allSimtRaw = simtSetup + programIssueScale * simtPayload
 3. 用 `analyze_residuals.py` 看残差；
 4. 若 5 case 残差可接受，再逐步把 domain multiplier 置 1 并回归。
 
+## 5b. A5 第二轮微基准：dot 与 scan
+
+### dot（SIMT 路由）
+
+- `128x128x64` SIMT dot：`0.01414 ms`；SIMD dot：`0.01644 ms`。
+- 结论：A5 上 `tl.dot` 在 SIMT 路由同样走 cube，SIMT dot 不应使用
+  `141 scalar FMA/cycle`。profile 已改为 `simt.dot.flops_per_system_cycle=4096`、
+  `startup_system_cycles=128`。
+- `256x256x128` SIMT dot 在 A5 上触发 NPU 507035 错误，暂无法采集；
+  不影响 cube 结论。
+
+### scan（cumsum）
+
+| n | SIMD latency ms | SIMT latency ms |
+|---|---|---|
+| 256 | 0.01152 | 0.01173 |
+| 1024 | 0.01591 | 0.01323 |
+| 4096 | 0.06067 | 0.01307 |
+| 8192 | 0.12049 | 0.01299 |
+
+- SIMD scan 近似 `cycles = 1000 + n / 0.0693`（O(n)）；
+- SIMT scan 在 n>=1024 后几乎恒定，约 `13 μs`；
+- 当前 costmodel 完全没有 scan 专用项，且把 scan 标为
+  `scan_template_ranking_uncalibrated`。下一步需要新增 scan 组件项并移除该
+  unsupported 标记。
+
 ## 5. Python 原型初步结果
 
 | case | measured | old raw ratio | new raw ratio |
