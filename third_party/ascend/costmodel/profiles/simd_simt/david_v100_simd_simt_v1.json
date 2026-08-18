@@ -222,6 +222,13 @@
       "source": "AscendModel cube startup/throughput seed; DES feedback is expected to refine scheduled lowering",
       "confidence": "low",
       "small_kernel_min_cycles": 0
+    },
+    "scan": {
+      "description": "Single-block cumsum microbenchmark on A5, fitted in issue-payload units before program_issue_scale.",
+      "fixed_system_cycles": 125.0,
+      "elements_per_system_cycle": 0.55,
+      "source": "A5 scan_simd.jsonl n=1024/4096/8192",
+      "confidence": "low"
     }
   },
   "simt": {
@@ -370,6 +377,12 @@
       },
       "confidence": "low",
       "note": "These values are mode1(empty SIMT plus tail barrier) minus mode6(barrier only) in a branch-heavy harness. They contain no SIMD phase and are used only as conservative setup fallbacks. Directional SIMD-to-SIMT, SIMT-to-SIMD, and dependent UB hand-off costs remain unmeasured."
+    },
+    "scan": {
+      "description": "Single-block cumsum microbenchmark on A5; latency is nearly flat for n>=1024.",
+      "fixed_system_cycles": 1000.0,
+      "source": "A5 scan_simt.jsonl n=1024/4096/8192",
+      "confidence": "low"
     }
   }
 }

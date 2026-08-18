@@ -137,6 +137,8 @@ struct CandidateProfile {
   double simdDotSetupCycles = 0.0;
   double simdDotFlopsPerCycle = 0.0;
   double simdDotSmallKernelMinCycles = 0.0;
+  double simdScanFixedCycles = 0.0;
+  double simdScanElementsPerCycle = 0.0;
   std::string simdDotConfidence = "none";
 
   int64_t simtWarpSize = 32;
@@ -145,6 +147,7 @@ struct CandidateProfile {
   llvm::StringMap<OpProfile> simtOps;
   double simtDotSetupCycles = 0.0;
   double simtDotFlopsPerCycle = 0.0;
+  double simtScanFixedCycles = 0.0;
   std::string simtDotConfidence = "none";
   double simtPredicateRate = 0.0;
   double simtShuffleRate = 0.0;
@@ -918,6 +921,12 @@ loadCandidateProfile(llvm::StringRef requestedPath) {
       profile.simdDotConfidence =
           reader.optionalString(*dot, "confidence", "none");
     }
+    if (const auto *scan = reader.object(*simd, "scan", "simd")) {
+      profile.simdScanFixedCycles =
+          reader.number(*scan, "fixed_system_cycles", "simd.scan");
+      profile.simdScanElementsPerCycle =
+          reader.number(*scan, "elements_per_system_cycle", "simd.scan");
+    }
   }
 
   const auto *simt = reader.object(*root, "simt", "profile");
@@ -953,6 +962,10 @@ loadCandidateProfile(llvm::StringRef requestedPath) {
           reader.number(*dot, "flops_per_system_cycle", "simt.dot");
       profile.simtDotConfidence =
           reader.optionalString(*dot, "confidence", "none");
+    }
+    if (const auto *scan = reader.object(*simt, "scan", "simt")) {
+      profile.simtScanFixedCycles =
+          reader.number(*scan, "fixed_system_cycles", "simt.scan");
     }
     if (const auto *camodel =
             reader.object(*simt, "camodel_effective", "simt")) {
@@ -1666,6 +1679,8 @@ llvm::json::Object SimdSimtCostBreakdown::toJSON(
       mixedSimtAnchorShuffleCycles;
   partition["simt_anchor_predicate_system_cycles"] =
       mixedSimtAnchorPredicateCycles;
+  partition["simt_anchor_scan_system_cycles"] =
+      mixedSimtAnchorScanCycles;
   partition["simt_anchor_payload_system_cycles"] =
       mixedSimtAnchorPayloadCycles;
   partition["measured_boundary_system_cycles"] = nullptr;
@@ -1681,6 +1696,8 @@ llvm::json::Object SimdSimtCostBreakdown::toJSON(
   execution["shuffle_system_cycles"] = simtShuffleCycles;
   execution["predicate_warp_instructions"] = simtPredicateInstructions;
   execution["predicate_system_cycles"] = simtPredicateCycles;
+  execution["scan_system_cycles"] = simtScanCycles;
+  execution["simd_scan_system_cycles"] = simdScanCycles;
   execution["program_issue_scale"] = programIssueScale;
   execution["simd_setup_system_cycles"] = simdSetupCycles;
   execution["simt_setup_system_cycles"] = simtSetupCycles;
@@ -2572,18 +2589,18 @@ mlir::ascend::estimateSimdSimtCandidates(
 
   const int64_t weightedScans =
       mapValue(features.weightedOps, "scan", features.scanOps);
-  if (weightedScans)
-    report.unsupported.push_back("scan_template_ranking_uncalibrated");
   const int64_t shuffleLevels = static_cast<int64_t>(
       std::ceil(std::log2(static_cast<double>(profile.simtWarpSize))));
   const int64_t reduceElements =
       mapValue(features.opElements, "reduce", 0);
   const int64_t scanElements =
       mapValue(features.opElements, "scan", 0);
-  double shuffleElements =
-      static_cast<double>(std::max<int64_t>(0, reduceElements + scanElements));
-  if (shuffleElements == 0.0 && (weightedReductions + weightedScans) > 0)
-    shuffleElements = static_cast<double>(weightedReductions + weightedScans) *
+
+  // Scan has a dedicated measured cost model.  Keep scan out of the
+  // reduction-shuffle term so it is not charged twice.
+  double shuffleElements = static_cast<double>(std::max<int64_t>(0, reduceElements));
+  if (shuffleElements == 0.0 && weightedReductions > 0)
+    shuffleElements = static_cast<double>(weightedReductions) *
                       static_cast<double>(maxNumel);
   report.breakdown.simtShuffleInstructions =
       std::ceil(shuffleElements / profile.simtWarpSize) *
@@ -2602,12 +2619,11 @@ mlir::ascend::estimateSimdSimtCandidates(
       mapValue(features.simtAnchors.opElements, "reduce", 0);
   const int64_t anchorScanElements =
       mapValue(features.simtAnchors.opElements, "scan", 0);
-  double anchorShuffleElements = static_cast<double>(
-      std::max<int64_t>(0, anchorReduceElements + anchorScanElements));
-  if (anchorShuffleElements == 0.0 &&
-      (anchorWeightedReductions + anchorWeightedScans) > 0)
+  double anchorShuffleElements =
+      static_cast<double>(std::max<int64_t>(0, anchorReduceElements));
+  if (anchorShuffleElements == 0.0 && anchorWeightedReductions > 0)
     anchorShuffleElements =
-        static_cast<double>(anchorWeightedReductions + anchorWeightedScans) *
+        static_cast<double>(anchorWeightedReductions) *
         static_cast<double>(anchorMaxNumel);
   const double anchorShuffleInstructions =
       std::ceil(anchorShuffleElements / profile.simtWarpSize) *
@@ -2617,9 +2633,34 @@ mlir::ascend::estimateSimdSimtCandidates(
   if (report.breakdown.simtShuffleInstructions != 0.0)
     resourceConfidence.push_back(profile.simtShuffleConfidence);
 
+  const int64_t regularScanElements =
+      std::max<int64_t>(0, scanElements - anchorScanElements);
+  if (scanElements > 0 && profile.simdScanElementsPerCycle > 0.0) {
+    report.breakdown.simdScanCycles =
+        profile.simdScanFixedCycles +
+        static_cast<double>(scanElements) /
+            profile.simdScanElementsPerCycle;
+    report.breakdown.simdComputeCycles +=
+        report.breakdown.simdScanCycles;
+    report.breakdown.simtScanCycles = profile.simtScanFixedCycles;
+  }
+  if (regularScanElements > 0 && profile.simdScanElementsPerCycle > 0.0)
+    report.breakdown.mixedSimdRegularComputeCycles +=
+        profile.simdScanFixedCycles +
+        static_cast<double>(regularScanElements) /
+            profile.simdScanElementsPerCycle;
+  if (anchorScanElements > 0)
+    report.breakdown.mixedSimtAnchorScanCycles =
+        profile.simtScanFixedCycles;
+
+  // Bounds masks generated by the scan lowering are already represented by
+  // the dedicated scan term above.  Avoid charging them again as predicated
+  // execution.
   const int64_t predicatedMaskOps =
-      features.maskTensorOps > 0 ? features.maskTensorOps
-                                 : features.maskRankSum;
+      scanElements > 0
+          ? 0
+          : (features.maskTensorOps > 0 ? features.maskTensorOps
+                                         : features.maskRankSum);
   report.breakdown.simtPredicateInstructions =
       static_cast<double>(predicatedMaskOps) *
       std::ceil(static_cast<double>(maxNumel) / profile.simtWarpSize);
@@ -2627,7 +2668,7 @@ mlir::ascend::estimateSimdSimtCandidates(
       report.breakdown.simtPredicateInstructions /
       profile.simtPredicateRate;
   const int64_t anchorPredicatedMaskOps =
-      features.simtAnchors.maskRankSum;
+      anchorScanElements > 0 ? 0 : features.simtAnchors.maskRankSum;
   const double anchorPredicateInstructions =
       static_cast<double>(anchorPredicatedMaskOps) *
       std::ceil(static_cast<double>(anchorMaxNumel) /
@@ -2788,7 +2829,8 @@ mlir::ascend::estimateSimdSimtCandidates(
                    report.breakdown.mixedSimtAnchorDotCycles +
                    report.breakdown.mixedSimtAnchorShuffleCycles,
                report.breakdown.mixedSimtAnchorMemoryCycles) +
-      report.breakdown.mixedSimtAnchorPredicateCycles;
+      report.breakdown.mixedSimtAnchorPredicateCycles +
+      report.breakdown.mixedSimtAnchorScanCycles;
 
   const int64_t remainingPointerOps =
       std::max<int64_t>(0, features.pointerTensorOps -

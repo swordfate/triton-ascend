@@ -211,6 +211,8 @@ struct SimdSimtCostBreakdown {
 
   double simdComputeCycles = 0.0;
   double simtComputeCycles = 0.0;
+  double simdScanCycles = 0.0;
+  double simtScanCycles = 0.0;
   double simdDotCycles = 0.0;
   double simtDotCycles = 0.0;
   double simdLoadCycles = 0.0;
@@ -240,6 +242,7 @@ struct SimdSimtCostBreakdown {
   double mixedSimtAnchorMemoryCycles = 0.0;
   double mixedSimtAnchorShuffleCycles = 0.0;
   double mixedSimtAnchorPredicateCycles = 0.0;
+  double mixedSimtAnchorScanCycles = 0.0;
   double mixedSimtAnchorPayloadCycles = 0.0;
   double mixedBoundaryCycles = 0.0;
   double mixedRemainingStructuralPenaltyRatio = 0.0;
