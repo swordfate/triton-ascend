@@ -26,7 +26,7 @@ def ms_to_cycles(ms: float) -> float:
 
 
 def parse_predicate_log(path: Path):
-    """Return {mode: {warps: (cycles_per_iter, effective_warps_per_cycle)}}."""
+    """Return {mode: {active_lanes: {warps: (cycles_per_iter, effective_warps_per_cycle)}}}."""
     data = {}
     with path.open() as f:
         for line in f:
@@ -41,7 +41,7 @@ def parse_predicate_log(path: Path):
                 cpi = float(parts[3]); rate = float(parts[4])
             except ValueError:
                 continue
-            data.setdefault(mode, {})[warps] = (cpi, rate)
+            data.setdefault(mode, {}).setdefault(active, {})[warps] = (cpi, rate)
     return data
 
 
@@ -144,10 +144,16 @@ def main():
     pred = parse_predicate_log(res_dir / "simt_predicate_host.log")
     pred_fit = {}
     for mode, name in [(0, "no_mask_add"), (1, "bounds_mask_add"), (2, "predicated_select"), (3, "masked_gm_load")]:
-        rate32 = pred[mode][32][1]
         pred_fit[name] = {
-            "effective_warps_per_cycle_32warps": round(rate32, 4),
-            "by_warps": {str(w): round(pred[mode][w][1], 4) for w in sorted(pred[mode])},
+            "effective_warps_per_cycle_32warps_active32": round(pred[mode][32][32][1], 4),
+            "effective_warps_per_cycle_32warps_active1": round(pred[mode][1][32][1], 4),
+            "by_active_lanes": {
+                str(active): {
+                    str(w): round(pred[mode][active][w][1], 4)
+                    for w in sorted(pred[mode][active])
+                }
+                for active in sorted(pred[mode])
+            },
         }
     fitted["simt_predicate"] = pred_fit
 

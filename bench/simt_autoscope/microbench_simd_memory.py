@@ -80,6 +80,11 @@ def main():
 
     def bench(kernel, grid, kargs, constexpr_kwargs, num_warps, num_stages,
               label):
+        label = dict(label)
+        # ``masked`` loads only active_ratio of the elements, but stores all n
+        # elements.  The label can override read_bytes directly.
+        if "read_bytes" not in label and "active_ratio" in label:
+            label["read_bytes"] = int(label["n"] * 4 * label["active_ratio"])
         kernel[grid](*kargs, **constexpr_kwargs, num_warps=num_warps,
                      num_stages=num_stages)
         if hasattr(torch, "npu"):
@@ -112,7 +117,7 @@ def main():
             import time
             latency_ms = (time.perf_counter() - t0) * 1000.0 / args.reps
 
-        read_bytes = label["n"] * 4
+        read_bytes = label.get("read_bytes", label["n"] * 4)
         write_bytes = label["n"] * 4
         total_bytes = read_bytes + write_bytes
         row = {
