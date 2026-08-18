@@ -125,13 +125,24 @@ def main():
         read_bytes = label.get("read_bytes", label["n"] * 4)
         write_bytes = label["n"] * 4
         total_bytes = read_bytes + write_bytes
+        num_ctas = 1
+        if isinstance(grid, tuple):
+            for dim in grid:
+                num_ctas *= int(dim)
+        else:
+            num_ctas = int(grid)
         row = {
             "label": label,
+            "num_ctas": num_ctas,
             "latency_ms": latency_ms,
             "read_bytes": read_bytes,
             "write_bytes": write_bytes,
             "total_bytes": total_bytes,
+            "per_cta_read_bytes": read_bytes / num_ctas,
+            "per_cta_write_bytes": write_bytes / num_ctas,
+            "per_cta_total_bytes": total_bytes / num_ctas,
             "bytes_per_second": total_bytes / (latency_ms / 1000.0),
+            "per_cta_bytes_per_second": (total_bytes / num_ctas) / (latency_ms / 1000.0),
         }
         out_path = Path(args.out)
         out_path.parent.mkdir(parents=True, exist_ok=True)

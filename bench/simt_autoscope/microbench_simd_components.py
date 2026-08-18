@@ -118,6 +118,17 @@ def main():
 
         row = dict(row)
         row["latency_ms"] = latency_ms
+        num_ctas = 1
+        if isinstance(grid, tuple):
+            for dim in grid:
+                num_ctas *= int(dim)
+        else:
+            num_ctas = int(grid)
+        row["num_ctas"] = num_ctas
+        if "elements" in row and row["elements"]:
+            row["elements_per_cta"] = row["elements"] / num_ctas
+        if "flops" in row and row["flops"]:
+            row["flops_per_cta"] = row["flops"] / num_ctas
         out_path = Path(args.out)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         with out_path.open("a", encoding="utf-8") as f:
