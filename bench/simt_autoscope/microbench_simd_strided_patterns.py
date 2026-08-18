@@ -57,8 +57,7 @@ import triton.language as tl
 def rope_interleaved_kernel(src, dst, n, BLOCK: tl.constexpr):
     pid = tl.program_id(0)
     base = pid * BLOCK
-    half = BLOCK // 2
-    c = tl.arange(0, half)
+    c = tl.arange(0, BLOCK // 2)
     cols_re = base + c * 2
     cols_im = cols_re + 1
     mask = cols_im < n
