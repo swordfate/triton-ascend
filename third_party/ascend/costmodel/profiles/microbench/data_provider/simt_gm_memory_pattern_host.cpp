@@ -78,11 +78,15 @@ static long long minimum(const char *fn, rtStream_t stream, void *dout,
 static double cyclesPerIter(const char *fn, rtStream_t stream, void *dout,
                             void *gm, int nwarp, int mode, int pattern,
                             int stride) {
-  const int K = 4;
-  const int I1 = 1024;
-  const int I2 = 4096;
+  // Shorter than the contiguous-only probe because gather/stride patterns are
+  // much slower and can make the sweep take very long on the board.
+  const int K = 2;
+  const int I1 = 256;
+  const int I2 = 1024;
   long long c1 = minimum(fn, stream, dout, gm, K, nwarp, I1, mode, pattern, stride);
   long long c2 = minimum(fn, stream, dout, gm, K, nwarp, I2, mode, pattern, stride);
+  if (c2 <= c1)
+    return -1.0;
   return (double)(c2 - c1) / ((double)(I2 - I1) * K);
 }
 
@@ -120,8 +124,13 @@ int main() {
                                      pattern, stride);
           double bytes = (double)warps * 32.0 * 8.0 * sizeof(float);
           double warp_instr = (double)warps * 8.0;
-          printf("%d,%d,%d,%d,%.6f,%.6f,%.6f\n", mode, pattern, stride,
-                 warps, cpi, bytes / cpi, warp_instr / cpi);
+          if (cpi <= 0.0) {
+            printf("%d,%d,%d,%d,invalid,invalid,invalid\n", mode, pattern,
+                   stride, warps);
+          } else {
+            printf("%d,%d,%d,%d,%.6f,%.6f,%.6f\n", mode, pattern, stride,
+                   warps, cpi, bytes / cpi, warp_instr / cpi);
+          }
         }
       }
     }

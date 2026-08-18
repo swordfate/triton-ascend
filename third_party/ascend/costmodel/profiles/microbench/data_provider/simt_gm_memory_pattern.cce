@@ -23,22 +23,35 @@ simt_gm_memory_pattern_core(__gm__ T *gm, __ubuf__ T *sink, int nlane,
 
   int tid = warp * 32 + lane;
   int threads = nwarp * 32;
+  const int max_elements = 32 * 1024 * 1024;  // 128 MiB / sizeof(float)
   unsigned int state = (unsigned int)(tid + 1);
   T acc = (T)(tid + 1);
 
   for (int i = 0; i < iters; ++i) {
-    int base = (i & 4095) * threads * 8 + tid;
-    if (pattern == 0) {
-      base = (i & 4095) * threads * 8 + tid;
-    } else if (pattern == 1) {
-      base = ((i & 4095) * threads * 8 + tid) * stride;
-    } else {
-      base = 0;
-    }
+    int base = (i & 4095) * threads * 8;
 
     if (mode == 0) {
       T x0, x1, x2, x3, x4, x5, x6, x7;
-      if (pattern == 2) {
+      if (pattern == 0) {
+        x0 = gm[base + tid + threads * 0];
+        x1 = gm[base + tid + threads * 1];
+        x2 = gm[base + tid + threads * 2];
+        x3 = gm[base + tid + threads * 3];
+        x4 = gm[base + tid + threads * 4];
+        x5 = gm[base + tid + threads * 5];
+        x6 = gm[base + tid + threads * 6];
+        x7 = gm[base + tid + threads * 7];
+      } else if (pattern == 1) {
+        // Stride across lanes, still inside the 128 MiB buffer.
+        x0 = gm[(base + tid * stride + threads * 0) % max_elements];
+        x1 = gm[(base + tid * stride + threads * 1) % max_elements];
+        x2 = gm[(base + tid * stride + threads * 2) % max_elements];
+        x3 = gm[(base + tid * stride + threads * 3) % max_elements];
+        x4 = gm[(base + tid * stride + threads * 4) % max_elements];
+        x5 = gm[(base + tid * stride + threads * 5) % max_elements];
+        x6 = gm[(base + tid * stride + threads * 6) % max_elements];
+        x7 = gm[(base + tid * stride + threads * 7) % max_elements];
+      } else {
         state = state * 1103515245u + 12345u;
         x0 = gm[state & 0x1FFFFF];
         state = state * 1103515245u + 12345u;
@@ -55,19 +68,28 @@ simt_gm_memory_pattern_core(__gm__ T *gm, __ubuf__ T *sink, int nlane,
         x6 = gm[state & 0x1FFFFF];
         state = state * 1103515245u + 12345u;
         x7 = gm[state & 0x1FFFFF];
-      } else {
-        x0 = gm[base + threads * 0];
-        x1 = gm[base + threads * 1];
-        x2 = gm[base + threads * 2];
-        x3 = gm[base + threads * 3];
-        x4 = gm[base + threads * 4];
-        x5 = gm[base + threads * 5];
-        x6 = gm[base + threads * 6];
-        x7 = gm[base + threads * 7];
       }
       acc += x0 + x1 + x2 + x3 + x4 + x5 + x6 + x7;
     } else {
-      if (pattern == 2) {
+      if (pattern == 0) {
+        gm[base + tid + threads * 0] = acc;
+        gm[base + tid + threads * 1] = acc + (T)1;
+        gm[base + tid + threads * 2] = acc + (T)2;
+        gm[base + tid + threads * 3] = acc + (T)3;
+        gm[base + tid + threads * 4] = acc + (T)4;
+        gm[base + tid + threads * 5] = acc + (T)5;
+        gm[base + tid + threads * 6] = acc + (T)6;
+        gm[base + tid + threads * 7] = acc + (T)7;
+      } else if (pattern == 1) {
+        gm[(base + tid * stride + threads * 0) % max_elements] = acc;
+        gm[(base + tid * stride + threads * 1) % max_elements] = acc + (T)1;
+        gm[(base + tid * stride + threads * 2) % max_elements] = acc + (T)2;
+        gm[(base + tid * stride + threads * 3) % max_elements] = acc + (T)3;
+        gm[(base + tid * stride + threads * 4) % max_elements] = acc + (T)4;
+        gm[(base + tid * stride + threads * 5) % max_elements] = acc + (T)5;
+        gm[(base + tid * stride + threads * 6) % max_elements] = acc + (T)6;
+        gm[(base + tid * stride + threads * 7) % max_elements] = acc + (T)7;
+      } else {
         state = state * 1103515245u + 12345u;
         gm[state & 0x1FFFFF] = acc;
         state = state * 1103515245u + 12345u;
@@ -84,15 +106,6 @@ simt_gm_memory_pattern_core(__gm__ T *gm, __ubuf__ T *sink, int nlane,
         gm[state & 0x1FFFFF] = acc + (T)6;
         state = state * 1103515245u + 12345u;
         gm[state & 0x1FFFFF] = acc + (T)7;
-      } else {
-        gm[base + threads * 0] = acc;
-        gm[base + threads * 1] = acc + (T)1;
-        gm[base + threads * 2] = acc + (T)2;
-        gm[base + threads * 3] = acc + (T)3;
-        gm[base + threads * 4] = acc + (T)4;
-        gm[base + threads * 5] = acc + (T)5;
-        gm[base + threads * 6] = acc + (T)6;
-        gm[base + threads * 7] = acc + (T)7;
       }
       acc += (T)1;
     }
