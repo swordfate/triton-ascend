@@ -13,8 +13,8 @@
 | 1 | 读懂现有 SIMT auto-scope costmodel 的 anchor 识别、特征抽取、三路线打分、gate、scope 物化链路 | ✅ 已完成 |
 | 2 | 设计需要重测的 rate、影响 rate 的 feature、以及 5 个代表性 Triton 内置 kernel | ✅ 已完成 |
 | 3 | 编写测量工具：`run_triton_benchmark.py`、`analyze_residuals.py`、`microbench_simd_memory.py`、`microbench_simd_components.py`、`simt_predicate.cce`、`simt_gm_memory_pattern.cce`，并恢复 baseline `data_provider/` cce probe | ✅ 已完成，已推送 `kx_simt_costmodel` |
-| 4 | 在 A5 上运行测量工具，采集 rate 训练数据 | ◀◀◀ **当前在这里** |
-| 5 | 根据 A5 数据拟合 `rate = f(pattern_features)`，替换 profile JSON 中写死的单点 rate | 待完成 |
+| 4 | 在 A5 上运行测量工具，采集 rate 训练数据 | ✅ 已完成（数据在 `ascend_results/`） |
+| 5 | 根据 A5 数据拟合 `rate = f(pattern_features)`，替换 profile JSON 中写死的单点 rate | ◀◀◀ **当前在这里** |
 | 6 | 将拟合结果接入 C++ costmodel / profile JSON，使运行时按 TTIR 特征在线计算 rate | 待完成 |
 | 7 | 重跑 5 个代表性 Triton kernel，检查 `predicted_ratio` 与 `measured_ratio` 是否接近 | 待完成 |
 | 8 | 在 `auto` 模式下做真实路由决策验证 | 待完成（最终目标） |
@@ -42,6 +42,53 @@
   - `bench/simt_autoscope/microbench_simd_components.py`
   - `third_party/ascend/costmodel/profiles/microbench/data_provider/simt_predicate.cce`
   - `third_party/ascend/costmodel/profiles/microbench/data_provider/simt_gm_memory_pattern.cce`
+
+### Step 4 实测数据摘要（A5，SYS_CNT=988.9 MHz）
+
+#### SIMD memory（Triton，compile_mode=simd）
+
+| pattern | n=4M 读 B/cycle | 初步拟合 |
+|---|---|---|
+| contiguous | 1250.8 | 固定基准 |
+| strided s=2/4/8/16 | 16.5 / 11.7 / 8.0 / 4.3 | `rate ≈ 27.0 * stride^-0.63` |
+| gather | 2.3 | 固定惩罚 |
+| masked(50%) | 1204.6 | 接近 contiguous |
+
+结论：当前 `202.25 B/cycle` 只对 contiguous/masked 大致可用，对 strided/gather
+严重高估；gather 实际只有约 2.3 B/cycle。
+
+#### SIMD compute/dot（Triton，compile_mode=simd）
+
+- elementwise f32（load+op+store，1M）：有效 vector instr/cycle 约
+  `add=1.47`，`mul/div/exp/cmp/select=1.15~1.17`；
+- dot 实测 flops/cycle：`128/128/64=129`，`256/256/128=1023`，
+  `512/512/128=4134`；三个 shape 延迟几乎都是 0.0164 ms，说明存在
+  **约 16 μs 的固定 overhead**，当前 `dot.setup=128 cycles` 无法覆盖小 matmul。
+
+#### SIMT predicate（cce，32 warps）
+
+| 模式 | 有效 warp instr/cycle |
+|---|---|
+| 无 mask add | 0.206 |
+| bounds-mask add | 0.235 |
+| predicated select | 0.185 |
+| masked GM load | 0.160 |
+
+结论：当前 `simtPredicateRate=0.038` 约比实测 masked add 悲观 6 倍。
+
+#### SIMT GM memory pattern（cce，32 warps）
+
+| pattern | load warp instr/cycle | store warp instr/cycle |
+|---|---|---|
+| contiguous | 0.400 | 0.464 |
+| stride=2 | 0.223 | 0.272 |
+| stride=4 | 0.159 | 0.145 |
+| stride=8 | 0.080 | 0.074 |
+| stride=16 | 0.040 | 0.037 |
+| gather | 0.020 | 0.021 |
+
+结论：当前 `simt.gm.load=0.176` / `store=0.129` 只代表“近 contiguous”场景；
+gather 场景实际只有约 0.020 warp instr/cycle，需要按 pattern 查表。
 
 ## 1. 当前模型的问题（简要）
 
