@@ -125,6 +125,20 @@ allSimtRaw = simtSetup + programIssueScale * simtPayload
 3. 用 `analyze_residuals.py` 看残差；
 4. 若 5 case 残差可接受，再逐步把 domain multiplier 置 1 并回归。
 
+## 5c. v5 实际-cycle 口径结果（program_issue_scale=1.0）
+
+| case | measured ratio | v5 raw ratio |
+|---|---|---|
+| block_matmul | 1.106 | 0.993 |
+| elementwise_silu_mul | 0.864 | 0.951 |
+| rowwise_reduce_masked | 0.984 | 0.880 |
+| single_block_cumsum | 4.904 | 4.811 |
+| indirect_elementwise | 44.598 | 73.910 |
+
+剩余问题：indirect_elementwise 仍高估约 1.66x。根因是模型把
+`tt.load` 的所有 load bytes 都按 gather rate 计算，但实际一半是连续索引 load，
+一半才是 gather data load。下一步需要拆分 contiguous/gather 字节。
+
 ## 5b. A5 第二轮微基准：dot 与 scan
 
 ### dot（SIMT 路由）
