@@ -505,3 +505,88 @@ raw / measured = 2.04x
 
 这些目标值最终会换算成 profile 中对应的 rate 或 flops_per_cycle，再按特征
 拟合成在线可查的 `rate = f(features)`。
+
+
+## 8. 优化存档（截至 v6）
+
+> v6 后 5 个内置 case 的 raw ratio 与实测 ratio 基本对齐。以下优化都是有效
+> 且已经落入代码的，后续优化以本节为基线。
+
+### 8.1 数据与工具基础
+
+| 提交 | 内容 | 作用 |
+|---|---|---|
+| `74594b2d1` | 新增 `run_triton_benchmark.py` / `analyze_residuals.py` | 三路由 5-case 采集与残差定位 |
+| `e5776d678` | Triton kernel 移到模块顶层 | 修复 `tl is not defined` |
+| `ae239d667` | 修复 report 扁平字段读取 | 残差分析能读到 breakdown |
+| `2b996f317` | 恢复 baseline cce probe 并新增 predicate / GM pattern probe | cce 层训练数据 |
+| `d58c4f49d` | 微基准输出 per-CTA 指标 | 对齐 TTIR block-local 口径 |
+| `de5fcf6ed` | 扩展 SIMD memory / dot sweep 尺寸 | 拟合 size-dependent rate |
+
+### 8.2 公式与 rate 有效优化
+
+| 提交 | 优化 | 解决的问题 |
+|---|---|---|
+| `460faaee7` | 惩罚按组件归位：irregular→memory、tiny_dot→dot、mask/reduction/loop/control/rank1→compute | 修复 `(1+Pstruct)` 整体乘导致的内存/compute 错误 |
+| `bc8e0a4ab` | SIMT dot 改用 cube：`flops_per_cycle` 141→4096 | `block_matmul` 中 SIMT dot 被高估 14 倍 |
+| `bb24c6ac0` | 新增 scan 专用成本：SIMD O(n)，SIMT 固定 | `single_block_cumsum` 预测从 0.010 对齐到 5.0 |
+| `7fc20efd3` | 修复 SIMT scan 未加入 payload | 补上后 cumsum 完全对齐 |
+| `0dfd996bd` | 从 JIT 把 launch grid 传入 C++ | 让 per-CTA TTIR 特征能换算 whole-program 工作量 |
+| `658835097` | 区分 kernel-level rate 与 CTA-level rate | SIMT GM cce rate 不再被 grid 错误放大 |
+| `f13a203c6` | `program_issue_scale=1.0`，切换实际-cycle 口径；增加 min kernel cycle floor；domain multiplier 暂置 1.0 | 消除 8 倍错位，4/5 case 对齐 |
+| `375835355` | SIMD memory 拆分 contiguous/gather load bytes | `indirect_elementwise` SIMD 分数 923k→466k，v6 对齐 |
+
+### 8.3 当前 v6 基准
+
+| case | 实测 ratio | v6 raw ratio |
+|---|---|---|
+| block_matmul | ~1.106 | ~0.993 |
+| elementwise_silu_mul | ~0.864 | ~0.951 |
+| rowwise_reduce_masked | ~0.984 | ~0.880 |
+| single_block_cumsum | ~4.904 | ~4.811 |
+| indirect_elementwise | ~44.6 | ~45 左右（SIMD 分数 466k） |
+
+## 9. 距离最终目标还需要优化/验证的点
+
+1. **外部 25 个真实算子验证**
+   目前只在 5 个内置 case 上对齐。需要把 FBGEMM / VLLM / SGLang / LigerKernel /
+   FlagGems 中梳理出的目标算子逐个接入 benchmark，检查泛化性。
+
+2. **dot 模型仍需更细标定**
+   - 目前 `small_kernel_min_cycles=16200` 是基于 3 个 SIMD shape 的 floor；
+   - SIMT dot 只有 `128x128x64` 一个成功点，`256x256x128` 会 NPU 507035；
+   - 需要更多成功 shape 拟合 `dotCycles = max(setup + flops/rate, floor)`。
+
+3. **SIMT GM rate 应 warp 数自适应**
+   cce 数据已有 1/2/4/8/16/32 warps 的 rate，但 C++ 仍只用 32-warp 单点。
+   下一步把 `simt_load/store_rate = f(pattern, num_warps)` 接入。
+
+4. **SIMD strided memory 尚未接入**
+   已测出 stride=2/4/8/16 的 rate，但 C++ 目前只区分 contiguous/gather，
+   还没有从 TTIR 特征估计 stride 并查表。
+
+5. **predicate 指令数仍较粗**
+   目前用 `maskTensorOps * ceil(maxNumel/32)`，还没用 `active_ratio`、
+   `mode` 等 cce 特征。`simt_predicate.cce` 的数据可以支持更细的拟合。
+
+6. **shuffle 模型只覆盖单 warp 树**
+   当前 `ceil(reduceElements/32)*5` 没有区分 reduce axis 长度和跨 warp reduce。
+
+7. **mixed 路由的 transition/setup 仍是旧 fallback**
+   `mixed_setup_fallback` 仍来自空 VF harness，`mixedBoundaryCycles` 仍为 0。
+   需要测真实 SIMD↔SIMT 切换成本。
+
+8. **domain coverage 与 multiplier 需要重校**
+   现在 multiplier 临时置 1.0。公式稳定后需要：
+   - 重测/扩展 coverage 边界；
+   - 重新拟合 multiplier，或证明其可移除。
+
+9. **auto 模式端到端验证**
+   目前主要验证 report 模式 raw ratio。最终要在 `auto` 模式下确认：
+   - mixed scope 物化正确；
+   - 实际路由延迟与模型选择一致；
+   - 没有因 legality/confidence/gain gate 误拒。
+
+10. **更多 shape/grid 的回归集**
+    每个目标算子建议至少覆盖 3 个 shape × 3 条路由，并记录 grid、num_warps、
+    num_stages，作为长期回归集，防止后续调参回退。
