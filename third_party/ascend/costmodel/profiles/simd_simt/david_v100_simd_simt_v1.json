@@ -200,6 +200,30 @@
         "relative_to": "f32.add",
         "factor": 2.0,
         "confidence": "low"
+      },
+      "i32.bitop": {
+        "description": "Integer bitwise ops (and/or/xor/shl/shr). Placeholder assuming scalarized execution on the SIMD vector unit (~1 element/cycle, measured ~1.2 cycles/element-op on silu_quantize_mx4) until the SIMD bit-op microbenchmark lands.",
+        "relative_to": "f32.add",
+        "factor": 96.0,
+        "confidence": "low"
+      },
+      "i32.min": {
+        "description": "Integer min. Estimated relative to f32.add, aligned with f32.max.",
+        "relative_to": "f32.add",
+        "factor": 1.2,
+        "confidence": "low"
+      },
+      "i32.rem": {
+        "description": "Integer remainder. Estimated relative to f32.add, aligned with f32.div.",
+        "relative_to": "f32.add",
+        "factor": 12.0,
+        "confidence": "low"
+      },
+      "convert.bitcast": {
+        "description": "Tensor bitcast. Assumed free register reinterpretation; needs validation.",
+        "relative_to": "f32.add",
+        "factor": 1.0,
+        "confidence": "low"
       }
     },
     "memory": {
@@ -310,6 +334,30 @@
         "description": "Estimated FP32 SIMT clamp cost relative to f32.add; factor multiplies the base cycle estimate.",
         "relative_to": "f32.add",
         "factor": 2.0,
+        "confidence": "low"
+      },
+      "i32.bitop": {
+        "description": "Integer bitwise ops (and/or/xor/shl/shr). AIV integer ALU is assumed comparable to float ALU.",
+        "relative_to": "f32.add",
+        "factor": 1.0,
+        "confidence": "low"
+      },
+      "i32.min": {
+        "description": "Integer min. Estimated relative to f32.add, aligned with f32.max.",
+        "relative_to": "f32.add",
+        "factor": 1.2,
+        "confidence": "low"
+      },
+      "i32.rem": {
+        "description": "Integer remainder. Estimated relative to f32.add, aligned with f32.div.",
+        "relative_to": "f32.add",
+        "factor": 12.0,
+        "confidence": "low"
+      },
+      "convert.bitcast": {
+        "description": "Tensor bitcast. Assumed free register reinterpretation; needs validation.",
+        "relative_to": "f32.add",
+        "factor": 1.0,
         "confidence": "low"
       }
     },

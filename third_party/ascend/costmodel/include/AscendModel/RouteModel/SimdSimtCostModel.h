@@ -119,6 +119,9 @@ struct SimdSimtFeatureSummary {
   int64_t castOps = 0;
   int64_t clampOps = 0;
   int64_t scalarOps = 0;
+  /// arith./math. ops not covered by classifyWeightedOp.  Surfaces in the
+  /// report as unsupported cost terms instead of being silently ignored.
+  int64_t unclassifiedArithOps = 0;
 
   int64_t maxTensorRank = 0;
   int64_t maxTensorNumel = 1;

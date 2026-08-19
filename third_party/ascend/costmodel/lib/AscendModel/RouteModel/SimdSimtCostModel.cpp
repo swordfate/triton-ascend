@@ -270,7 +270,7 @@ static void initializeWorkMaps(SummaryT &features) {
   for (llvm::StringRef key :
        {"load", "store", "reduce", "scan", "gather", "histogram", "atomic",
         "add", "sub", "mul", "div", "max", "abs", "exp", "log", "cmp",
-        "select", "cast", "clamp"}) {
+        "select", "cast", "clamp", "bitop", "min", "rem", "bitcast"}) {
     features.weightedOps[key] = 0;
     features.opElements[key] = 0;
   }
@@ -441,6 +441,16 @@ static llvm::StringRef classifyWeightedOp(llvm::StringRef name) {
   if (name == "arith.divf" || name == "arith.divsi" ||
       name == "arith.divui")
     return "div";
+  if (name == "arith.andi" || name == "arith.ori" ||
+      name == "arith.xori" || name == "arith.shli" ||
+      name == "arith.shrsi" || name == "arith.shrui")
+    return "bitop";
+  if (name == "arith.minsi" || name == "arith.minui")
+    return "min";
+  if (name == "arith.remsi" || name == "arith.remui")
+    return "rem";
+  if (name == "tt.bitcast" || name == "arith.bitcast")
+    return "bitcast";
   if (name == "arith.maxnumf" || name == "arith.maxf" ||
       name == "arith.maxsi" || name == "arith.maxui")
     return "max";
@@ -893,7 +903,8 @@ loadCandidateProfile(llvm::StringRef requestedPath) {
       for (llvm::StringRef op :
            {"f32.add", "f32.sub", "f32.mul", "f32.div", "f32.max",
             "f32.abs", "f32.exp", "f32.log", "predicate.cmp",
-            "predicate.select", "convert.cast", "f32.clamp"})
+            "predicate.select", "convert.cast", "f32.clamp",
+            "i32.bitop", "i32.min", "i32.rem", "convert.bitcast"})
         profile.simdOps[op] = resolveOpProfile(
             *ops, op, "throughput_vector_instructions_per_system_cycle",
             "vector_instruction/system_cycle", microbench, reader);
@@ -961,7 +972,8 @@ loadCandidateProfile(llvm::StringRef requestedPath) {
       for (llvm::StringRef op :
            {"f32.add", "f32.sub", "f32.mul", "f32.div", "f32.max",
             "f32.abs", "f32.exp", "f32.log", "predicate.cmp",
-            "predicate.select", "convert.cast", "f32.clamp"})
+            "predicate.select", "convert.cast", "f32.clamp",
+            "i32.bitop", "i32.min", "i32.rem", "convert.bitcast"})
         profile.simtOps[op] = resolveOpProfile(
             *ops, op, "throughput_scalar_ops_per_system_cycle",
             "scalar_op/system_cycle", microbench, reader);
@@ -1201,6 +1213,10 @@ getProfileOpElements(const SimdSimtFeatureSummary &features) {
       {"predicate.select", work("select", features.selectOps)},
       {"convert.cast", work("cast", features.castOps)},
       {"f32.clamp", work("clamp", features.clampOps)},
+      {"i32.bitop", work("bitop", 0)},
+      {"i32.min", work("min", 0)},
+      {"i32.rem", work("rem", 0)},
+      {"convert.bitcast", work("bitcast", 0)},
   };
 }
 
@@ -1219,6 +1235,8 @@ getProfileOpElements(const SimtAnchorFeatureSummary &features) {
       {"f32.exp", work("exp")},       {"f32.log", work("log")},
       {"predicate.cmp", work("cmp")}, {"predicate.select", work("select")},
       {"convert.cast", work("cast")}, {"f32.clamp", work("clamp")},
+      {"i32.bitop", work("bitop")},   {"i32.min", work("min")},
+      {"i32.rem", work("rem")},       {"convert.bitcast", work("bitcast")},
   };
 }
 
@@ -1576,6 +1594,7 @@ llvm::json::Object SimdSimtFeatureSummary::toJSON() const {
   result["cast_ops"] = castOps;
   result["clamp_ops"] = clampOps;
   result["scalar_ops"] = scalarOps;
+  result["unclassified_arith_ops"] = unclassifiedArithOps;
   result["max_tensor_rank"] = maxTensorRank;
   result["max_tensor_numel"] = maxTensorNumel;
   result["max_element_bits"] = maxElementBits;
@@ -2117,6 +2136,10 @@ mlir::ascend::analyzeSimdSimtFeatures(
         features.simtAnchors.opElements[weightedKind] +=
             weightedElements * loopMultiplier;
       }
+    } else if ((name.starts_with("arith.") ||
+                name.starts_with("math.")) &&
+               name != "arith.constant") {
+      ++features.unclassifiedArithOps;
     }
 
     if (name == "scf.for") {
@@ -2500,15 +2523,8 @@ mlir::ascend::estimateSimdSimtCandidates(
           (kind + "_core_cost_uncalibrated").str());
   }
 
-  int64_t classifiedScalarOps =
-      features.addOps + features.subOps + features.mulOps +
-      features.divOps + features.maxOps + features.absOps +
-      features.expOps + features.logOps + features.cmpOps +
-      features.selectOps + features.castOps + features.clampOps;
-  int64_t unclassifiedScalarOps =
-      std::max<int64_t>(0, features.scalarOps - classifiedScalarOps);
-  if (unclassifiedScalarOps)
-    report.unsupported.push_back(std::to_string(unclassifiedScalarOps) +
+  if (features.unclassifiedArithOps)
+    report.unsupported.push_back(std::to_string(features.unclassifiedArithOps) +
                                  " unclassified arithmetic ops");
 
   for (const auto &[opName, elements] : getProfileOpElements(features)) {
@@ -2585,11 +2601,23 @@ mlir::ascend::estimateSimdSimtCandidates(
   // Split load bytes into contiguous and gather-backed parts.  Without this,
   // kernels that first load an index tensor contiguously and then load data
   // through those indices are charged as if every byte were a gather.
-  const double perCtaGatherBytes =
-      hasIndirectMemory
-          ? static_cast<double>(features.loadedIndexDependentMemoryOps) *
-                maxNumel * (elementBits / 8.0)
-          : 0.0;
+  //
+  // Prefer the exact static bytes counted for the loaded-index-dependent
+  // tt.loads during the anchor walk.  The op-count x max-numel x
+  // max-element-bits fallback inflates the estimate when index arithmetic is
+  // i64 (max_element_bits=64) while the loaded data is f32/f16, when some of
+  // the counted ops are stores, or when ops are smaller than maxTensorNumel
+  // (causal_conv1d: 15 ops estimated at 61440 B/CTA vs 15360 B actual).
+  double perCtaGatherBytes = 0.0;
+  if (hasIndirectMemory) {
+    if (features.simtAnchors.loadBytes > 0.0) {
+      perCtaGatherBytes = features.simtAnchors.loadBytes;
+    } else {
+      perCtaGatherBytes =
+          static_cast<double>(features.loadedIndexDependentMemoryOps) *
+          maxNumel * (std::min<int64_t>(elementBits, 32) / 8.0);
+    }
+  }
   const double totalGatherLoadBytes =
       std::min(totalLoadBytes, perCtaGatherBytes * gridSize);
   const double totalContiguousLoadBytes =
@@ -2607,11 +2635,17 @@ mlir::ascend::estimateSimdSimtCandidates(
   const double regularTotalLoadBytes =
       std::max(0.0, totalLoadBytes -
                         features.simtAnchors.loadBytes * gridSize);
-  const double gatherRatio = totalLoadBytes > 0.0
-                                 ? totalGatherLoadBytes / totalLoadBytes
-                                 : 0.0;
+  // Gather-backed bytes belong to the loaded-index-dependent loads, which the
+  // anchor partition has already moved to the SIMT side.  Only gather bytes
+  // beyond the anchor load bytes may remain in the regular (SIMD) partition.
+  // Sharing the whole-kernel gather ratio here charged the regular partition
+  // a second time for gather work already paid on the anchor side
+  // (count_expert_num_tokens: mixed overestimated 18x by this ghost gather).
+  const double anchorGatherLoadBytes =
+      std::min(totalGatherLoadBytes,
+               features.simtAnchors.loadBytes * gridSize);
   const double regularGatherLoadBytes =
-      regularTotalLoadBytes * gatherRatio;
+      std::max(0.0, totalGatherLoadBytes - anchorGatherLoadBytes);
   const double regularContiguousLoadBytes =
       regularTotalLoadBytes - regularGatherLoadBytes;
   const double mixedSimdRegularLoadCycles =
