@@ -813,13 +813,14 @@ broadcast(offset[连续维])`，仅小维 data-dependent），rate 按 W 查表/
 
 ### 10.4 需要的微基准
 
-| 微基准 | 目的 |
-|---|---|
-| SIMD i32/i16 位运算吞吐（and/or/xor/shl/shr/bitcast，扫 n） | 测标量化长度，校准 A3 占位 rate |
-| blocked-gather：行内 stride-1 + 行偏移随机，扫行宽 32/128/512 | 拟合 gather 局部性分档（D） |
-| 动态界循环 per-trip 成本（trip=1/10/100/1000，间接 load tile） | unknown-trip 的 trip 代理 |
-| binary search 每轮延迟（SIMT 标量串行 load） | seg_indptr anchor 成本 |
-| SIMD/SIMT device launch overhead | 替换 floor（C） |
+| 微基准 | 目的 | 状态 |
+|---|---|---|
+| SIMD i32/i16 位运算吞吐（and/or/xor/shl/shr/bitcast，扫 n） | 测标量化长度，校准 A3 占位 rate | `microbench_simd_bitops.py` 已写 |
+| blocked-gather：行内 stride-1 + 行偏移随机，扫行宽 32/128/512 | 拟合 gather 局部性分档（D） | `microbench_blocked_gather.py` 已写 |
+| 动态界循环 per-trip 成本（trip=1/10/100/1000，间接 load tile） | unknown-trip 的 trip 代理 | `microbench_dynamic_loop.py` 已写 |
+| SIMD strided 形态（rope interleave / column / strided store / general） | strided 特征识别 + `strided_power_fit` 接入 | `microbench_simd_strided_patterns.py` 已写 |
+| SIMD/SIMT device launch overhead | 替换 floor（C）→ `fixedOverhead(grid, warps)` | `microbench_launch_overhead.py` 已写 |
+| mixed transition 方向性实测 | 替换 setup fallback 223 | 暂不需要新脚本：外部 case 已有数据（mx4 差值 ≈2000、count_expert 被吸收），先修好 anchor 成本再用残差重估 |
 
 camodel 侧：predicate 的 mode/warps 查表数据已齐（4 mode × 6 warps），等
 特征侧能区分 mask 类型后接入，无需新测。
