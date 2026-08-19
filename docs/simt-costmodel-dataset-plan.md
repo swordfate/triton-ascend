@@ -690,7 +690,7 @@ scan 模型。
 | case | 实测名次 | 模型名次 | 模型/实测误差 | 主因 |
 |---|---|---|---|---|
 | silu_mul_quant (SGLang) | simt < mixed < simd | simd 最优（全错） | 三条全 floor（11000/12500/12723）；simd 低估 1.5×、simt 高估 3.7× | floor 不对称（11000<12500 与真实 simt<simd 相反）+ 循环零缩放使 analytical 被 floor 压住 + 计算索引不判 indirect |
-| compute_seg_indptr (SGLang) | mixed < simd < simt | simd 最优（真最优 mixed 被排除） | 三条全 floor，比实测高 3.8-5.5× | `scf.while` 不支持 → anchor=0 → mixed inapplicable |
+| compute_seg_indptr (SGLang) | simd < simt_only（"simd_simt=1.92" 的 ttadapter 是 `parallel_mode="simd"`、零 SIMT 模板——实为 SIMD 二进制的测量差异，非真实混编） | simd 最优（与实测可走路线一致，排序正确） | 三条全 floor，比实测高 3.8-5.5× | 仅 floor 绝对值问题；anchor=0 → mixed inapplicable 恰好正确（标量 while 后端同样未 SIMT 化） |
 | silu_quantize_mx4 (FBGEMM) | simt < mixed < simd | simd 最优（全错） | SIMD 低估 7.4×（实测 82.3μs vs 模型 11μs） | 位运算完全漏计 + 死代码 bug |
 | causal_conv1d (VLLM) | mixed < simd < simt | 决策 mixed（candidate_costs 里 simt_only 数值最低但不可选） | simd 160×、simt 2.75×、mixed 37× 高估 | gather 字节三重通胀 + 2.27 B/cycle 对局部性不敏感 |
 | count_expert_num_tokens (VLLM) | mixed < simt < simd | 决策 mixed（simt_only 数值最低但不可选） | simd 2.2×、mixed 18.3× 高估（修复后 ~1×） | mixed 分区幽灵 gather |
@@ -718,9 +718,14 @@ scan 模型。
 - silu_mul：索引由 divsi/muli 计算得出（非 loaded index）→ 判 contiguous、
   anchors=0；ttadapter 实际 `mix_simd_simt` + 2 个 `@triton_indirect_load`。
 - seg_indptr：`scf.while` loop-carried 索引，`pointerDependsOnLoadedIndex`
-  只处理 `scf.for` 块参数 → anchors=0；实际整个二分循环 AIV 化，无模板标记。
+  只处理 `scf.for` 块参数 → anchors=0。ttadapter 证实后端对该 kernel 同样
+  没有 SIMT 化（标量 load 不触发 `@triton_indirect_load` 模板，
+  `parallel_mode="simd"`，整个二分循环纯 AIV 化）——mixed inapplicable 恰好
+  正确，"混编最快"的结论撤销（1.92μs 实为 SIMD 二进制的测量差异）。若未来
+  要让二分循环走 SIMT 才需要扩展 `scf.while` carried 依赖。
 - silu_quantize_mx4：同 silu_mul，load 实际走 `@triton_indirect_load`。
-- 需扩展：① runtime 计算索引间接访存；② `scf.while` carried 依赖。
+- 需扩展：runtime 计算索引间接访存（silu_mul / silu_quantize_mx4 是
+  tensor 级间接 load，后端已模板化而 costmodel 未识别，这是真实缺口）。
 
 **C. min_kernel_cycles floor 不泛化（4/5 case 中招）**
 - 11000/12500 按内置 5-case 拟合；seg_indptr 实测仅 2000-3300 cycles（floor
@@ -752,9 +757,10 @@ scan 模型。
 
 - **P0（明确 bug）**：A1 mixed 幽灵 gather；A2 gather 字节估计；A3 位运算
   分类 + 死代码。
-- **P1（特征/公式扩展）**：B anchor 扩展（计算索引 + scf.while）；D blocked-
-  gather 分档；C floor → fixedOverhead；E predicate 指令数细化；unknown-trip
-  循环 trip 代理。
+- **P1（特征/公式扩展）**：B anchor 扩展（runtime 计算索引间接访存）；
+  D blocked-gather 分档；C floor → fixedOverhead；E predicate 指令数细化；
+  unknown-trip 循环 trip 代理。`scf.while` 扩展仅在决定让二分循环 SIMT 化时
+  才需要（当前后端也不会模板化它）。
 - **P2（校准/验证）**：mixed transition 实测；domain multiplier 重校 + gate
   覆盖；auto 模式端到端。
 
@@ -765,7 +771,6 @@ scan 模型。
 | SIMD i32/i16 位运算吞吐（and/or/xor/shl/shr/bitcast，扫 n） | 测标量化长度，校准 A3 占位 rate |
 | blocked-gather：行内 stride-1 + 行偏移随机，扫行宽 32/128/512 | 拟合 gather 局部性分档（D） |
 | 动态界循环 per-trip 成本（trip=1/10/100/1000，间接 load tile） | unknown-trip 的 trip 代理 |
-| binary search 每轮延迟（SIMT 标量串行 load） | seg_indptr anchor 成本 |
 | SIMD/SIMT device launch overhead | 替换 floor（C） |
 
 camodel 侧：predicate 的 mode/warps 查表数据已齐（4 mode × 6 warps），等
