@@ -681,17 +681,19 @@ scan 模型。
 
 > 用 FBGEMM / VLLM / SGLang 的 5 个真实算子跑三条路由实测 + report JSON
 > （基准提交 3b145028a，JSON/TTIR/ttadapter 在 `ascend_results/`），逐个派发
-> 诊断得到的问题分类与修复清单。cycle 换算 SYS_CNT=988.9 MHz。
+> 诊断得到的问题分类与修复清单。实测延迟单位 μs，cycle 换算
+> SYS_CNT=988.9 MHz（cycles = μs × 988.9）。模型名次按 `decision_kind`
+> 口径（candidate_costs 中数值最低但不可选的路线不算名次）。
 
 ### 10.1 结论表
 
 | case | 实测名次 | 模型名次 | 模型/实测误差 | 主因 |
 |---|---|---|---|---|
-| silu_mul_quant (SGLang) | simt < mixed < simd | simd 最优（全错） | 三条全 floor，SIMD 低估 1477× | floor 主导 + unknown-trip 循环零缩放 + 计算索引不判 indirect |
-| compute_seg_indptr (SGLang) | mixed < simd < simt | simd 最优（真最优 mixed 被排除） | floor 高估 3.3-5.5× | `scf.while` 不支持 → anchor=0 → mixed inapplicable |
-| silu_quantize_mx4 (FBGEMM) | simt < mixed < simd | simd 最优（全错） | SIMD 低估 7.4×（82ms vs 11μs） | 位运算完全漏计 + 死代码 bug |
-| causal_conv1d (VLLM) | mixed < simd < simt | mixed（但 mixed 37×、simd 160× 高估） | simd 160×、mixed 37× | gather 字节三重通胀 + 2.27 B/cycle 对局部性不敏感 |
-| count_expert_num_tokens (VLLM) | mixed < simt < simd | mixed（但 mixed 高估 18×） | mixed 18.3×（修复后 0.94×） | mixed 分区幽灵 gather |
+| silu_mul_quant (SGLang) | simt < mixed < simd | simd 最优（全错） | 三条全 floor（11000/12500/12723）；simd 低估 1.5×、simt 高估 3.7× | floor 不对称（11000<12500 与真实 simt<simd 相反）+ 循环零缩放使 analytical 被 floor 压住 + 计算索引不判 indirect |
+| compute_seg_indptr (SGLang) | mixed < simd < simt | simd 最优（真最优 mixed 被排除） | 三条全 floor，比实测高 3.8-5.5× | `scf.while` 不支持 → anchor=0 → mixed inapplicable |
+| silu_quantize_mx4 (FBGEMM) | simt < mixed < simd | simd 最优（全错） | SIMD 低估 7.4×（实测 82.3μs vs 模型 11μs） | 位运算完全漏计 + 死代码 bug |
+| causal_conv1d (VLLM) | mixed < simd < simt | 决策 mixed（candidate_costs 里 simt_only 数值最低但不可选） | simd 160×、simt 2.75×、mixed 37× 高估 | gather 字节三重通胀 + 2.27 B/cycle 对局部性不敏感 |
+| count_expert_num_tokens (VLLM) | mixed < simt < simd | 决策 mixed（simt_only 数值最低但不可选） | simd 2.2×、mixed 18.3× 高估（修复后 ~1×） | mixed 分区幽灵 gather |
 
 ### 10.2 问题分类
 
