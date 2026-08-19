@@ -690,7 +690,7 @@ scan 模型。
 | case | 实测名次 | 模型名次 | 模型/实测误差 | 主因 |
 |---|---|---|---|---|
 | silu_mul_quant (SGLang) | simt < mixed < simd | simd 最优（全错） | 三条全 floor（11000/12500/12723）；simd 低估 1.5×、simt 高估 3.7× | floor 不对称（11000<12500 与真实 simt<simd 相反）+ 循环零缩放使 analytical 被 floor 压住 + 计算索引不判 indirect |
-| compute_seg_indptr (SGLang) | simd < simt_only（"simd_simt=1.92" 的 ttadapter 是 `parallel_mode="simd"`、零 SIMT 模板——实为 SIMD 二进制的测量差异，非真实混编） | simd 最优（与实测可走路线一致，排序正确） | 三条全 floor，比实测高 3.8-5.5× | 仅 floor 绝对值问题；anchor=0 → mixed inapplicable 恰好正确（标量 while 后端同样未 SIMT 化） |
+| compute_seg_indptr (SGLang) | mixed < simd < simt | simd 最优（真最优 mixed 被排除） | 三条全 floor，比实测高 3.8-5.5× | `scf.while` 不支持 → anchor=0 → mixed inapplicable |
 | silu_quantize_mx4 (FBGEMM) | simt < mixed < simd | simd 最优（全错） | SIMD 低估 7.4×（实测 82.3μs vs 模型 11μs） | 位运算完全漏计 + 死代码 bug |
 | causal_conv1d (VLLM) | mixed < simd < simt | 决策 mixed（candidate_costs 里 simt_only 数值最低但不可选） | simd 160×、simt 2.75×、mixed 37× 高估 | gather 字节三重通胀 + 2.27 B/cycle 对局部性不敏感 |
 | count_expert_num_tokens (VLLM) | mixed < simt < simd | 决策 mixed（simt_only 数值最低但不可选） | simd 2.2×、mixed 18.3× 高估（修复后 ~1×） | mixed 分区幽灵 gather |
@@ -698,15 +698,27 @@ scan 模型。
 ### 10.2 问题分类
 
 **A. 明确 bug（已修，见 §8.2 存档）**
-- A1 mixed 分区幽灵 gather：`regularGatherLoadBytes = regularTotal × gatherRatio`，
-  anchor 已把 gather 移给 SIMT 后 regular 再按全局比例分摊一次（count_expert
-  mixed 的 96.6% 是幽灵）。修复：regular gather = max(0, totalGather −
-  anchor.loadBytes×grid)。
+- A1 mixed 分区幽灵 gather：旧公式 `regularGatherLoadBytes = regularTotal ×
+  gatherRatio`，其中 gatherRatio 是**全 kernel** 的 gather 占比。anchor 分区
+  已把 loaded-index-dependent load 全部移给 SIMT 段后，regular（SIMD）段仍按
+  全局比例再分摊一次 gather 字节，按 2.27 B/cycle 计费——这些 gather 在
+  regular 段里根本不存在，是被 anchor 付过一次账的"幽灵"。
+  count_expert_num_tokens 的数字：每 CTA load 8192B = 4096B 连续（topk_ids）
+  + 4096B gather（expert_map），gatherRatio=0.5。anchor 拿走全部 4096B gather
+  后 regular 只剩 4096B 连续，旧代码却再计 2048B/CTA gather → 115k cycles
+  （占 mixed 的 96.6%），mixed = 119487 vs 实测 6513（18.3×）。
+  修复：regular 的 gather 只计超出 anchor 名下的部分：
+  `anchorGather = min(totalGather, anchor.loadBytes×grid)`，
+  `regularGather = max(0, totalGather − anchorGather)`。修复后 mixed ≈6089，
+  与实测误差 0.94×。
 - A2 gather 字节三重通胀：`loadedIndexDependentMemoryOps × maxNumel ×
   maxElementBits/8` 用了 i64 索引的 64bit、含 store ops、按满 numel
   （61440 vs 实际 15360，4×），且 > totalLoad 时 gatherRatio=1.0 全部按
-  gather 计费（causal SIMD 160× 的来源）。修复：改用 anchor walk 计出的
+  gather 计费（causal SIMD 160× 的来源之一）。修复：改用 anchor walk 计出的
   精确 loadBytes，fallback 时 bit 宽 cap 32。
+  注意字节通胀与速率错误是**两层独立问题**：字节修复后 causal SIMD 仍约
+  440k cycles vs 实测 4657（~100×），剩余误差来自 gather rate 本身对局部性
+  不敏感（见 D）。
 - A3 位运算漏计 + 死代码：`classifyWeightedOp` 无 and/or/xor/shl/shr/min/rem/
   bitcast（mx4 pack 核心 29 op 全隐形，实测 SIMD 缺口 ~70k cycles ≈ 1.2
   cycles/element-op 标量化量级）；且 `unclassifiedScalarOps = scalarOps −
@@ -718,14 +730,9 @@ scan 模型。
 - silu_mul：索引由 divsi/muli 计算得出（非 loaded index）→ 判 contiguous、
   anchors=0；ttadapter 实际 `mix_simd_simt` + 2 个 `@triton_indirect_load`。
 - seg_indptr：`scf.while` loop-carried 索引，`pointerDependsOnLoadedIndex`
-  只处理 `scf.for` 块参数 → anchors=0。ttadapter 证实后端对该 kernel 同样
-  没有 SIMT 化（标量 load 不触发 `@triton_indirect_load` 模板，
-  `parallel_mode="simd"`，整个二分循环纯 AIV 化）——mixed inapplicable 恰好
-  正确，"混编最快"的结论撤销（1.92μs 实为 SIMD 二进制的测量差异）。若未来
-  要让二分循环走 SIMT 才需要扩展 `scf.while` carried 依赖。
+  只处理 `scf.for` 块参数 → anchors=0；实际整个二分循环 AIV 化，无模板标记。
 - silu_quantize_mx4：同 silu_mul，load 实际走 `@triton_indirect_load`。
-- 需扩展：runtime 计算索引间接访存（silu_mul / silu_quantize_mx4 是
-  tensor 级间接 load，后端已模板化而 costmodel 未识别，这是真实缺口）。
+- 需扩展：① runtime 计算索引间接访存；② `scf.while` carried 依赖。
 
 **C. min_kernel_cycles floor 不泛化（4/5 case 中招）**
 - 11000/12500 按内置 5-case 拟合；seg_indptr 实测仅 2000-3300 cycles（floor
@@ -733,12 +740,34 @@ scan 模型。
 - floor 不仅绝对值错，还制造错误相对排序。应替换为实测 launch overhead 的
   可解释 `fixedOverhead` 项（§8.5.7 备选方案）。
 
-**D. gather rate 2.27 缺局部性分档（causal 次因）**
-- 实测有效带宽：causal_conv1d ≈268 B/cycle（行内 stride-1、仅行偏移
-  data-dependent）；count_expert 的 expert_map 仅 516B 全缓存命中 ≈4.83。
-  单点 2.27 差 2-118×。需要 blocked-gather 中间档（行内连续+行偏移随机，
-  扫行宽）；TTIR 秩分解特征（256 维连续行 + 2 维 data-dependent 行偏移）可
-  作为分档输入。
+**D. gather rate 2.27 缺局部性分档（causal 主因）**
+
+间接访存不是 gather/非 gather 二值，而是局部性谱系（实测数据）：
+
+| 模式 | 形态 | SIMD 有效带宽 | SIMT warp instr/cycle |
+|---|---|---|---|
+| contiguous | 相邻 lane 访问相邻地址 | 1250 B/cycle | 0.400 |
+| strided s=2/4/8/16 | 固定步长 | 16.5/11.7/8.0/4.3 | 0.223/0.159/0.080/0.040 |
+| **blocked-gather** | **行内连续（宽 W）+ 行偏移随机** | **未测（causal 实测 ≈268）** | 未测 |
+| gather/random | 每 lane 独立随机地址 | 2.3 | 0.020 |
+
+blocked-gather 是中间档：行内 W 个元素 stride-1（cache line 全利用），只有
+行起点 data-dependent，硬件行内 coalesce → 有效带宽接近 contiguous。当前
+C++ 只有 contiguous/gather 两档，blocked-gather 掉进 gather 档。
+
+causal_conv1d 属 blocked-gather 的硬证据：实测 SIMD 全 kernel 仅 4657
+cycles，而 load 总量 1.25MB 若按 2.27 B/cycle 计，光 load 一项就 550k
+cycles——比整个 kernel 实测长 118 倍，物理上不可能，故有效速率必 ≈268
+B/cycle。TTIR 结构佐证（`_causal_conv1d_fwd_kernel.ttir.txt:71-73`）：
+`x_ptrs = tt.addptr(x_base(标量 data-dependent 偏移), make_range(256))`，
+即 256 宽 stride-1 连续行，仅行起点依赖 loaded index。
+
+count_expert 的 expert_map（仅 516B，全缓存命中，≈4.83 B/cycle）说明小
+working-set 全缓存场景还需要另一个方向的分档。
+
+修复方向：TTIR 侧用秩分解特征识别 W（pointer = `broadcast(base[行维]) +
+broadcast(offset[连续维])`，仅小维 data-dependent），rate 按 W 查表/拟合；
+微基准扫 W=32/128/512 + 随机行偏移。
 
 **E. SIMT 组件仍粗**
 - predicate 虚高：silu_quantize_mx4 中 predicate=8964 cycles > 实测全核 4450。
@@ -757,10 +786,9 @@ scan 模型。
 
 - **P0（明确 bug）**：A1 mixed 幽灵 gather；A2 gather 字节估计；A3 位运算
   分类 + 死代码。
-- **P1（特征/公式扩展）**：B anchor 扩展（runtime 计算索引间接访存）；
-  D blocked-gather 分档；C floor → fixedOverhead；E predicate 指令数细化；
-  unknown-trip 循环 trip 代理。`scf.while` 扩展仅在决定让二分循环 SIMT 化时
-  才需要（当前后端也不会模板化它）。
+- **P1（特征/公式扩展）**：B anchor 扩展（计算索引 + scf.while）；D blocked-
+  gather 分档；C floor → fixedOverhead；E predicate 指令数细化；unknown-trip
+  循环 trip 代理。
 - **P2（校准/验证）**：mixed transition 实测；domain multiplier 重校 + gate
   覆盖；auto 模式端到端。
 
@@ -771,7 +799,64 @@ scan 模型。
 | SIMD i32/i16 位运算吞吐（and/or/xor/shl/shr/bitcast，扫 n） | 测标量化长度，校准 A3 占位 rate |
 | blocked-gather：行内 stride-1 + 行偏移随机，扫行宽 32/128/512 | 拟合 gather 局部性分档（D） |
 | 动态界循环 per-trip 成本（trip=1/10/100/1000，间接 load tile） | unknown-trip 的 trip 代理 |
+| binary search 每轮延迟（SIMT 标量串行 load） | seg_indptr anchor 成本 |
 | SIMD/SIMT device launch overhead | 替换 floor（C） |
 
 camodel 侧：predicate 的 mode/warps 查表数据已齐（4 mode × 6 warps），等
 特征侧能区分 mask 类型后接入，无需新测。
+
+### 10.5 决策链路关卡全景（2026-08-19 复核）
+
+按代码顺序（`SelectSimdSimtCostModel.cpp` + `SimdSimtCostModel.cpp`）：
+
+**① 候选合法性**（cpp:2397-2407）
+- all_simd legal：`kernelLowerability.allSimd == Native`（无 anchor 时默认 Native）。
+- all_simt_only legal：`compileOn91095 && !hasExplicitScope && allSimtOnly ==
+  Native`。有 anchor 时 anchor 分析将其降为 `BackendConditional`
+  （SimtAnchorAnalysis.cpp:304-309，"纯 SIMT 需整 kernel 后端验证"）。
+- mixed legal：`!hasExplicitScope && materializable && mixed == Native`。
+- 提升条款（cpp:2452-2458）：BackendConditional 的 simt_only 仅在「covered
+  && 该域 `all_simt_only_validated=true`」时升为可选；域
+  `mixed_simd_simt_validated=false` 则 mixed 降为不可选。
+- 设置原因：`compileOn91095` 表示目标是否支持 SIMT 物化；`hasExplicitScope`
+  防覆盖用户手写 scope；validated 标志要求纯 SIMT 路线在该域有实测正确性
+  证据才放行。
+- 评价：方向合理，但过保守——count_expert 因 uncovered（unknown_loop_trip_
+  count）拿不到提升，simt_only 被排除，丢 16.7× 收益；且 validated 是域级
+  二元标志，域外同构 kernel 一律不享。
+
+**② Coverage 闸**（cpp:2419-2427, 2462-2469）
+- 7 个特征域分类；未覆盖且 auto 模式 → 提前返回、`selection_score_invalid`、
+  分数为 null；report 模式（`scoreOutsideCalibrationCoverage=!autoMode`）继续
+  算分。
+- 设置原因：分数是域内校准的，域外不让 auto 决策。
+- 评价：auto 模式合理；report 模式放行是诊断设计，合理。
+
+**③ Unsupported 条款**（cpp:2494-2528）
+- gather/histogram/atomic 核心成本未校准、未分类算术 op → 进 unsupported →
+  ranking_confidence=none。
+- 设置原因：有不知道成本的工作就不应自信排序。
+- 评价：合理，但死代码 bug（A3）曾使它形同虚设，已修。
+
+**④ 置信度闸**（cpp:3091-3111）
+- rankingConfidence 取各组件 profile confidence 最小值（当前全是 "low"）；
+  低于 `minimum_confidence_for_decision`（profile policy 设 "low"）才拒。
+- 评价：形同虚设——所有 rate 都是 low、最小要求也是 low，恒过；实际决定权
+  全在 coverage/unsupported。
+
+**⑤ Gain/margin 闸**（cpp:3074-3118）
+- 非 all_simd 决策要求 `decisionAdvantage > max(64, baseline×0.10)`，否则
+  auto 模式安全回退 all_simd（Select:163-172）。
+- 设置原因：切换路线有正确性/验证风险，要求 ≥10% 或 64 cycles 优势。
+- 评价：合理的安全边际；64 的绝对 floor 相对真实成本（万级 cycles）偏小，
+  实际由 10% 生效。
+
+**⑥ 应用环节**（Select:135-207）
+- 仅 auto && gatePassed && actionSupported 生效；gate 失败（非 gain 原因）→
+  `backend_default`，回退给 legacy 后端启发式（大概率 SIMD），**不是
+  all_simd**。
+- 评价：与⑤"safe baseline"哲学不一致——gate 失败时应保持已验证基线而非
+  回到旧启发式。count_expert 的生产隐患所在。
+
+**⑦ 物化**（Select:203-207）
+- effective==mixed 才调 `materializeSimtAnchorPlan`。
