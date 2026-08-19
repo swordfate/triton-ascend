@@ -535,6 +535,7 @@ raw / measured = 2.04x
 | `658835097` | 区分 kernel-level rate 与 CTA-level rate | SIMT GM cce rate 不再被 grid 错误放大 |
 | `f13a203c6` | `program_issue_scale=1.0`，切换实际-cycle 口径；增加 min kernel cycle floor；domain multiplier 暂置 1.0 | 消除 8 倍错位，4/5 case 对齐 |
 | `375835355` | SIMD memory 拆分 contiguous/gather load bytes | `indirect_elementwise` SIMD 分数 923k→466k，v6 对齐 |
+| `ef3f7628a` | 修复 mixed 分区幽灵 gather（regular gather 只计超出 anchor load bytes 的部分）；gather 字节估计改用 anchor walk 精确 loadBytes；新增 i32.bitop/min/rem/bitcast 分类与 profile 占位 rate；用 walk 级计数器替换死代码 unclassified 检测 | 外部算子第一批诊断：count_expert mixed 18×→~1×；causal_conv1d SIMD gather 字节 4× 通胀消除；silu_quantize_mx4 位运算不再隐形 |
 
 ### 8.3 当前 v6 基准
 
@@ -675,3 +676,95 @@ scan 模型。
 10. **更多 shape/grid 的回归集**
     每个目标算子建议至少覆盖 3 个 shape × 3 条路由，并记录 grid、num_warps、
     num_stages，作为长期回归集，防止后续调参回退。
+
+## 10. 外部真实算子第一批诊断（2026-08-19）
+
+> 用 FBGEMM / VLLM / SGLang 的 5 个真实算子跑三条路由实测 + report JSON
+> （基准提交 3b145028a，JSON/TTIR/ttadapter 在 `ascend_results/`），逐个派发
+> 诊断得到的问题分类与修复清单。cycle 换算 SYS_CNT=988.9 MHz。
+
+### 10.1 结论表
+
+| case | 实测名次 | 模型名次 | 模型/实测误差 | 主因 |
+|---|---|---|---|---|
+| silu_mul_quant (SGLang) | simt < mixed < simd | simd 最优（全错） | 三条全 floor，SIMD 低估 1477× | floor 主导 + unknown-trip 循环零缩放 + 计算索引不判 indirect |
+| compute_seg_indptr (SGLang) | mixed < simd < simt | simd 最优（真最优 mixed 被排除） | floor 高估 3.3-5.5× | `scf.while` 不支持 → anchor=0 → mixed inapplicable |
+| silu_quantize_mx4 (FBGEMM) | simt < mixed < simd | simd 最优（全错） | SIMD 低估 7.4×（82ms vs 11μs） | 位运算完全漏计 + 死代码 bug |
+| causal_conv1d (VLLM) | mixed < simd < simt | mixed（但 mixed 37×、simd 160× 高估） | simd 160×、mixed 37× | gather 字节三重通胀 + 2.27 B/cycle 对局部性不敏感 |
+| count_expert_num_tokens (VLLM) | mixed < simt < simd | mixed（但 mixed 高估 18×） | mixed 18.3×（修复后 0.94×） | mixed 分区幽灵 gather |
+
+### 10.2 问题分类
+
+**A. 明确 bug（已修，见 §8.2 存档）**
+- A1 mixed 分区幽灵 gather：`regularGatherLoadBytes = regularTotal × gatherRatio`，
+  anchor 已把 gather 移给 SIMT 后 regular 再按全局比例分摊一次（count_expert
+  mixed 的 96.6% 是幽灵）。修复：regular gather = max(0, totalGather −
+  anchor.loadBytes×grid)。
+- A2 gather 字节三重通胀：`loadedIndexDependentMemoryOps × maxNumel ×
+  maxElementBits/8` 用了 i64 索引的 64bit、含 store ops、按满 numel
+  （61440 vs 实际 15360，4×），且 > totalLoad 时 gatherRatio=1.0 全部按
+  gather 计费（causal SIMD 160× 的来源）。修复：改用 anchor walk 计出的
+  精确 loadBytes，fallback 时 bit 宽 cap 32。
+- A3 位运算漏计 + 死代码：`classifyWeightedOp` 无 and/or/xor/shl/shr/min/rem/
+  bitcast（mx4 pack 核心 29 op 全隐形，实测 SIMD 缺口 ~70k cycles ≈ 1.2
+  cycles/element-op 标量化量级）；且 `unclassifiedScalarOps = scalarOps −
+  classifiedScalarOps ≡ 0` 是死代码，"unclassified arithmetic ops" 永不触发。
+  修复：新增 bitop/min/rem/bitcast 类 + profile 占位 rate（SIMD 按标量化
+  1 elem/cycle，待微基准）+ 用 walk 中真实登记未分类 op 计数。
+
+**B. anchor 识别范围 < 实际混编范围**
+- silu_mul：索引由 divsi/muli 计算得出（非 loaded index）→ 判 contiguous、
+  anchors=0；ttadapter 实际 `mix_simd_simt` + 2 个 `@triton_indirect_load`。
+- seg_indptr：`scf.while` loop-carried 索引，`pointerDependsOnLoadedIndex`
+  只处理 `scf.for` 块参数 → anchors=0；实际整个二分循环 AIV 化，无模板标记。
+- silu_quantize_mx4：同 silu_mul，load 实际走 `@triton_indirect_load`。
+- 需扩展：① runtime 计算索引间接访存；② `scf.while` carried 依赖。
+
+**C. min_kernel_cycles floor 不泛化（4/5 case 中招）**
+- 11000/12500 按内置 5-case 拟合；seg_indptr 实测仅 2000-3300 cycles（floor
+  高 3-5×）；silu_mul 三条全 floor → 排序退化为常数比较 → 无条件选 SIMD。
+- floor 不仅绝对值错，还制造错误相对排序。应替换为实测 launch overhead 的
+  可解释 `fixedOverhead` 项（§8.5.7 备选方案）。
+
+**D. gather rate 2.27 缺局部性分档（causal 次因）**
+- 实测有效带宽：causal_conv1d ≈268 B/cycle（行内 stride-1、仅行偏移
+  data-dependent）；count_expert 的 expert_map 仅 516B 全缓存命中 ≈4.83。
+  单点 2.27 差 2-118×。需要 blocked-gather 中间档（行内连续+行偏移随机，
+  扫行宽）；TTIR 秩分解特征（256 维连续行 + 2 维 data-dependent 行偏移）可
+  作为分档输入。
+
+**E. SIMT 组件仍粗**
+- predicate 虚高：silu_quantize_mx4 中 predicate=8964 cycles > 实测全核 4450。
+- gather/contiguous 二选一太粗：causal SIMT 侧改用 contiguous rate 后误差
+  仅 +1.3%（真实访问是"行连续"）。
+- binary search 串行依赖标量 load 延迟（~200 cycles/轮）无模型。
+
+**F. gate/校准链路**
+- count_expert：covered 但 `has_unknown_trip_count` → `selection_score_invalid`
+  → auto 模式回退最慢 SIMD，丢 16.7×（模型排名其实对）。
+- mixed transition 只收 setup fallback 223 cycles，实测 ~2000。
+- dynamic_loop_elementwise 域的 m_simd=67.52 在 profile source 文案里有实测
+  推导但未填值（验证阶段有意置 1）。
+
+### 10.3 优化优先级
+
+- **P0（明确 bug）**：A1 mixed 幽灵 gather；A2 gather 字节估计；A3 位运算
+  分类 + 死代码。
+- **P1（特征/公式扩展）**：B anchor 扩展（计算索引 + scf.while）；D blocked-
+  gather 分档；C floor → fixedOverhead；E predicate 指令数细化；unknown-trip
+  循环 trip 代理。
+- **P2（校准/验证）**：mixed transition 实测；domain multiplier 重校 + gate
+  覆盖；auto 模式端到端。
+
+### 10.4 需要的微基准
+
+| 微基准 | 目的 |
+|---|---|
+| SIMD i32/i16 位运算吞吐（and/or/xor/shl/shr/bitcast，扫 n） | 测标量化长度，校准 A3 占位 rate |
+| blocked-gather：行内 stride-1 + 行偏移随机，扫行宽 32/128/512 | 拟合 gather 局部性分档（D） |
+| 动态界循环 per-trip 成本（trip=1/10/100/1000，间接 load tile） | unknown-trip 的 trip 代理 |
+| binary search 每轮延迟（SIMT 标量串行 load） | seg_indptr anchor 成本 |
+| SIMD/SIMT device launch overhead | 替换 floor（C） |
+
+camodel 侧：predicate 的 mode/warps 查表数据已齐（4 mode × 6 warps），等
+特征侧能区分 mask 类型后接入，无需新测。
