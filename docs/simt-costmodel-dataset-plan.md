@@ -879,3 +879,25 @@ camodel 侧：predicate 的 mode/warps 查表数据已齐（4 mode × 6 warps）
 
 **⑦ 物化**（Select:203-207）
 - effective==mixed 才调 `materializeSimtAnchorPlan`。
+
+### 10.6 P0 修复后外部算子重验（2026-08-19，ef3f7628a + 526533d6c）
+
+实测延迟沿用 §10.1 同组（μs）；模型分数来自
+`ascend_results/test_*_ef3f7628a.json`。
+
+| case | 修复前模型 | 修复后模型 | 实测（cycles） | 判定 |
+|---|---|---|---|---|
+| silu_mul_quant | 11000/12500/12723 | 不变 | 16243/3422/3868 | 符合预期（P1 遗留：floor + 计算索引 anchor） |
+| compute_seg_indptr | 11000/12500/12723 | 不变 | 2007/3323/1899 | 符合预期（排序本就正确，仅 floor 绝对值） |
+| silu_quantize_mx4 | 11000/12500/12723，simd 最优 | **27252/12500/27475，决策 simt_only ✓** | 81386/4450/6428 | 排序翻转正确；simd 绝对值仍低估 3×（占位 factor 96 待微基准）；unsupported 曾报 1 条 `math.exp2`，已分类归入 exp（526533d6c） |
+| causal_conv1d | 746165/17216/162894 | **590314/17216/17532** | 4657/6250/4414 | 字节+幽灵 gather 修复生效（simd −21%、mixed −89%）；剩余 simd 127×、mixed 4× 为 P1 速率分档遗留 |
+| count_expert_num_tokens | 235094/12500/119487 | 235094/12500/**6060** | 108563/7147/6513 | **mixed 0.93× 完美命中**；simd 2.17× 为 gather rate + unknown-trip 遗留 |
+
+关键结论：
+1. P0-1（幽灵 gather）由 count_expert 完全验证（119487→6060，实测 6513）；
+2. P0-2（字节通胀）由 causal 部分验证（simd 746k→590k），剩余误差全在
+   gather rate 局部性（P1）；
+3. P0-3 安全网首次生效并抓到真实缺口（math.exp2），且位运算计费把 mx4 的
+   排序翻转成实测一致；
+4. 下一批修复建议顺序：D blocked-gather 分档（causal 主因）→ 位运算微基准
+   校准 factor → floor → fixedOverhead。
