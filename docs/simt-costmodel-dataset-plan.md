@@ -773,7 +773,10 @@ broadcast(offset[连续维])`，仅小维 data-dependent），rate 按 W 查表/
 - predicate 虚高：silu_quantize_mx4 中 predicate=8964 cycles > 实测全核 4450。
 - gather/contiguous 二选一太粗：causal SIMT 侧改用 contiguous rate 后误差
   仅 +1.3%（真实访问是"行连续"）。
-- binary search 串行依赖标量 load 延迟（~200 cycles/轮）无模型。
+- binary search 串行依赖标量 load 延迟（~200 cycles/轮）无模型。注意：这只
+  影响 simt_only 的绝对估值（实测 3.36μs vs 模型 floor 12500，且实测
+  simt_only 比 simd 慢 1.65× 的方向模型对不上量级）；mixed 实际未 SIMT 化
+  （见 B），此缺口优先级低。
 
 **F. gate/校准链路**
 - count_expert：covered 但 `has_unknown_trip_count` → `selection_score_invalid`
