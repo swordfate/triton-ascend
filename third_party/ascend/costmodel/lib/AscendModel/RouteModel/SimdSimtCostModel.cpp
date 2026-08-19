@@ -456,7 +456,7 @@ static llvm::StringRef classifyWeightedOp(llvm::StringRef name) {
     return "max";
   if (name == "math.absf" || name == "math.absi")
     return "abs";
-  if (name == "math.exp")
+  if (name == "math.exp" || name == "math.exp2")
     return "exp";
   if (name == "math.log")
     return "log";
