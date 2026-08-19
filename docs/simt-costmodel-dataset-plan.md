@@ -547,6 +547,22 @@ raw / measured = 2.04x
 | single_block_cumsum | ~4.904 | ~4.811 |
 | indirect_elementwise | ~44.6 | ~45 左右（SIMD 分数 466k） |
 
+#### v7 重验（2026-08-19，P0 修复后，数据 `ascend_results/simt_autoscope_bench_v7.jsonl`）
+
+| case | 实测 ratio | v7 raw ratio |
+|---|---|---|
+| block_matmul | 0.999 | 0.993 |
+| elementwise_silu_mul | 1.113 | 0.951 |
+| rowwise_reduce_masked | 0.957 | 0.880 |
+| single_block_cumsum | 5.099 | 4.811 |
+| indirect_elementwise | 39.576 | 37.327（SIMD 466593，与 v6 一致） |
+
+结论：5-case 模型输出与 v6 完全一致（P0 修复对内置 case 零影响，符合预期）；
+P0-1 使 indirect 的 mixed 从 v5 的 463838（幽灵 gather）降到 10129，实测
+mixed ≈13889 cycles，误差 0.73×。注意两次运行实测环境漂移大（elementwise
+simd 0.0229→0.0145ms、simt 0.0321→0.0130ms），v6/v7 实测不可直接比；
+elementwise 实测比在 0.86~1.11 间波动，不宜作校准锚点。
+
 ## 8.5 设计考量：为什么这样做，而不是那样做
 
 ### 1) 为什么 SIMD memory / dot 用 Triton 微基准，而 SIMT GM / shuffle / predicate 用 cce
