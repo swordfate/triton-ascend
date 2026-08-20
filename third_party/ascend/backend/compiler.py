@@ -192,6 +192,7 @@ def _run_cpp_simd_simt_costmodel(mod, metadata, opt) -> str:
         bool(opt.compile_on_910_95),
         str(opt.auto_simt_scope_dump),
         grid_spec,
+        int(getattr(opt, "launch_numel", 0) or 0),
     )
     ascend.passes.ttir.add_materialize_simt_scopes(pm)
     pm.run(mod)
@@ -1180,6 +1181,9 @@ class NPUOptions:
     # Launch grid passed through from JITFunction.run; used by the SIMD/SIMT
     # costmodel pass to scale per-CTA TTIR features to whole-program work.
     launch_grid: tuple = ()
+    # Largest tensor element count at launch; used by the costmodel to
+    # estimate unknown runtime loop trip counts.
+    launch_numel: int = 0
 
     def __post_init__(self):
         mode = self.auto_simt_scope_mode or os.environ.get(

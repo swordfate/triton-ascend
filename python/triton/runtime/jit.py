@@ -588,6 +588,12 @@ class JITFunction(KernelInterface[T]):
             grid = grid(bound_args)
         if grid is not None:
             kwargs["launch_grid"] = tuple(int(g) for g in grid)
+        # Largest tensor element count, for costmodel estimation of unknown
+        # runtime loop trip counts (same launch-time semantics as
+        # launch_grid).
+        numels = [v.numel() for v in non_constexpr_vals if hasattr(v, "numel")]
+        if numels:
+            kwargs["launch_numel"] = int(max(numels))
 
         # compute cache key
         key = ''.join(sig_and_spec) + str((constexpr_vals, excess_kwargs))

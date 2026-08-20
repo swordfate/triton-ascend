@@ -221,6 +221,10 @@ def SelectSimdSimtCostModelPass
     Option<"grid", "grid", "std::string",
            /*default=*/"""",
            "Launch grid tuple, e.g. 128x1x1">,
+    Option<"launchNumel", "launch-numel", "int64_t",
+           /*default=*/"0",
+           "Largest tensor element count at launch, used to estimate "
+           "unknown runtime loop trip counts">,
     Option<"marginRatio", "margin-ratio", "double",
            /*default=*/"0.10",
            "Minimum relative score advantage required for an online action">,

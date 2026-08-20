@@ -434,17 +434,24 @@ static std::optional<int64_t> getKnownStaticLoopTripCount(Operation *op) {
   return std::nullopt;
 }
 
-static int64_t getStaticLoopTripCount(Operation *op) {
+using EstimatedTripCountMap = llvm::DenseMap<Operation *, int64_t>;
+
+static int64_t getStaticLoopTripCount(
+    Operation *op, const EstimatedTripCountMap &estimates) {
+  auto iterator = estimates.find(op);
+  if (iterator != estimates.end())
+    return iterator->second;
   return getKnownStaticLoopTripCount(op).value_or(1);
 }
 
-static int64_t getLoopMultiplier(Operation *op) {
+static int64_t getLoopMultiplier(Operation *op,
+                                 const EstimatedTripCountMap &estimates) {
   int64_t multiplier = 1;
   for (Operation *parent = op->getParentOp(); parent;
        parent = parent->getParentOp()) {
     if (parent->getName().getStringRef() != "scf.for")
       continue;
-    int64_t tripCount = getStaticLoopTripCount(parent);
+    int64_t tripCount = getStaticLoopTripCount(parent, estimates);
     if (tripCount > 0 &&
         multiplier <= std::numeric_limits<int64_t>::max() / tripCount)
       multiplier *= tripCount;
@@ -2002,10 +2009,106 @@ mlir::ascend::analyzeSimdSimtFeatures(ModuleOp module,
 
 llvm::Expected<SimdSimtFeatureSummary>
 mlir::ascend::analyzeSimdSimtFeatures(
-    ModuleOp module, const SimtAnchorPlan &anchorPlan) {
+    ModuleOp module, const SimtAnchorPlan &anchorPlan, int64_t launchNumel,
+    int64_t gridSize) {
   if (!module)
     return llvm::createStringError(std::errc::invalid_argument,
                                    "cannot analyze a null ModuleOp");
+
+  // Pre-pass: estimate trip counts for runtime-bound tile loops.  A loop
+  // qualifies when its body loads/stores through the induction variable
+  // (a real tile-walking loop, not e.g. a state-accumulation loop whose
+  // addresses are constants) and the launch element count is known.  If the
+  // body also depends on the program id, the total work is partitioned
+  // across the grid; otherwise every CTA walks the whole tensor.
+  EstimatedTripCountMap estimatedTripCounts;
+  if (launchNumel > 0) {
+    auto bodyLoadDependsOnInduction = [](Operation *loop) {
+      llvm::DenseSet<Value> loopArgs;
+      for (Region &region : loop->getRegions())
+        if (!region.empty())
+          for (BlockArgument argument : region.front().getArguments())
+            loopArgs.insert(argument);
+      bool depends = false;
+      loop->walk([&](Operation *nested) {
+        if (nested == loop || depends)
+          return;
+        llvm::StringRef nestedName = nested->getName().getStringRef();
+        if (nestedName != "tt.load" && nestedName != "tt.store")
+          return;
+        if (nested->getNumOperands() == 0)
+          return;
+        llvm::SmallVector<Value> worklist{nested->getOperand(0)};
+        llvm::DenseSet<Value> visited;
+        while (!worklist.empty()) {
+          Value value = worklist.pop_back_val();
+          if (!visited.insert(value).second)
+            continue;
+          if (loopArgs.contains(value)) {
+            depends = true;
+            return;
+          }
+          if (Operation *producer = value.getDefiningOp())
+            llvm::append_range(worklist, producer->getOperands());
+        }
+      });
+      return depends;
+    };
+    auto bodyDependsOnProgramId = [](Operation *loop) {
+      bool depends = false;
+      loop->walk([&](Operation *nested) {
+        if (nested == loop || depends)
+          return;
+        for (Value operand : nested->getOperands()) {
+          llvm::SmallVector<Value> worklist{operand};
+          llvm::DenseSet<Value> visited;
+          unsigned hops = 0;
+          while (!worklist.empty() && hops++ < 256) {
+            Value value = worklist.pop_back_val();
+            if (!visited.insert(value).second)
+              continue;
+            Operation *producer = value.getDefiningOp();
+            if (!producer)
+              continue;
+            if (producer->getName().getStringRef() == "tt.get_program_id") {
+              depends = true;
+              return;
+            }
+            llvm::append_range(worklist, producer->getOperands());
+          }
+        }
+      });
+      return depends;
+    };
+    auto bodyMaxNumel = [](Operation *loop) {
+      int64_t numel = 1;
+      loop->walk([&](Operation *nested) {
+        if (nested == loop)
+          return;
+        for (Type type : nested->getOperandTypes())
+          if (auto tensor = dyn_cast<RankedTensorType>(type))
+            numel = std::max(numel, getStaticNumElements(tensor));
+        for (Type type : nested->getResultTypes())
+          if (auto tensor = dyn_cast<RankedTensorType>(type))
+            numel = std::max(numel, getStaticNumElements(tensor));
+      });
+      return numel;
+    };
+    module.walk([&](Operation *op) {
+      if (op->getName().getStringRef() != "scf.for" ||
+          getKnownStaticLoopTripCount(op))
+        return;
+      if (!bodyLoadDependsOnInduction(op))
+        return;
+      int64_t bodyNumel = std::max<int64_t>(1, bodyMaxNumel(op));
+      int64_t totalTrips = std::max<int64_t>(
+          1, (launchNumel + bodyNumel - 1) / bodyNumel);
+      if (bodyDependsOnProgramId(op) && gridSize > 1)
+        totalTrips = std::max<int64_t>(
+            1, (totalTrips + gridSize - 1) / gridSize);
+      estimatedTripCounts[op] = totalTrips;
+    });
+  }
 
   SimdSimtFeatureSummary features;
   initializeWorkMaps(features);
@@ -2086,7 +2189,7 @@ mlir::ascend::analyzeSimdSimtFeatures(
   module.walk([&](Operation *op) {
     llvm::StringRef name = op->getName().getStringRef();
     const int64_t elements = getOperationElements(op);
-    const int64_t loopMultiplier = getLoopMultiplier(op);
+    const int64_t loopMultiplier = getLoopMultiplier(op, estimatedTripCounts);
     const bool inAnchor = isInAnchor(op);
     if (inAnchor)
       ++features.simtAnchors.coveredOperationCount;
@@ -2196,7 +2299,7 @@ mlir::ascend::analyzeSimdSimtFeatures(
       auto knownTripCount = getKnownStaticLoopTripCount(op);
       if (!knownTripCount)
         features.hasUnknownTripCount = true;
-      int64_t tripCount = knownTripCount.value_or(1);
+      int64_t tripCount = getStaticLoopTripCount(op, estimatedTripCounts);
       ++features.staticLoopCount;
       features.staticLoopTripCountSum += tripCount;
       features.staticLoopTripCountMax =
@@ -3262,7 +3365,9 @@ llvm::Expected<SimdSimtCostReport>
 mlir::ascend::analyzeSimdSimtCandidates(
     ModuleOp module, const SimtAnchorPlan &anchorPlan,
     const SimdSimtCostModelOptions &options) {
-  auto features = analyzeSimdSimtFeatures(module, anchorPlan);
+  const int64_t gridSize = parseLaunchGridSize(options.launchGridSpec);
+  auto features = analyzeSimdSimtFeatures(module, anchorPlan,
+                                          options.launchNumel, gridSize);
   if (!features)
     return features.takeError();
   return estimateSimdSimtCandidates(*features, options);

@@ -348,7 +348,8 @@ void init_triton_ascend_passes_ttir(py::module &&m) {
       [](mlir::PassManager &pm, const std::string &mode,
          const std::string &profilePath, const std::string &actualTarget,
          int64_t numWarps, double marginRatio, bool compileOn91095,
-         const std::string &reportFile, const std::string &grid) {
+         const std::string &reportFile, const std::string &grid,
+         int64_t launchNumel) {
         mlir::ascend::SelectSimdSimtCostModelPassOptions opts;
         opts.mode = mode;
         opts.profilePath = profilePath;
@@ -358,13 +359,15 @@ void init_triton_ascend_passes_ttir(py::module &&m) {
         opts.compileOn91095 = compileOn91095;
         opts.reportFile = reportFile;
         opts.grid = grid;
+        opts.launchNumel = launchNumel;
         pm.addPass(
             mlir::ascend::createSelectSimdSimtCostModelPass(opts));
       },
       py::arg("pm"), py::arg("mode"), py::arg("profile_path"),
       py::arg("actual_target"), py::arg("num_warps"),
       py::arg("margin_ratio"), py::arg("compile_on_910_95"),
-      py::arg("report_file") = "", py::arg("grid") = "");
+      py::arg("report_file") = "", py::arg("grid") = "",
+      py::arg("launch_numel") = 0);
 
   m.def("add_materialize_simt_scopes", [](mlir::PassManager &pm) {
     pm.addPass(mlir::ascend::createMaterializeSimtScopesPass());

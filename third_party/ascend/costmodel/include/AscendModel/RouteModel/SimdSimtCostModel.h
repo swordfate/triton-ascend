@@ -296,6 +296,9 @@ struct SimdSimtCostModelOptions {
   /// Launch grid as a string "Gx x Gy x Gz" (e.g. "128x1x1").  Empty when
   /// unknown.  Used to scale block-local TTIR features to whole-program work.
   std::string launchGridSpec;
+  /// Largest tensor element count at launch (0 = unknown).  Used to estimate
+  /// trip counts of runtime-bound loops whose bodies walk tensor tiles.
+  int64_t launchNumel = 0;
 };
 
 struct SimdSimtCostReport {
@@ -374,10 +377,12 @@ analyzeSimdSimtFeatures(mlir::ModuleOp module,
 
 /// Analyze using a caller-owned immutable plan.  Selector uses this overload
 /// so the exact operations charged by the mixed score are the operations later
-/// marked for materialization.
+/// marked for materialization.  launchNumel and gridSize enable trip-count
+/// estimation for runtime-bound loops (0/1 disable it).
 llvm::Expected<SimdSimtFeatureSummary>
 analyzeSimdSimtFeatures(mlir::ModuleOp module,
-                        const SimtAnchorPlan &anchorPlan);
+                        const SimtAnchorPlan &anchorPlan,
+                        int64_t launchNumel = 0, int64_t gridSize = 1);
 
 /// Run the versioned profile formula on an already materialized feature
 /// summary.  By default this preserves full out-of-coverage scoring for
