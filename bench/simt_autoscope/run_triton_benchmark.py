@@ -218,6 +218,17 @@ def run_builtin_case(name: str, route: str, args) -> dict:
             torch.cuda.synchronize()
         latency_ms = (time.perf_counter() - t0) * 1000.0 / args.reps
 
+    if args.timing == "profiler":
+        from profiler_timing import measure_profiler_latency_ms
+
+        latency_ms = measure_profiler_latency_ms(
+            lambda: kernel[grid_shape](
+                *kargs, **constexpr_kwargs, num_warps=num_warps,
+                num_stages=num_stages),
+            name_hint=getattr(kernel.fn, "__name__", None),
+            reps=max(5, args.reps // 10), warmup=2,
+        )
+
     return {
         "case": name,
         "route": route,
@@ -283,6 +294,7 @@ def parent_main(args):
                 "--report-dir", str(Path(args.report_dir)) if args.report_dir else "",
                 "--warmup", str(args.warmup),
                 "--reps", str(args.reps),
+                "--timing", args.timing,
                 "--no-fresh",
             ]
             child_env = route_env(route)
@@ -302,6 +314,11 @@ def main():
     ap.add_argument("--report-dir", default="results/reports")
     ap.add_argument("--warmup", type=int, default=10)
     ap.add_argument("--reps", type=int, default=50)
+    ap.add_argument("--timing", default="event",
+                    choices=["event", "profiler"],
+                    help="event: launch-inclusive Event timing; "
+                         "profiler: kernel-only duration from "
+                         "ASCEND_PROFILER_OUTPUT/kernel_details.csv")
     ap.add_argument("--fresh", action="store_true", default=True)
     ap.add_argument("--no-fresh", action="store_false", dest="fresh")
     args = ap.parse_args()

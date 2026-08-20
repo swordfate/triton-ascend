@@ -79,6 +79,10 @@ def main():
     ap.add_argument("--out", default="ascend_results/simd_components_microbench.jsonl")
     ap.add_argument("--warmup", type=int, default=10)
     ap.add_argument("--reps", type=int, default=50)
+    ap.add_argument("--timing", default="event",
+                    choices=["event", "profiler"],
+                    help="event: launch-inclusive; profiler: kernel-only "
+                         "Duration from kernel_details.csv")
     args = ap.parse_args()
 
     device = "npu" if hasattr(torch, "npu") else "cuda"
@@ -107,7 +111,17 @@ def main():
                 kernel[grid](*kargs, **constexpr_kwargs, num_warps=num_warps,
                              num_stages=num_stages)
             sync()
-            if hasattr(torch, "npu") and hasattr(torch.npu, "Event"):
+            if args.timing == "profiler":
+                from profiler_timing import measure_profiler_latency_ms
+
+                latency_ms = measure_profiler_latency_ms(
+                    lambda: kernel[grid](*kargs, **constexpr_kwargs,
+                                         num_warps=num_warps,
+                                         num_stages=num_stages),
+                    name_hint=getattr(kernel.fn, "__name__", None),
+                    reps=max(5, args.reps // 10), warmup=2,
+                )
+            elif hasattr(torch, "npu") and hasattr(torch.npu, "Event"):
                 start = torch.npu.Event(enable_timing=True)
                 end = torch.npu.Event(enable_timing=True)
                 start.record()
