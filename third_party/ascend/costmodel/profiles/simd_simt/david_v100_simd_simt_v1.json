@@ -250,16 +250,15 @@
       "flops_per_system_cycle": 4096.0,
       "source": "AscendModel cube startup/throughput seed; DES feedback is expected to refine scheduled lowering",
       "confidence": "low",
-      "small_kernel_min_cycles": 16200
+      "small_kernel_min_cycles": 0
     },
     "scan": {
       "description": "Single-block cumsum microbenchmark on A5, fitted in issue-payload units before program_issue_scale.",
-      "fixed_system_cycles": 1000.0,
+      "fixed_system_cycles": 0.0,
       "elements_per_system_cycle": 0.0682,
       "source": "A5 scan_simd.jsonl n=1024/4096/8192",
       "confidence": "low"
-    },
-    "min_kernel_cycles": 11000
+    }
   },
   "simt": {
     "description": "Inputs used to estimate the all-SIMT candidate and the SIMT portion of a mixed candidate.",
@@ -370,7 +369,7 @@
       "flops_per_system_cycle": 4096.0,
       "source": "SIMT tl.dot lowers to the same cube unit as SIMD on A5; first SIMT dot microbench (128x128x64) measured 0.0159 ms vs SIMD 0.0164 ms.",
       "confidence": "low",
-      "small_kernel_min_cycles": 16200
+      "small_kernel_min_cycles": 0
     },
     "camodel_effective": {
       "description": "Workload-effective CaModel issue rates retained as fallback calibration context. The current Route Model consumes only the predicate rate from the nested rate map.",
@@ -435,10 +434,9 @@
     },
     "scan": {
       "description": "Single-block cumsum microbenchmark on A5; latency is nearly flat for n>=1024.",
-      "fixed_system_cycles": 12800.0,
+      "fixed_system_cycles": 0.0,
       "source": "A5 scan_simt.jsonl n=1024/4096/8192",
       "confidence": "low"
-    },
-    "min_kernel_cycles": 12500
+    }
   }
 }

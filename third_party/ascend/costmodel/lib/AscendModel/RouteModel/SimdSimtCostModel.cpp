@@ -3105,10 +3105,14 @@ mlir::ascend::estimateSimdSimtCandidates(
   report.breakdown.simdStructuralPenaltyCycles =
       (report.breakdown.simdIssuePayloadCycles - unpenalizedSimdPayload) *
       profile.programIssueScale;
-  report.candidateCosts.allSimd = std::max(
-      report.breakdown.simdAnalyticalCycles, profile.simdMinKernelCycles);
-  report.candidateCosts.allSimtOnly = std::max(
-      report.breakdown.simtAnalyticalCycles, profile.simtMinKernelCycles);
+  // Scores are kernel-only device cycles: the measured baselines come from
+  // profiler kernel duration, which excludes launch/dispatch.  The old
+  // min_kernel_cycles floor was fitted on Event-timed (launch-inclusive)
+  // runs and double-charged every kernel with the ~13k-cycle launch gap;
+  // fixed per-invocation costs are deliberately not scored.
+  report.candidateCosts.allSimd = report.breakdown.simdAnalyticalCycles;
+  report.candidateCosts.allSimtOnly =
+      report.breakdown.simtAnalyticalCycles;
 
   const MixedSetupFallbackProfile *nearestSetupFallback = nullptr;
   for (const MixedSetupFallbackProfile &fallback :
