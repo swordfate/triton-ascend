@@ -930,13 +930,8 @@ camodel 侧：predicate 的 mode/warps 查表数据已齐（4 mode × 6 warps）
 
 **bitops（已落地 ebd22b699）**
 - **96× 标量化假设被证伪**：实测 factor SIMD bitop≈0.87、min≈0.88、
-  rem≈1.47、bitcast≈0.92；SIMT ≈1.1。profile 改为 1.0/1.0/1.5/1.0，
-  confidence medium。
-- 口径说明：微基准是 whole-kernel 多 CTA 测量（num_ctas=1024/4096），与
-  cce 单 AIV 纯 ALU（simd 3.3 / simt 141）不可直接相乘；有效证据是**同 n
-  同结构的 cpe 比值**（bitop/add≈0.85-0.88、rem/add≈1.07-1.42），分子分母
-  的 grid/waves/memory/launch 全约掉，比值不依赖 cce 常数。factor 语义即
-  "相对 add 的比值"，与 141/3.3 绝对值无关，故 1.0/1.0/1.5/1.0 成立。
+  rem≈1.47、bitcast≈0.92（16M 档，ALU 上界）；SIMT ≈1.1。profile 改为
+  1.0/1.0/1.5/1.0，confidence medium。
 - mx4 验证：新 factor 下 SIMD 分回 9096→floor 11000，**排序会再翻错**——
   说明 mx4 的 72k 残差不是 bitop 吞吐，是循环依赖链/控制开销；trip 代理
   落地前 mx4 排序依赖 factor 96 的"歪打正着"，需与 trip 代理一起回归。
@@ -950,3 +945,28 @@ camodel 侧：predicate 的 mode/warps 查表数据已齐（4 mode × 6 warps）
 - 方案：JIT 传 tensor numel（同 launch_grid 链路）→ C++ 按 offset 结构算
   per-CTA trips；需同步扩展 `pointerDependsOnLoadedIndex` 识别 divsi 计算
   索引，否则 per-trip 成本分档失效。
+
+### 10.8 trip 代理落地与 fixedOverhead 搁置（2026-08-20）
+
+**trip 代理（已落地 13c8df933）**
+- 链路：`jit.py` 把最大 tensor numel 塞入 `launch_numel`（与 launch_grid 同
+  链路）→ `compiler.py`/`triton_ascend.cc`/`Passes.td`/pass 选项 →
+  `analyzeSimdSimtFeatures`。
+- 估计：仅对 runtime-bound 且 body 内 load/store 指针依赖循环块参数的
+  scf.for 生效；trip = ceil(numel/bodyMaxNumel)，body 依赖 program_id 时
+  再除以 grid（per-CTA 分区语义）。
+- 安全性：5-case 无 unknown loop → 零影响；causal 的 segment loop 地址是
+  常数（状态累积）→ 不估；count_expert body 用 pid → ÷grid → 1 → 不变；
+  mx4 numel≈bodyNumel → 1 → 不变。唯一实质变化是 silu_mul 类 tile 循环。
+
+**fixedOverhead 搁置（launch_overhead 数据自相矛盾）**
+- 微基准（背靠背 N 次 launch 均摊）测得最小 SIMT kernel ≈11920 cycles 全
+  grid 平，SIMD ≈10800 + grid>1024 翻倍（cores/wave≈2048）。
+- 但 silu_mul/seg_indptr/mx4 的实测 SIMT 只有 3422/3323/4450 cycles——
+  **比最小空 kernel 还快 3 倍**，物理矛盾。解释：这些 kernel 的 simt_only
+  走了 whole-body-void-SIMT-scope inline 快速路径（compiler.py），空 kernel
+  与 causal/count_expert 走 runtime-loop 序言慢路径。SIMT 固定开销是双模的，
+  单常数 fixedOverhead 会继续高估快速路径 3.5×。
+- 下一步确认测量：用"带一次 barrier 的小 kernel"分别走两条路径复测，或
+  在 C++ 里按 `kernelLowerability.allSimtOnly` 与 anchor 有无区分两种 SIMT
+  基线。在此之前保留 min_kernel_cycles floor。
