@@ -78,7 +78,7 @@ def indirect_load_kernel(src, idx, dst, BLOCK: tl.constexpr):
     pid = tl.program_id(0)
     offs = pid * BLOCK + tl.arange(0, BLOCK)
     i = tl.load(idx + offs)
-    x = tl.load(src + i, other=0.0)
+    x = tl.load(src + i)
     tl.store(dst + offs, x)
 
 
