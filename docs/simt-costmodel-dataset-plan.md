@@ -995,3 +995,40 @@ camodel 侧：predicate 的 mode/warps 查表数据已齐（4 mode × 6 warps）
 - 另注：现有 floor 已 ≈ v2 实测最小开销，且 dot/scan 组件级 floor 本身含
   launch 成分，直接替换为加性 fixedOverhead 会双重计费，需先剥离组件
   floor 的 launch 部分。
+
+### 10.10 口径切换：kernel-only 评分（2026-08-20）
+
+**事实确认**：`run_costmodel.sh` 的实测延迟来自 ASCEND profiler 的
+`kernel_details.csv` Duration 列 = kernel 纯执行时间（不含 launch/
+dispatch）。评分口径应与之对齐。
+
+**已改（aea460864）**
+- 删除 min_kernel_cycles floor（11000/12500 是 Event 口径拟合，含 ~13k
+  launch gap）：candidateCosts = analytical 直接使用；
+- dot small_kernel_min_cycles 16200 → 0（同源污染，待 kernel-only 重测）；
+- scan fixed 1000/12800 → 0（恒定延迟几乎全是 launch gap，斜率项保留）。
+
+**组件口径分类**
+
+| 组件 | 数据源 | 口径 | 处理 |
+|---|---|---|---|
+| SIMT GM/shuffle/predicate/ALU rate | cce slope-over-iters | kernel-only ✓ | 不动 |
+| SIMT setup(141) / mixed fallback(223) | cce 空 VF harness | kernel-only ✓ | 不动 |
+| bitops/min/rem factor 比值 | 同 n 同结构 cpe 比 | 比值不受污染 ✓ | 不动 |
+| dynamic_loop per-trip slope | 线性回归斜率 | 斜率剥离固定项 ✓ | 不动 |
+| SIMD memory contiguous power fit | Event，n=4M 污染 ~50% | 待 slope 重拟合 | 用 n=1M/4M/16M 差值斜率重拟（无需重测） |
+| blocked-gather rate(W) | 同上 | 同上 | 同上 |
+| dot throughput 4096 + setup 128 | cube seed | 待 profiler 重测 dot | block_matmul 等用 profiler 重测 |
+| scan 斜率 0.0682 | scan_simd.jsonl | 斜率 ✓ / fixed 已归 0 | SIMT scan kernel-only 待测（原"恒定 13μs"全是 launch） |
+| 5-case 实测基线 | Event | launch-inclusive ✗ | 换 profiler 口径重测后重新对齐 |
+
+**5 个外部 case 的 kernel-only 重读**
+- causal：实测 4657，blocked-gather 修复后模型 ≈5k ✓ 已接近；SIMT 侧
+  blocked 分档未做（gather rate 高估）。
+- count_expert：mixed 6060 ≈ 6513 ✓；simd 235k vs 108k（gather rate 2.2×
+  高估 + expert_map 全缓存场景）。
+- silu_mul：trip 代理后 simd = 21 + T×5719，T≈2.8 时 ≈ 实测 16243；simt
+  模型 ~500 vs 3422（SIMT kernel-only 固定开销 ~3k 未建模，待重测）。
+- seg_indptr：删 floor 后 1430/146 vs 2007/3323，simt 仍欠（E 类串行
+  标量 load 依赖链）。
+- mx4：simd 需 trip 代理 + 依赖链模型；simt 4450 vs 模型小。
