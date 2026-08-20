@@ -930,8 +930,13 @@ camodel 侧：predicate 的 mode/warps 查表数据已齐（4 mode × 6 warps）
 
 **bitops（已落地 ebd22b699）**
 - **96× 标量化假设被证伪**：实测 factor SIMD bitop≈0.87、min≈0.88、
-  rem≈1.47、bitcast≈0.92（16M 档，ALU 上界）；SIMT ≈1.1。profile 改为
-  1.0/1.0/1.5/1.0，confidence medium。
+  rem≈1.47、bitcast≈0.92；SIMT ≈1.1。profile 改为 1.0/1.0/1.5/1.0，
+  confidence medium。
+- 口径说明：微基准是 whole-kernel 多 CTA 测量（num_ctas=1024/4096），与
+  cce 单 AIV 纯 ALU（simd 3.3 / simt 141）不可直接相乘；有效证据是**同 n
+  同结构的 cpe 比值**（bitop/add≈0.85-0.88、rem/add≈1.07-1.42），分子分母
+  的 grid/waves/memory/launch 全约掉，比值不依赖 cce 常数。factor 语义即
+  "相对 add 的比值"，与 141/3.3 绝对值无关，故 1.0/1.0/1.5/1.0 成立。
 - mx4 验证：新 factor 下 SIMD 分回 9096→floor 11000，**排序会再翻错**——
   说明 mx4 的 72k 残差不是 bitop 吞吐，是循环依赖链/控制开销；trip 代理
   落地前 mx4 排序依赖 factor 96 的"歪打正着"，需与 trip 代理一起回归。
