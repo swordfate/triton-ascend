@@ -967,6 +967,9 @@ camodel 侧：predicate 的 mode/warps 查表数据已齐（4 mode × 6 warps）
   走了 whole-body-void-SIMT-scope inline 快速路径（compiler.py），空 kernel
   与 causal/count_expert 走 runtime-loop 序言慢路径。SIMT 固定开销是双模的，
   单常数 fixedOverhead 会继续高估快速路径 3.5×。
-- 下一步确认测量：用"带一次 barrier 的小 kernel"分别走两条路径复测，或
-  在 C++ 里按 `kernelLowerability.allSimtOnly` 与 anchor 有无区分两种 SIMT
-  基线。在此之前保留 min_kernel_cycles floor。
+- 下一步确认测量：`microbench_launch_overhead_v2.py`（be6a07ef6）扫
+  kernel 形态（scalar/vector/silu/indirect）× grid × num_warps，且同时
+  测 back-to-back 与 single-launch 两种口径；拟合
+  `fixedOverhead(shape_class, grid, num_warps, route)`，shape_class 映射到
+  C++ 特征（hasIndirectMemory→indirect、tensor load→vector/silu、
+  否则 scalar）。数据回来前保留 min_kernel_cycles floor。
