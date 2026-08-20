@@ -202,28 +202,28 @@
         "confidence": "low"
       },
       "i32.bitop": {
-        "description": "Integer bitwise ops (and/or/xor/shl/shr). Placeholder assuming scalarized execution on the SIMD vector unit (~1 element/cycle, measured ~1.2 cycles/element-op on silu_quantize_mx4) until the SIMD bit-op microbenchmark lands.",
-        "relative_to": "f32.add",
-        "factor": 96.0,
-        "confidence": "low"
-      },
-      "i32.min": {
-        "description": "Integer min. Estimated relative to f32.add, aligned with f32.max.",
-        "relative_to": "f32.add",
-        "factor": 1.2,
-        "confidence": "low"
-      },
-      "i32.rem": {
-        "description": "Integer remainder. Estimated relative to f32.add, aligned with f32.div.",
-        "relative_to": "f32.add",
-        "factor": 12.0,
-        "confidence": "low"
-      },
-      "convert.bitcast": {
-        "description": "Tensor bitcast. Assumed free register reinterpretation; needs validation.",
+        "description": "Integer bitwise ops (and/or/xor/shl/shr). Microbenchmark (bitops_simd_microbench, 16M elements) shows no scalarization: throughput equals f32.add, so the 96x placeholder was wrong. cycles/element 0.00414 vs add 0.00488.",
         "relative_to": "f32.add",
         "factor": 1.0,
-        "confidence": "low"
+        "confidence": "medium"
+      },
+      "i32.min": {
+        "description": "Integer min. Microbenchmark throughput matches f32.add (factor ~0.88 measured); rounded to 1.0.",
+        "relative_to": "f32.add",
+        "factor": 1.0,
+        "confidence": "medium"
+      },
+      "i32.rem": {
+        "description": "Integer remainder. Microbenchmark: ~1.47x f32.add cost (memory-bandwidth-contaminated upper bound), replacing the 12x placeholder.",
+        "relative_to": "f32.add",
+        "factor": 1.5,
+        "confidence": "medium"
+      },
+      "convert.bitcast": {
+        "description": "Tensor bitcast. Microbenchmark confirms free register reinterpretation (factor ~0.92).",
+        "relative_to": "f32.add",
+        "factor": 1.0,
+        "confidence": "medium"
       }
     },
     "memory": {
@@ -239,7 +239,10 @@
       "strided_power_fit_A": 27.034,
       "strided_power_fit_exponent": -0.631,
       "contiguous_power_A": 0.0014055,
-      "contiguous_power_exponent": 0.8235
+      "contiguous_power_exponent": 0.8235,
+      "blocked_gather_linear_bps_per_width": 2.272,
+      "blocked_gather_w256_bps": 507.0,
+      "blocked_gather_w512_bps": 1204.0
     },
     "dot": {
       "description": "All-SIMD dot setup and throughput seed used for every dot operation; current calibrated admission is narrower and covers only tiny irregular dot.",
@@ -337,28 +340,28 @@
         "confidence": "low"
       },
       "i32.bitop": {
-        "description": "Integer bitwise ops (and/or/xor/shl/shr). AIV integer ALU is assumed comparable to float ALU.",
+        "description": "Integer bitwise ops (and/or/xor/shl/shr). AIV integer ALU measured comparable to float ALU (factor ~1.1).",
         "relative_to": "f32.add",
         "factor": 1.0,
-        "confidence": "low"
+        "confidence": "medium"
       },
       "i32.min": {
-        "description": "Integer min. Estimated relative to f32.add, aligned with f32.max.",
-        "relative_to": "f32.add",
-        "factor": 1.2,
-        "confidence": "low"
-      },
-      "i32.rem": {
-        "description": "Integer remainder. Estimated relative to f32.add, aligned with f32.div.",
-        "relative_to": "f32.add",
-        "factor": 12.0,
-        "confidence": "low"
-      },
-      "convert.bitcast": {
-        "description": "Tensor bitcast. Assumed free register reinterpretation; needs validation.",
+        "description": "Integer min. AIV integer ALU measured comparable to float ALU (factor ~1.1).",
         "relative_to": "f32.add",
         "factor": 1.0,
-        "confidence": "low"
+        "confidence": "medium"
+      },
+      "i32.rem": {
+        "description": "Integer remainder. Measured ~1.34x f32.add on AIV, replacing the 12x placeholder.",
+        "relative_to": "f32.add",
+        "factor": 1.5,
+        "confidence": "medium"
+      },
+      "convert.bitcast": {
+        "description": "Tensor bitcast. Measured free register reinterpretation (factor ~1.1).",
+        "relative_to": "f32.add",
+        "factor": 1.0,
+        "confidence": "medium"
       }
     },
     "dot": {

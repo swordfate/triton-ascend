@@ -135,6 +135,13 @@ struct CandidateProfile {
   double simdMemoryContiguousPowerExponent = 0.0;
   double simdMemoryStridedPowerA = 1.0;
   double simdMemoryStridedPowerExponent = 0.0;
+  // Blocked-gather locality grading (loaded-index-dependent loads whose
+  // address vector has a stride-1 run of width W).  Rate(W) is linear
+  // linear_bps_per_width x W up to W=128, then log-interpolated through the
+  // W=256 and W=512 anchor points; W >= 512 uses the contiguous rate.
+  double simdMemoryBlockedGatherLinearBpsPerWidth = 0.0;
+  double simdMemoryBlockedGatherW256Bps = 0.0;
+  double simdMemoryBlockedGatherW512Bps = 0.0;
   double simdMinKernelCycles = 0.0;
   std::string simdMemoryConfidence = "none";
   double simdDotSetupCycles = 0.0;
@@ -274,6 +281,41 @@ static void initializeWorkMaps(SummaryT &features) {
     features.weightedOps[key] = 0;
     features.opElements[key] = 0;
   }
+}
+
+/// For a loaded-index-dependent tt.load, measure the width of the contiguous
+/// stride-1 run inside its address vector.  Walk the pointer SSA chain but
+/// stop at any tt.load/tt.gather producer (the loaded boundary); collect the
+/// `end` constants of tt.make_range ops reachable on the non-loaded side and
+/// return the maximum.  0 means no contiguous run (pure per-lane gather).
+/// The maximum (not minimum) is the stride-1 dimension: kernels like
+/// causal_conv1d build the address as broadcast(scalar_base[W]) +
+/// broadcast(offset[rows]) where the small range is the data-dependent row
+/// count and the large one is the coalesced feature run.
+static int64_t getLoadedIndexContiguousWidth(Operation *op) {
+  llvm::SmallVector<Value> worklist;
+  llvm::DenseSet<Value> visited;
+  int64_t width = 0;
+  if (op->getNumOperands() > 0)
+    worklist.push_back(op->getOperand(0));
+  while (!worklist.empty()) {
+    Value value = worklist.pop_back_val();
+    if (!visited.insert(value).second)
+      continue;
+    Operation *producer = value.getDefiningOp();
+    if (!producer)
+      continue;
+    llvm::StringRef name = producer->getName().getStringRef();
+    if (name == "tt.load" || name == "tt.gather")
+      continue;
+    if (name == "tt.make_range") {
+      if (auto end = producer->getAttrOfType<IntegerAttr>("end"))
+        width = std::max(width, end.getInt());
+      continue;
+    }
+    llvm::append_range(worklist, producer->getOperands());
+  }
+  return width;
 }
 
 static std::string typeToString(Type type) {
@@ -924,6 +966,13 @@ loadCandidateProfile(llvm::StringRef requestedPath) {
           *memory, "strided_power_fit_A", 1.0);
       profile.simdMemoryStridedPowerExponent = reader.optionalNumber(
           *memory, "strided_power_fit_exponent", 0.0);
+      profile.simdMemoryBlockedGatherLinearBpsPerWidth =
+          reader.optionalNumber(*memory,
+                                "blocked_gather_linear_bps_per_width", 0.0);
+      profile.simdMemoryBlockedGatherW256Bps = reader.optionalNumber(
+          *memory, "blocked_gather_w256_bps", 0.0);
+      profile.simdMemoryBlockedGatherW512Bps = reader.optionalNumber(
+          *memory, "blocked_gather_w512_bps", 0.0);
       profile.simdMemoryContiguousPowerA = reader.optionalNumber(
           *memory, "contiguous_power_A", 0.0);
       profile.simdMemoryContiguousPowerExponent = reader.optionalNumber(
@@ -1608,6 +1657,7 @@ llvm::json::Object SimdSimtFeatureSummary::toJSON() const {
   result["pointer_unstructured_dims"] = pointerUnstructuredDims;
   result["loaded_index_dependent_memory_ops"] =
       loadedIndexDependentMemoryOps;
+  result["loaded_index_contiguous_width"] = loadedIndexContiguousWidth;
   result["lane_dependent_pointer_ops"] = laneDependentPointerOps;
   result["row_local_reduce_ops"] = rowLocalReduceOps;
   result["max_reduce_axis_extent"] = maxReduceAxisExtent;
@@ -2309,6 +2359,10 @@ mlir::ascend::analyzeSimdSimtFeatures(
       ++features.loadedIndexDependentMemoryOps;
       if (inAnchor)
         ++features.simtAnchors.loadedIndexDependentMemoryOps;
+      if (name == "tt.load")
+        features.loadedIndexContiguousWidth = std::max(
+            features.loadedIndexContiguousWidth,
+            getLoadedIndexContiguousWidth(op));
     }
     if (isPointerOperation) {
       std::set<std::string> uniqueShapes;
@@ -2593,10 +2647,39 @@ mlir::ascend::estimateSimdSimtCandidates(
                                profile.simdMemoryContiguousPowerExponent));
     return std::max(1.0e-9, profile.simdMemoryContiguousBps);
   };
+  // Blocked-gather locality: loaded-index-dependent loads with a stride-1
+  // run of width W coalesce within the run, so their effective rate sits
+  // between pure gather (W=1) and contiguous (W >= 512).  Microbenchmark
+  // (blocked_gather_simd_microbench): linear 2.272 B/cycle x W up to W=128,
+  // then {256: 507, 512: 1204} log interpolation; validated against
+  // causal_conv1d (W=256, measured whole-kernel ~4657 cycles).
+  auto resolveSimdGatherRate = [&](int64_t width) {
+    const double linear = profile.simdMemoryBlockedGatherLinearBpsPerWidth;
+    const double w256 = profile.simdMemoryBlockedGatherW256Bps;
+    const double w512 = profile.simdMemoryBlockedGatherW512Bps;
+    auto logInterp = [](double x1, double y1, double x2, double y2,
+                        double x) {
+      if (x <= x1)
+        return y1;
+      if (x >= x2)
+        return y2;
+      return std::exp(std::log(y1) +
+                      (std::log(x) - std::log(x1)) /
+                          (std::log(x2) - std::log(x1)) *
+                          (std::log(y2) - std::log(y1)));
+    };
+    if (width <= 128 && linear > 0.0)
+      return std::max(1.0e-9, linear * static_cast<double>(width));
+    if (width <= 256 && w256 > 0.0 && linear > 0.0)
+      return logInterp(128.0, linear * 128.0, 256.0, w256,
+                       static_cast<double>(width));
+    if (w512 > 0.0 && w256 > 0.0)
+      return logInterp(256.0, w256, 512.0, w512,
+                       static_cast<double>(width));
+    return std::max(1.0e-9, profile.simdMemoryGatherBps);
+  };
   const double simdContiguousLoadRate = contiguousSimdRate(totalLoadBytes);
   const double simdContiguousStoreRate = contiguousSimdRate(totalStoreBytes);
-  const double simdGatherLoadRate =
-      std::max(1.0e-9, profile.simdMemoryGatherBps);
 
   // Split load bytes into contiguous and gather-backed parts.  Without this,
   // kernels that first load an index tensor contiguously and then load data
@@ -2618,10 +2701,20 @@ mlir::ascend::estimateSimdSimtCandidates(
           maxNumel * (std::min<int64_t>(elementBits, 32) / 8.0);
     }
   }
-  const double totalGatherLoadBytes =
+  double totalGatherLoadBytes =
       std::min(totalLoadBytes, perCtaGatherBytes * gridSize);
-  const double totalContiguousLoadBytes =
+  double totalContiguousLoadBytes =
       totalLoadBytes - totalGatherLoadBytes;
+  double simdGatherLoadRate = std::max(1.0e-9, profile.simdMemoryGatherBps);
+  const int64_t loadedIndexContigWidth = features.loadedIndexContiguousWidth;
+  if (loadedIndexContigWidth >= 512) {
+    // Wide stride-1 runs coalesce like contiguous accesses; fold them into
+    // the contiguous pool instead of charging the gather rate.
+    totalContiguousLoadBytes += totalGatherLoadBytes;
+    totalGatherLoadBytes = 0.0;
+  } else if (loadedIndexContigWidth > 1) {
+    simdGatherLoadRate = resolveSimdGatherRate(loadedIndexContigWidth);
+  }
 
   report.breakdown.simdLoadCycles =
       totalContiguousLoadBytes / simdContiguousLoadRate +

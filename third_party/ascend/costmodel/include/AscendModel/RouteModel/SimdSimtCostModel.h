@@ -137,6 +137,11 @@ struct SimdSimtFeatureSummary {
   /// Real SSA provenance count.  Unlike laneDependentPointerOps, this field
   /// requires the address backward slice to reach a loaded/gathered index.
   int64_t loadedIndexDependentMemoryOps = 0;
+  /// Width of the contiguous stride-1 run inside the address vector of
+  /// loaded-index-dependent loads (max over non-loaded make_range dims).
+  /// 0 = no contiguous run (pure per-lane gather).  Feeds the blocked-gather
+  /// locality grading of the SIMD gather rate.
+  int64_t loadedIndexContiguousWidth = 0;
   /// Legacy rank-based proxy retained for report compatibility.
   int64_t laneDependentPointerOps = 0;
   int64_t rowLocalReduceOps = 0;
