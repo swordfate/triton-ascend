@@ -902,3 +902,46 @@ camodel 侧：predicate 的 mode/warps 查表数据已齐（4 mode × 6 warps）
    排序翻转成实测一致；
 4. 下一批修复建议顺序：D blocked-gather 分档（causal 主因）→ 位运算微基准
    校准 factor → floor → fixedOverhead。
+
+### 10.7 微基准分析与落地（2026-08-20，4 组数据）
+
+数据：`ascend_results/{blocked_gather,launch_overhead,bitops,dynamic_loop}_{simd,simt}_microbench.jsonl`
++ 扁平命名的 `ttir_*` 文件。
+
+**blocked-gather（已落地 ebd22b699）**
+- SIMD read 速率 W 曲线：W≤128 严格线性 2.272×W（r²>0.9999），W=256→507、
+  W=512→1204（≈contiguous cap）；causal_conv1d（W=256）用 507 重算 SIMD
+  ≈5k cycles，与实测 4657 吻合。
+- W 识别：loaded-index-dependent load 指针链上、非 loaded 侧的
+  `make_range end` 取 max（causal 的 256 是连续维、2 是行数维；纯 gather 如
+  indirect_elementwise 链在 loaded 边界即断 → W=0 → 常数不变，5-case 安全）。
+- SIMT 侧微基准 warp/cyc 口径与 cce 不可比（SIMT 路由可能向量化 load），
+  SIMT 分档暂缓，需要 cce 补测 blocked 档。
+
+**launch overhead（待落地，需决策）**
+- SIMD：grid≤1024 平台 ≈10800 cycles，4096 翻倍 → cores_per_wave≈2048，
+  拟合 `10668×ceil(grid/2048)+146`；SIMT 全段平 ≈11920（无爬坡）。
+- 5-case（launch-inclusive 测法）可安全删除 floor（fixedOH≤实测恒成立）；
+  但 seg_indptr（kernel-only 测法，实测 2007 < 任何 base）会超 5.4×，且删
+  floor 后其 simd/simt 排序会翻——根因是 simt 标量串行 load 欠模（E 类），
+  需先修 E 或保留小 floor 过渡。mixed 是否加 base 有矛盾：count_expert
+  mixed 6060≈实测 6513 说明无 base 才对。建议 profile 加
+  `fixed_overhead_scope` 开关（launch-inclusive/kernel-only）。
+
+**bitops（已落地 ebd22b699）**
+- **96× 标量化假设被证伪**：实测 factor SIMD bitop≈0.87、min≈0.88、
+  rem≈1.47、bitcast≈0.92（16M 档，ALU 上界）；SIMT ≈1.1。profile 改为
+  1.0/1.0/1.5/1.0，confidence medium。
+- mx4 验证：新 factor 下 SIMD 分回 9096→floor 11000，**排序会再翻错**——
+  说明 mx4 的 72k 残差不是 bitop 吞吐，是循环依赖链/控制开销；trip 代理
+  落地前 mx4 排序依赖 factor 96 的"歪打正着"，需与 trip 代理一起回归。
+
+**dynamic loop（trip 代理依据，待落地）**
+- 纯连续 silu loop：SIMD 75 cyc/trip vs SIMT 415（SIMD 反而便宜）；
+  **计算索引（divsi）loop：SIMD 8456 cyc/trip vs SIMT 416——SIMD 崩坏
+  110×，0.51 cyc/elem**。silu_mul 的 5243 cyc gap ≈ 0.6 个微基准 trip，
+  量级自洽。
+- trip 代理高价值场景是"SIMD × 计算索引 loop"；纯连续 loop 收益小。
+- 方案：JIT 传 tensor numel（同 launch_grid 链路）→ C++ 按 offset 结构算
+  per-CTA trips；需同步扩展 `pointerDependsOnLoadedIndex` 识别 divsi 计算
+  索引，否则 per-trip 成本分档失效。
