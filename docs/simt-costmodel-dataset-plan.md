@@ -973,3 +973,25 @@ camodel 侧：predicate 的 mode/warps 查表数据已齐（4 mode × 6 warps）
   `fixedOverhead(shape_class, grid, num_warps, route)`，shape_class 映射到
   C++ 特征（hasIndirectMemory→indirect、tensor load→vector/silu、
   否则 scalar）。数据回来前保留 min_kernel_cycles floor。
+
+### 10.9 launch overhead v2 分析与外部 harness 疑点（2026-08-20）
+
+**v2 数据（`launch_overhead_v2_{simd,simt}.jsonl`，back-to-back，cycles）**
+- SIMD scalar：12900 平（grid≤1024），4096 翻倍（+8500/波，cores/wave≈2048）；
+  vector/silu：13800 平、无爬坡（tensor kernel 不翻倍）；indirect 工作主导。
+- SIMT：全 shape 12800-14000 平、无爬坡；大 grid 低 warps 是工作主导。
+- single-launch ≈ back-to-back + ~8500（launch gap 被背靠背摊掉）。
+
+**系统性矛盾**
+- 外部 harness 的 5 个算子 SIMT 实测 3323-7147 全部 < SIMT 最小 launch 12700；
+  seg_indptr simd 2007 / causal simd 4657 < SIMD 最小 12257——物理不可能
+  （launch-inclusive 口径）。
+- 5-case harness 的 SIMT 实测 11755-15000 全部 ≥ 下限，与微基准自洽。
+- 结论：外部 harness 疑似 kernel-only 计时（Event 未包 launch gap 或缺 sync），
+  "SIMT 快速路径 3.4μs"很可能是测量伪影。
+- 决定性测试：用 single-launch 口径重测 seg_indptr（见本文件外的复测说明）。
+  若变 ~13μs → 旧数据作废、floor 保留（已 ≈ 实测最小开销）；若仍 3.36μs →
+  按 codegen 路径分档实现 fixedOverhead。
+- 另注：现有 floor 已 ≈ v2 实测最小开销，且 dot/scan 组件级 floor 本身含
+  launch 成分，直接替换为加性 fixedOverhead 会双重计费，需先剥离组件
+  floor 的 launch 部分。
