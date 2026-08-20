@@ -1032,3 +1032,29 @@ dispatch）。评分口径应与之对齐。
 - seg_indptr：删 floor 后 1430/146 vs 2007/3323，simt 仍欠（E 类串行
   标量 load 依赖链）。
 - mx4：simd 需 trip 代理 + 依赖链模型；simt 4450 vs 模型小。
+
+### 10.11 kernel-only 校准落地（2026-08-20）
+
+数据源：profiler 口径的 5-case（simt_autoscope_bench_v9_prof.jsonl）、
+scan（scan_{simd,simt}_prof.jsonl）、dot（{simd,simt}_components_prof.jsonl）
++ 旧 Event 数据的斜率重拟（斜率天然剥离 launch 固定项）。
+
+| 参数 | 旧（launch 污染） | 新（kernel-only） | 依据 |
+|---|---|---|---|
+| simd.memory contiguous | power fit（4M 时 ~1250 总） | 平 1600 B/cyc | 斜率 1683 + elementwise 锚点 1806 |
+| simd.memory gather | 2.27 | 2.0 | 斜率 1.95 + indirect 锚点 2.11 |
+| blocked linear/w256/w512 | 2.272/507/1204 | 1.25/347/1600 | blocked_gather 三档斜率 78.6/576/2076（read 侧折算） |
+| simd.dot | 128 + flops/4096 | 2200 + flops/12000 | prof dot 5 档拟合 |
+| simd.scan fixed | 0（被误删） | 1000 + n/0.0682（恢复） | prof 截距 1022、斜率 0.0694 ✓ 原值即对 |
+| simt.dot | 128 + flops/4096 | 10000 + flops/2000 | prof dot：~11k 固定（runtime-loop dot 模板）+ 斜率 ~2000 |
+| simt.scan | 12800 平（全是 launch） | 960 + n/1.21（新斜率项） | prof n=256..8192：截距 960、1.208 elem/cyc |
+| simd fixed_overhead_cycles | 无 | 2000（新增） | elementwise 4430−mem 2353−compute 950 残差 |
+| simt fixed_overhead_cycles | 无 | 3300（新增） | seg_indptr 3323 / silu_mul 3422 的 kernel-only 下限 |
+
+**已知遗留（下一轮）**
+- SIMT 无 wave 项：大 grid 大工作量 kernel（elementwise 实测 13.5k vs 模型
+  ~3.7k、indirect 11.7k vs 5.3k）仍低估 2-3×——需要 SIMT rate 按 num_warps
+  查表（cce 数据已有）+ waves = ceil(total_warps/capacity)。
+- rowwise SIMD（reduce 计算成本）与 causal SIMT（blocked rate）仍欠。
+- mixed 不加 fixed_overhead（count_expert 6060≈6513 证明 transition
+  fallback 已够）。

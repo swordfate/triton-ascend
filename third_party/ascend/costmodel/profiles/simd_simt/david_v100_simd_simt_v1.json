@@ -231,34 +231,35 @@
       "hbm_bytes_per_system_cycle": 1617.96,
       "vector_mte2_bytes_per_system_cycle": 202.25,
       "mte3_bytes_per_system_cycle": 202.25,
-      "source": "Selection-model seed retained for v4 score continuity; 202.25 B/SYS_CNT-cycle corresponds to 200 GB/s and must not be presented as the davidV100 75/71 GB/s data-mover specification",
+      "source": "Selection-model seed retained for v4 score continuity; 202.25 B/SYS_CNT-cycle corresponds to 200 GB/s and must not be presented as the davidV100 75/71 GB/s data-mover specification; kernel-only slope refit from simd_memory_microbench_v2 + blocked_gather slopes (2026-08-20)",
       "confidence": "low",
       "note": "Model-specific fallback, not shared microbenchmark evidence",
-      "contiguous_bytes_per_system_cycle": 1250.76,
-      "gather_bytes_per_system_cycle": 2.27,
+      "contiguous_bytes_per_system_cycle": 1600.0,
+      "gather_bytes_per_system_cycle": 2.0,
       "strided_power_fit_A": 27.034,
       "strided_power_fit_exponent": -0.631,
-      "contiguous_power_A": 0.0014055,
+      "contiguous_power_A": 0.0,
       "contiguous_power_exponent": 0.8235,
-      "blocked_gather_linear_bps_per_width": 2.272,
-      "blocked_gather_w256_bps": 507.0,
-      "blocked_gather_w512_bps": 1204.0
+      "blocked_gather_linear_bps_per_width": 1.25,
+      "blocked_gather_w256_bps": 347.0,
+      "blocked_gather_w512_bps": 1600.0
     },
     "dot": {
       "description": "All-SIMD dot setup and throughput seed used for every dot operation; current calibrated admission is narrower and covers only tiny irregular dot.",
-      "startup_system_cycles": 128.0,
-      "flops_per_system_cycle": 4096.0,
-      "source": "AscendModel cube startup/throughput seed; DES feedback is expected to refine scheduled lowering",
+      "startup_system_cycles": 2200.0,
+      "flops_per_system_cycle": 12000.0,
+      "source": "kernel-only profiler fit simd_components_prof.jsonl (2026-08-20)",
       "confidence": "low",
       "small_kernel_min_cycles": 0
     },
     "scan": {
       "description": "Single-block cumsum microbenchmark on A5, fitted in issue-payload units before program_issue_scale.",
-      "fixed_system_cycles": 0.0,
+      "fixed_system_cycles": 1000.0,
       "elements_per_system_cycle": 0.0682,
       "source": "A5 scan_simd.jsonl n=1024/4096/8192",
       "confidence": "low"
-    }
+    },
+    "fixed_overhead_cycles": 2000.0
   },
   "simt": {
     "description": "Inputs used to estimate the all-SIMT candidate and the SIMT portion of a mixed candidate.",
@@ -365,9 +366,9 @@
     },
     "dot": {
       "description": "All-SIMT dot setup and scalar-FMA throughput seed used for every dot operation; current calibrated admission is narrower and covers only tiny irregular dot.",
-      "startup_system_cycles": 128.0,
-      "flops_per_system_cycle": 4096.0,
-      "source": "SIMT tl.dot lowers to the same cube unit as SIMD on A5; first SIMT dot microbench (128x128x64) measured 0.0159 ms vs SIMD 0.0164 ms.",
+      "startup_system_cycles": 10000.0,
+      "flops_per_system_cycle": 2000.0,
+      "source": "kernel-only profiler fit simt_components_prof.jsonl (2026-08-20)",
       "confidence": "low",
       "small_kernel_min_cycles": 0
     },
@@ -434,9 +435,11 @@
     },
     "scan": {
       "description": "Single-block cumsum microbenchmark on A5; latency is nearly flat for n>=1024.",
-      "fixed_system_cycles": 0.0,
-      "source": "A5 scan_simt.jsonl n=1024/4096/8192",
-      "confidence": "low"
-    }
+      "fixed_system_cycles": 960.0,
+      "source": "kernel-only profiler fit scan_simt_prof.jsonl n=256..8192 (2026-08-20)",
+      "confidence": "low",
+      "elements_per_system_cycle": 1.21
+    },
+    "fixed_overhead_cycles": 3300.0
   }
 }
