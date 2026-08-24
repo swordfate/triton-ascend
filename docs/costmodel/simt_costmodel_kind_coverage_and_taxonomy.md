@@ -1,6 +1,6 @@
 # StageCostModelKind 覆盖分析与分类重组
 
-> 配套文档：《simt_costmodel_structured_design.md》（8 族 20 类定义见其 3.5.2/3.5.6）
+> 配套文档：《simt_costmodel_structured_design-v2.md》（8 族 20 类定义见其 2.6 节；注：v1 设计文档已废弃删除）
 >
 > 本文内容：
 > 1. 现状 8 族 20 类的逻辑复盘（含每个类的判定依据）
