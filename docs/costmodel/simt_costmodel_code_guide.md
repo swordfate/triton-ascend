@@ -633,6 +633,353 @@ recurrence 的交错（parallelRecurrenceGroupCount）、DCache 对离散访问�
 
 ---
 
+## 11. 常见疑问：StageCostModel 的九个本质问题
+
+> 本节是针对代码阅读中容易产生的九个疑问的详细解答。所有结论都可以在上文对应
+> 代码位置直接验证；回答尽量讲“代码实际做了什么”和“为什么这样做”，而不是只给
+> 设计层口号。
+
+---
+
+### 11.1 evaluateSimtApplicability 是如何评估可行性的？具体法则是怎样的？
+
+`evaluateSimtApplicability` 位于 `SimdSimtCostModel.cpp:1290`，它并不是一个完整的
+“性能可行性”评估，而是进入 Stage 成本模型之前的一个**前置门槛**。它只回答一个问题：
+“当前 kernel 是否存在值得继续做 SIMD/SIMT 路由分析的机制，并且目标后端能否物化”。
+
+具体法则非常直接：
+
+| 字段 | 计算方式 |
+|---|---|
+| `targetSupported` | 由调用方传入，当前是 `options.compileOn91095` |
+| `recognizedAnchorCount` | `features.simtAnchors.recognizedCount`，即 `SimtAnchorPlan` 里识别出的 anchor 总数 |
+| `materializableAnchorCount` | `features.simtAnchors.count`，即真正能物化（`materializable`）的 anchor 数 |
+| `mechanisms` | 所有 anchor 的 `mechanismKinds` + `observedMixedKinds` 去重排序 |
+| `mechanismDetected` | `recognizedAnchorCount > 0 || !mechanisms.empty()` |
+| `materializable` | `targetSupported && materializableAnchorCount > 0` |
+
+决策原因（`reasons`）按优先级只有三种：
+
+1. 没有任何已识别机制：`no_recognized_simt_mechanism`
+2. 有机制但目标不支持 SIMT 物化：`target_does_not_support_simt_materialization`
+3. 有机制、目标支持，但没有可物化 anchor：`no_materializable_simt_anchor`
+
+**本质**：这个函数不评估“SIMT 是否更快”，它只评估“有没有资格进入后续合法候选集合”。
+是否更快由 `evaluateStageModel` → `StageCostEvaluator` → `solveStageRoutes` 决定。
+因此不要把 `evaluateSimtApplicability` 看作可行性评分，它更像一个 `can_materialize` 门禁。
+
+---
+
+### 11.2 phase 似乎是根据模板来匹配的，这会导致泛化性非常差；讨论后说把 phase 去掉，直接按照语义去进行 stage 划分的话该怎么做最大化泛化性呢？
+
+你的观察是正确的。当前 `PhaseBoundaryAnalysis::analyze(features, opts)`
+（`StagePartitioner.cpp:1477`）只支持三个硬编码 domain：
+
+- `TriangularRecurrence`
+- `LoadedIndexRowwiseReduction`
+- `IndirectUnderfilledDot`
+
+并且 `assignRootPhaseIds`（`StagePartitioner.cpp:917`）为每个 domain 写死了
+单调状态机：
+
+```
+Triangular: Head -> Load -> Recurrence -> MergeStore
+Rowwise:    Index -> Gather -> Reduction -> ConvertStore
+IndirectDot: Index -> Gather -> Dot -> OutputStore
+```
+
+这确实泛化性差：新增一种 kernel 结构就要新增一个 domain 和一套状态机。
+
+如果“去掉 phase、直接按语义划分 stage”，最大化泛化性的做法应当是：
+
+1. **用统一的语义图代替 domain 模板**
+   把 top-level semantic roots 看成一张有向图：
+   - SSA 数据依赖边（operand -> user）
+   - 控制流边（region/block 顺序）
+   - 循环携带依赖边（`scf.for`/`scf.while` 的 iter_args）
+   然后在这个图上做通用的结构切分，而不是依赖“这是 solve_tril”这种 kernel 身份。
+
+2. **用 SCC/依赖闭包找出“必须串行”的算法阶段**
+   - 强连通分量（SCC）天然对应循环携带依赖/递推/迭代间依赖；
+   - 递推 SCC 内部是一个不可拆散的串行 Stage；
+   - 从 SCC 出发，再按“访存依赖”“控制依赖”扩展成连续区域。
+
+3. **用 StageKindClassifier 的 deriveKind 作为 Stage 单一语义的判据**
+   `StageKindClassifier::analyze`（`StagePartitioner.cpp:1697`）已经具备从 exact
+   operation graph 推导 dominant kind 的能力：
+   `dot -> reduction -> conversion -> loop -> indirect -> continuous -> scalar`。
+   如果 StageBoundaryAnalysis 能先把图切成“每个子图只含一种 dominant semantics”
+   的连通块，那么 phase 模板就不再需要。
+
+4. **把“Phase”退化为 Stage 的序列分组**
+   Phase 可以保留为“一组必须按程序顺序执行的 Stages”，但它不应由 domain 枚举产生，
+   而应由图的拓扑序和依赖边界自动产生。例如：
+   - 一个 SCC → 一个串行 Phase；
+   - 一个 SCC 后面跟着的独立内存/计算块 → 另一个 Phase；
+   - 多个互不依赖的同构子图 → 可以合并成同一类 Stage 或保留为并行 Stage。
+   这样 Phase 就从“模板”变成“依赖图的可达性/拓扑分层”。
+
+5. **保留 anchor 作为物化契约，而不是作为切分模板**
+   `SimtAnchorPlan` 仍然应该决定哪些区域可以物化为 local SIMT，但它不应当决定
+   “kernel 分几段”。通用切分器可以：
+   - 先做语义图切分；
+   - 再把 anchor 区域映射到对应 Stage；
+   - 如果 anchor 跨了多个语义 Stage，则说明该 anchor 本身需要拆开或说明
+     Stage 边界与物化边界不一致，应报错而不是强行套模板。
+
+6. **最大化泛化性的关键原则**
+   - 不再使用 kernel 名、算子组合模板、`dotOps == 0 && reduceOps > 0` 这类特征组合；
+   - 全部边界都从 SSA/CFG/循环携带依赖中推导；
+   - Stage 的 kind 由 `StageModelFeatures` 自动判定；
+   - 新增硬件机制时，只需在 `SimtAnchorAnalysis` 和 `StageCostModels` 注册新机制/
+     新 kind，不需要改 StagePartitioner 的 domain 状态机。
+
+这样做的收益是：solve_tril、rowwise quant、gather-dot 只是“恰好落到同一种通用
+切分结果”的特例，而不是“被模板枚举出来的三种情况”。
+
+---
+
+### 11.3 StageBoundaryAnalysis 是怎么划分的，划分的依据是什么，是 anchor 吗？
+
+不是 anchor。`StageBoundaryAnalysis`（`StagePartitioner.cpp:1525`）的划分依据是
+**PhaseBoundaryPlan 给出的算法 Phase 顺序**，anchor 只是后续的物化证据。
+
+流程分两层：
+
+1. **第一阶段：按 Phase 模板生成 Stage 骨架**
+   `StageBoundaryAnalysis::analyze` 根据 `phasePlan.domain` 调用
+   `partitionTriangular` / `partitionRowwise` / `partitionIndirectDot`
+   （`StagePartitioner.cpp:562/662/714`）。
+   这三套函数从 `buildKernelStageWorkload(features)` 里用
+   `takeLoads/takeStores/takeDot/takeScalarAndPredicate/takeAllOperations`
+   精确“取走” workload，生成一组 Stage。这个阶段本质上是“domain 模板切分”。
+
+2. **第二阶段：精确 operation ownership**
+   如果 `PhaseBoundaryPlan` 带有 operation graph，则调用
+   `attachCompleteOperationOwnership`（`StagePartitioner.cpp:1098`）。
+   它按照 `rootPhaseIds` 把每个 top-level semantic root 分配给对应 Stage，
+   并维护：
+   - Stage 序号单调（不能回退）；
+   - 每个 root 只被分配一次；
+   - 分配结果必须覆盖全部 root。
+
+3. **anchor 的角色**
+   anchor plan 只在 `attachExactAnchorOwnership`
+   （`StagePartitioner.cpp:815`）和 `deriveLocalSimtScopeTraffic`
+   （`StagePartitioner.cpp:1280`）中使用：
+   - 判断某个 Stage 是否真的由可物化 local SIMT anchor 支撑；
+   - 计算跨 scope 的真实 tensor 流量。
+   它不决定 Stage 边界。
+
+**一句话**：Stage 边界来自“算法 Phase 的单调顺序 + 每个 root 的语义归属”，
+anchor 只是确认“这个 Stage 是否有对应的物化证据”。
+
+---
+
+### 11.4 StageWorkloadAnalysis 和 StageFeatureAnalysis 作用是什么，前面不是 analyzeSimdSimtFeatures 已经分析过了吗？和前面分析结果的逻辑关系是什么？
+
+三者不是重复，而是不同层级的分析：
+
+| 分析 | 输入 | 输出 | 作用 |
+|---|---|---|---|
+| `analyzeSimdSimtFeatures` | 整个 module + anchor plan | `SimdSimtFeatureSummary` | kernel 级全局特征：op 计数、bytes、loop 信息、anchor 内 captured/escaping 等 |
+| `StageWorkloadAnalysis` | 已划分好的 Stage（精确 operation ownership） | 每个 Stage 的 `workload` | 从每个 Stage 真正拥有的操作树重新计算动态工作量 |
+| `StageFeatureAnalysis` | 已划分好的 Stage | 每个 Stage 的 `features` | 从每个 Stage 真正拥有的操作树重新计算结构特征 |
+
+逻辑关系：
+
+1. `analyzeSimdSimtFeatures` 是**全局粗粒度**分析。它先于 Stage 划分，主要用来：
+   - 判断 domain；
+   - 生成初始 `buildKernelStageWorkload(features)`；
+   - 计算 anchor 内工作量，供 mixed 计费；
+   - 提供 kernel 级 lowerability。
+   它不知道“某个 op 最终属于哪个 Stage”。
+
+2. Stage 划分完成后，`StageWorkloadAnalysis::analyze`
+   （`StagePartitioner.cpp:1885`）用 `accumulateDynamicOperationTree` 对每个 Stage
+   的 owned operations 重新累加 workload，并按 `iterationCount` 归一化。
+   这是必要的，因为模板切分阶段用 `take*()` 得到的 workload 只是“按全局特征
+   估出来的初始分配”；一旦拿到精确 operation ownership，就必须用真实操作树重算，
+   否则 Stage 工作量可能与实际代码不一致。
+
+3. `StageFeatureAnalysis::analyze`（`StagePartitioner.cpp:1565`）同理：
+   - operation-graph 模式下，它从 owned 操作树重新推导 `hasLoop`、
+     `hasLoopCarriedDataDependency`、`hasIndirectMemory`、`hasReduction`、
+     `hasDot`、`hasConversionPack` 等；
+   - 它还会做兄弟循环归一化，避免多个循环的 control 成本被重复计算。
+   在 fallback（无 operation graph）模式下，它才退化为从 Stage kind 推断 features。
+
+**关系总结**：
+`analyzeSimdSimtFeatures` 负责“kernel 是什么”，
+`StageWorkloadAnalysis` 负责“每个 Stage 有多少动态工作”，
+`StageFeatureAnalysis` 负责“每个 Stage 是什么结构”。
+前者是后两者的全局输入和守恒基准，后两者是 Stage 划分后的精确化/校验。
+
+---
+
+### 11.5 StageModeLegalityAnalysis 有必要存在吗？毕竟 StageKindClassifier 不是已经划分好 kind 类型了吗？
+
+有必要。`StageKindClassifier` 和 `StageModeLegalityAnalysis` 回答的是两个不同问题：
+
+- `StageKindClassifier`：这个 Stage 的**成本模型种类**是什么？
+  （`LoopCarriedRecurrence` / `IndirectGatherMemory` / `CubeRoofline` ...）
+- `StageModeLegalityAnalysis`：这个 Stage 可以有哪些**实现方式**？
+  （SIMD？SIMT？SIMT 下可以用 F1/F2/F4？local mixed scope 能不能用 F2/F4？）
+
+`StageModeLegalityAnalysis::analyze`（`StagePartitioner.cpp:1977`）设置：
+
+- `simdLegal = true`
+- `simtLegal = true`
+- `legalSimtFactors = {1, 2, 4}`（由 `maximumSuperblockFactor` 截断）
+- `localSimtMaterializable` 的 Stage 再设置 `localSimtFactors`
+
+它把“后端当前能不能物化”作为独立约束：
+- 纯-SIMT F2/F4 只有在 whole-kernel AutoBlockify V1 / SuperBlock 可用时才合法；
+- local mixed F2/F4 只有在 `scopeSuperblockMaterializable` 时才合法；
+- 否则 local mixed scope 只能 F1。
+
+如果没有这个分析，`StageCostEvaluator` 会把所有 SIMT F2/F4 都当成可枚举候选，
+`solveStageRoutes` 就可能选出一条当前后端无法执行的 route。所以它不是冗余，
+而是“评分空间”之前的合法性裁剪。
+
+---
+
+### 11.6 buildStageHardwareProfile 要来干嘛的，前面不是已经有 loadCandidateProfile 去加载硬件信息了吗？
+
+`loadCandidateProfile` 和 `buildStageHardwareProfile` 是两层：
+
+1. `loadCandidateProfile`（`SimdSimtCostModel.cpp:696`）
+   - 从 JSON 文件加载原始 `CandidateProfile`；
+   - 解析 schema、microbenchmark 引用、simd/simt ops、memory、dot、
+     structural 惩罚、transition 等；
+   - 它是“文件格式层”的解析器。
+
+2. `buildStageHardwareProfile`（`SimdSimtCostModel.cpp:1163`）
+   - 把 `CandidateProfile` + `numWarps` 转换成 Stage 模型真正消费的
+     `HardwareProfile`；
+   - 做单位换算和派生计算，例如：
+     - `simd.vectorWidth = simdVectorWidthBits / 32`
+     - `simt.issueWidth = simtWarpSize`
+     - `predicateOperationsPerCycle = throughput / factor`
+     - `logicalWarpGroupCount = numWarps`
+     - 把 superblock 参数、transition 参数复制到 `HardwareProfile`
+   - 这是“领域模型层”的适配器。
+
+**为什么不能直接用 CandidateProfile**：StageCostModels 不关心 JSON 结构，
+它只关心 `HardwareProfile` 这种已经算好、校验过、缺省值也处理过的 C++ 对象。
+`buildStageHardwareProfile` 让 JSON schema 和成本公式解耦：以后 profile 格式变化时，
+只需要改这一层映射，不需要改 18 个 stage 模型。
+
+---
+
+### 11.7 applySuperBlock 是调整了之前的哪个评分吗？
+
+`applySuperBlock`（`StageCostModels.cpp:178`）调整的是**单个 Stage 在某一个
+SIMT SuperBlock implementation 下的周期数**，不是某个旧 aggregate 评分。
+
+调用点在 `StageCostEvaluator::evaluate`（`StageCostModels.cpp:899`）：
+
+```cpp
+cost.totalCycles = applySuperBlock(
+    stage, resources, implementation, profile,
+    (*model)->estimate(context, implementation, resources));
+```
+
+也就是：
+
+1. 先用对应 Stage 模型（例如 `SIMTRecurrenceStageCostModel`）算出基准
+   `stageCycles`；
+2. 再在 SIMT 且 `superblockFactor > 1` 时，用 `applySuperBlock` 修正这个
+   Stage 的 `totalCycles`；
+3. 修正后的 `StageImplementationCost` 进入 `StageCostTable`；
+4. 最后 `solveStageRoutes` 基于这些修正后的 stage 成本做 DP。
+
+它调整的是 **Stage 级 SIMT-F2/F4 候选成本**，影响的是最终 route DP 的输入，
+而不是独立地在 route 之后再做一次全局加分。
+
+公式本质：
+
+```
+latencySensitive = N×(load+store+shuffle+divergence)
+cost' = max(issueFloor, base - latencySensitive + latencySensitive/effectiveFactor + pressure)
+       + persistentStatePressure
+```
+
+因此它只把“可被多 logical program 隐藏的延迟”除以 `effectiveFactor`，
+不能把算术/控制/同步也除以 factor。
+
+---
+
+### 11.8 solveStageRoutes 是在干什么，解决什么核心问题？核心法则是什么？
+
+`solveStageRoutes`（`StageRouteCostModel.cpp:417`）解决的核心问题是：
+
+> 给定每个 Stage 在 SIMD / SIMT-F1 / SIMT-F2 / SIMT-F4 下的成本和
+> SIMD<->SIMT 边界成本，选择一个全局可物化的 kernel route：
+> AllSIMD / AllSIMTOnly / Mixed，并让总周期最小。
+
+它不是简单地对每个 Stage 取局部最优，因为它要同时满足：
+
+1. **route class 一致性**
+   模式序列一旦从 AllSIMD/AllSIMT 进入 Mixed，就不能再变回纯模式。
+
+2. **SuperBlock factor 一致性**
+   一个 kernel 中所有 SIMT Stage 必须使用同一个 `routeSuperblockFactor`。
+   不允许前半段 F2、后半段 F4。
+
+3. **Mixed 只允许 local materializable SIMT**
+   如果 mixed route 中出现一个非 local SIMT 的 SIMT Stage，该 route 非法；
+   因为 pure-SIMT 和 local mixed scope 是两种不同的物化路径。
+
+4. **Mixed 要付真实 scope 边界成本**
+   对 local SIMT Stage，在进入 Mixed 类时将其成本替换为
+   `mixedEquivalentStageCost`：
+   - 原 SIMT stage 成本；
+   - 每个 anchor 一对 SIMD->SIMT + SIMT->SIMD 固定切换；
+   - captured/escaping tensor 的 UB 双向搬运成本。
+
+DP 状态：
+
+```
+State[exitMode][routeClass] -> map<superblockFactor, PartialRoute>
+```
+
+按 Stage 顺序扩展，保留每个 `(exitMode, routeClass, factor)` 的最优前缀，
+最后分别从 AllSIMD / AllSIMT / Mixed 三类中取最优。
+
+**核心法则**：route 成本 = 每个 Stage 在统一 route 约束下的实现成本之和 +
+模式切换/数据搬运成本；约束必须保证“选出来的 route 一定能被物化”。
+
+---
+
+### 11.9 buildSelectedMixedAnchorPlan 这里怎么又在构建 anchor plan 了，和之前的区别是什么，有必要吗？
+
+有必要。它构建的不是“完整 anchor plan”，而是“被选中的 mixed route 真正需要物化的
+anchor 子集”。
+
+区别：
+
+| | 之前的完整 `SimtAnchorPlan` | `buildSelectedMixedAnchorPlan` 产物 |
+|---|---|---|
+| 来源 | `buildMixedSimtAnchorPlan(module, compileOn91095)` | `report.stageModel` 中 mixed route 的 SIMT Stage |
+| 内容 | 所有识别出的、可物化的 anchor | 只保留 mixed route 中 implementation == SIMT 的 Stage 所拥有的 anchor |
+| 用途 | feature 提取、全量评分、lowerability、materializer 的“全集” | 实际 `materializeSimtAnchorPlan` 只物化这个子集 |
+
+`buildSelectedMixedAnchorPlan`（`SelectSimdSimtCostModel.cpp:81`）的流程：
+
+1. 如果 `stageModel.mixed` 不合法或 implementation 数量对不上，返回空 plan；
+2. 遍历每个 stage 的 mixed-route implementation；
+3. 只收集 `implementation.mode == SIMT` 的 stage 所拥有的 `simtAnchorIndices`；
+4. 从完整 plan 中取出这些 anchor，去重后作为 selected plan。
+
+**必要性**：评分时我们允许所有 anchor 参与分析，但最终 mixed route 可能只选择
+其中一部分 SIMT Stage。如果 materializer 把完整 anchor plan 全部搬进 scope，
+就会物化出比评分更多的 SIMT 区域，导致“分数描述的路由”和“实际执行的路由”不一致。
+这正是第 10.3 节强调的不变量：**分数与物化同源**。
+`buildSelectedMixedAnchorPlan` 就是把 DP 选出的路转换回物化指令的唯一桥梁。
+
+---
+
 ## 附：关键代码位置速查
 
 | 想找什么 | 文件:行 |
