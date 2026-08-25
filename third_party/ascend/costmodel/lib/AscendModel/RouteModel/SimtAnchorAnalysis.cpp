@@ -692,6 +692,40 @@ static bool hasTensorMemoryOperation(Operation *op) {
   return found;
 }
 
+/// Reject patterns that already belong to existing phases (reduction, dot,
+/// scan).  The scalar-indexed dense copy anchor is only for copy-like kernels.
+static bool hasReductionDotOrScan(Operation *op) {
+  if (!op)
+    return false;
+  bool found = false;
+  op->walk([&](Operation *nested) {
+    if (found)
+      return;
+    const llvm::StringRef name = nested->getName().getStringRef();
+    if (name == "tt.dot" || name == "tt.reduce" || name == "tt.scan")
+      found = true;
+  });
+  return found;
+}
+
+/// Require at least one tensor load/store whose pointer depends on a loaded
+/// index.  This keeps the scalar-setup anchor tied to the same scalar-indexed
+/// dense-copy mechanism used by the existing LoadedIndexDependentMemory anchor.
+static bool hasLoadedIndexDependentTensorMemory(Operation *op) {
+  if (!op)
+    return false;
+  bool found = false;
+  op->walk([&](Operation *nested) {
+    if (found)
+      return;
+    const llvm::StringRef name = nested->getName().getStringRef();
+    if ((name == "tt.load" || name == "tt.store") &&
+        hasTensorPointerOperand(nested) && pointerDependsOnLoadedIndex(nested))
+      found = true;
+  });
+  return found;
+}
+
 /// Build a scalar-setup local-SIMT anchor for scalar-indexed dense copy
 /// kernels.
 ///
@@ -707,7 +741,8 @@ tryBuildScalarIndexSetupAnchor(Operation *op, bool compileOn91095) {
   const llvm::StringRef name = op->getName().getStringRef();
   if (name != "scf.for" && name != "scf.while")
     return std::nullopt;
-  if (!hasTensorMemoryOperation(op))
+  if (!hasTensorMemoryOperation(op) || hasReductionDotOrScan(op) ||
+      !hasLoadedIndexDependentTensorMemory(op))
     return std::nullopt;
 
   Block *block = op->getBlock();
