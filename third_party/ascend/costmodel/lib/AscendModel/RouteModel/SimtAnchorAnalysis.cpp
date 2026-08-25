@@ -651,6 +651,101 @@ combineWholeKernelStatus(CandidateLoweringStatus lhs,
   return rank(lhs) >= rank(rhs) ? lhs : rhs;
 }
 
+static bool isFunctionLikeTTIROp(Operation *op) {
+  if (!op)
+    return false;
+  const llvm::StringRef name = op->getName().getStringRef();
+  return name == "tt.func" || name == "func.func";
+}
+
+static bool isTopLevelInFunction(Operation *op) {
+  if (!op)
+    return false;
+  return isFunctionLikeTTIROp(op->getParentOp());
+}
+
+static bool isScalarLoad(Operation *op) {
+  if (!op || op->getName().getStringRef() != "tt.load" ||
+      op->getNumResults() == 0)
+    return false;
+  return !isa<RankedTensorType>(op->getResult(0).getType());
+}
+
+static bool hasTensorMemoryOperation(Operation *op) {
+  if (!op)
+    return false;
+  bool found = false;
+  op->walk([&](Operation *nested) {
+    if (found)
+      return;
+    const llvm::StringRef name = nested->getName().getStringRef();
+    if (name == "tt.load" && nested->getNumResults() > 0 &&
+        isa<RankedTensorType>(nested->getResult(0).getType())) {
+      found = true;
+    } else if (name == "tt.store" && nested->getNumOperands() > 1 &&
+               isa<RankedTensorType>(nested->getOperand(1).getType())) {
+      found = true;
+    } else if (name == "tt.gather" || name.starts_with("tt.atomic")) {
+      found = true;
+    }
+  });
+  return found;
+}
+
+/// Build a scalar-setup local-SIMT anchor for scalar-indexed dense copy
+/// kernels.
+///
+/// The pattern is a top-level loop that owns tensor-shaped load/store work,
+/// preceded in the same block by scalar index/bin loads and pointer setup.
+/// This anchor owns only the scalar setup prefix (from block start to just
+/// before the loop); the loop itself remains a separate LoadedIndexDependent
+/// Memory anchor for the dense copy stage.
+static std::optional<SimtAnchorDescriptor>
+tryBuildScalarIndexSetupAnchor(Operation *op, bool compileOn91095) {
+  if (!op || !isTopLevelInFunction(op))
+    return std::nullopt;
+  const llvm::StringRef name = op->getName().getStringRef();
+  if (name != "scf.for" && name != "scf.while")
+    return std::nullopt;
+  if (!hasTensorMemoryOperation(op))
+    return std::nullopt;
+
+  Block *block = op->getBlock();
+  if (!block)
+    return std::nullopt;
+
+  Operation *firstScalarLoad = nullptr;
+  for (Operation &candidate : *block) {
+    if (!firstScalarLoad && isScalarLoad(&candidate))
+      firstScalarLoad = &candidate;
+    if (&candidate == op)
+      break;
+  }
+  if (!firstScalarLoad || firstScalarLoad == op)
+    return std::nullopt;
+
+  SimtAnchorDescriptor descriptor;
+  descriptor.kind = SimtAnchorKind::ScalarIndexSetup;
+  descriptor.operation = &*block->begin();
+  descriptor.scopeInsertionPoint = &*block->begin();
+  for (Operation &candidate : *block) {
+    if (&candidate == op)
+      break;
+    descriptor.scopeOperations.push_back(&candidate);
+  }
+  if (descriptor.scopeOperations.empty())
+    return std::nullopt;
+
+  descriptor.lowerability = simpleMixedLowerability(
+      "scalar_index_setup_requires_whole_module_backend_check");
+  descriptor.lowerability.mixedReasons.push_back(
+      "scalar_index_setup_prefix_scope");
+  descriptor.materializable =
+      compileOn91095 &&
+      descriptor.lowerability.mixed == CandidateLoweringStatus::Native;
+  return descriptor;
+}
+
 } // namespace
 
 llvm::StringRef mlir::ascend::stringifySimtAnchorKind(SimtAnchorKind kind) {
@@ -667,6 +762,8 @@ llvm::StringRef mlir::ascend::stringifySimtAnchorKind(SimtAnchorKind kind) {
     return "tensor_atomic";
   case SimtAnchorKind::TriangularSolveLoop:
     return "triangular_solve_loop";
+  case SimtAnchorKind::ScalarIndexSetup:
+    return "scalar_index_setup";
   }
   llvm_unreachable("unknown SIMT anchor kind");
 }
@@ -724,7 +821,9 @@ SimtAnchorPlan mlir::ascend::buildMixedSimtAnchorPlan(ModuleOp module,
     if (operationsInPlannedScope.contains(op))
       return WalkResult::skip();
     std::optional<SimtAnchorDescriptor> descriptor =
-        analyzeAnchor(op, compileOn91095);
+        tryBuildScalarIndexSetupAnchor(op, compileOn91095);
+    if (!descriptor)
+      descriptor = analyzeAnchor(op, compileOn91095);
     if (!descriptor)
       return WalkResult::advance();
 
@@ -737,14 +836,19 @@ SimtAnchorPlan mlir::ascend::buildMixedSimtAnchorPlan(ModuleOp module,
         descriptor->lowerability.mixedReasons.push_back(
             "triangular_solve_has_no_materializable_scope_operations");
       }
-    } else {
+    } else if (descriptor->kind != SimtAnchorKind::ScalarIndexSetup) {
       descriptor->scopeOperations.push_back(op);
       descriptor->scopeInsertionPoint = op;
     }
     for (Operation *scopeOperation : descriptor->scopeOperations)
       operationsInPlannedScope.insert(scopeOperation);
+    const bool isScalarSetupAnchor =
+        descriptor->kind == SimtAnchorKind::ScalarIndexSetup;
     plan.anchors.push_back(std::move(*descriptor));
-    return WalkResult::skip();
+    // The scalar-setup anchor owns only the prefix before the dense copy loop;
+    // continue walking into the loop so the tensor load/store can still form
+    // its own LoadedIndexDependentMemory anchor.
+    return isScalarSetupAnchor ? WalkResult::advance() : WalkResult::skip();
   });
 
   bool anyMixedNative = false;

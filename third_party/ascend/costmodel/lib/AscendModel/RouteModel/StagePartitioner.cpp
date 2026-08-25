@@ -775,17 +775,16 @@ partitionScalarIndexedDenseCopy(const SimdSimtFeatureSummary &features,
   setup.scalarOperations = std::exchange(remaining.scalarOperations, 0.0);
   setup.paysKernelSetup = true;
   recomputeIssueElements(setup);
-  addPhase(partition, "binned_index_setup",
+  LogicalStage setupStage = withControl(
+      makeStage("scalar_index_setup",
+                "Scalar bin/index loads, branches and offsets",
+                StageCostModelKind::IndexGeneration,
+                StageScheduleKind::StraightLine, 1, std::move(setup)),
+      features.conditionalBranchCount, features.divergentBranchCount,
+      features.activeLaneRatio);
+  addPhase(partition, "scalar_index_setup",
            "Scalar index/bin resolution and pointer setup",
-           withControl(makeStage(
-                           "binned_index_setup",
-                           "Scalar bin/index loads, branches and offsets",
-                           StageCostModelKind::IndexGeneration,
-                           StageScheduleKind::StraightLine, 1,
-                           std::move(setup)),
-                       features.conditionalBranchCount,
-                       features.divergentBranchCount,
-                       features.activeLaneRatio));
+           asLocalSIMT(std::move(setupStage)));
 
   // The remaining tensor-shaped load/store/mask/compute work is one dense
   // copy stage.  The scalar base is already resolved, so the memory side is
@@ -816,6 +815,11 @@ static bool anchorMatchesStage(const SimtAnchorDescriptor &anchor,
       stage.costModelKind == StageCostModelKind::IndirectScalarMemory)
     return anchor.kind == SimtAnchorKind::DirectGather ||
            anchor.kind == SimtAnchorKind::LoadedIndexDependentMemory;
+  // A scalar-index setup anchor owns the scalar/index prefix and backs the
+  // scalar_index_setup Stage as a local SIMT scope.
+  if (anchor.kind == SimtAnchorKind::ScalarIndexSetup) {
+    return stage.costModelKind == StageCostModelKind::IndexGeneration;
+  }
   // Scalar-indexed dense copy stages own tensor-shaped load/store anchors.
   // The base pointer depends on a scalar loaded index, but the per-lane
   // offsets remain contiguous, so the Stage remains a continuous-memory model
@@ -1126,7 +1130,7 @@ static llvm::Error assignRootPhaseIds(PhaseBoundaryPlan &plan) {
         copy = CopyPhase::DenseCopy;
       switch (copy) {
       case CopyPhase::IndexSetup:
-        plan.rootPhaseIds.push_back("binned_index_setup");
+        plan.rootPhaseIds.push_back("scalar_index_setup");
         break;
       case CopyPhase::DenseCopy:
         plan.rootPhaseIds.push_back("dense_tile_copy");
@@ -1258,8 +1262,8 @@ attachCompleteOperationOwnership(StagePartition &partition,
           target = findStage(partition, "store_dot_result");
         break;
       case PhaseBoundaryDomain::ScalarIndexedDenseCopy:
-        if (phaseId == "binned_index_setup")
-          target = findStage(partition, "binned_index_setup");
+        if (phaseId == "scalar_index_setup")
+          target = findStage(partition, "scalar_index_setup");
         else if (phaseId == "dense_tile_copy")
           target = findStage(partition, "dense_tile_copy");
         break;
