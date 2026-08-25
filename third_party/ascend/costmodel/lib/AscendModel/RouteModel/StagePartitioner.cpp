@@ -756,6 +756,56 @@ partitionIndirectDot(const SimdSimtFeatureSummary &features,
   return partition;
 }
 
+static StagePartition
+partitionScalarIndexedDenseCopy(const SimdSimtFeatureSummary &features,
+                                const PhaseBoundaryPlan *operationGraphPlan) {
+  StagePartition partition;
+  partition.domain = "scalar_indexed_dense_copy";
+  StageWorkload remaining = buildKernelStageWorkload(features);
+  const bool graphHasAutoBlockify =
+      operationGraphPlan && llvm::is_contained(operationGraphPlan->rootPhaseIds,
+                                               "auto_blockify_dispatch");
+  prependAutoBlockifyStages(partition, remaining, features,
+                            graphHasAutoBlockify);
+
+  // The scalar/index/bin resolution is the first serial phase.  It owns
+  // scalar loads, branches and integer address arithmetic, but not the
+  // tensor predicate/mask work of the actual copy loop.
+  StageWorkload setup;
+  setup.scalarOperations = std::exchange(remaining.scalarOperations, 0.0);
+  setup.paysKernelSetup = true;
+  recomputeIssueElements(setup);
+  addPhase(partition, "binned_index_setup",
+           "Scalar index/bin resolution and pointer setup",
+           withControl(makeStage(
+                           "binned_index_setup",
+                           "Scalar bin/index loads, branches and offsets",
+                           StageCostModelKind::IndexGeneration,
+                           StageScheduleKind::StraightLine, 1,
+                           std::move(setup)),
+                       features.conditionalBranchCount,
+                       features.divergentBranchCount,
+                       features.activeLaneRatio));
+
+  // The remaining tensor-shaped load/store/mask/compute work is one dense
+  // copy stage.  The scalar base is already resolved, so the memory side is
+  // a continuous tile and must not be charged as lane-wise indirect gather.
+  StageWorkload copy = takeLoads(remaining);
+  mergeWorkload(copy, takeStores(remaining));
+  mergeWorkload(copy, takeAllOperations(remaining));
+  mergeWorkload(copy, std::move(remaining));
+  const int64_t iterations =
+      std::max<int64_t>(1, features.staticLoopTripCountMax);
+  LogicalStage copyStage = makeStage(
+      "dense_tile_copy", "Continuous vector load/store tile",
+      StageCostModelKind::ContinuousTileMemory,
+      StageScheduleKind::IndependentPipelined, iterations, std::move(copy));
+  addPhase(partition, "dense_tile_copy",
+           "Dense vector tile copy with scale/convert",
+           asLocalSIMT(std::move(copyStage)));
+  return partition;
+}
+
 static bool anchorMatchesStage(const SimtAnchorDescriptor &anchor,
                                const LogicalStage &stage) {
   if (!anchor.materializable || !stage.localSimtMaterializable)
@@ -766,6 +816,13 @@ static bool anchorMatchesStage(const SimtAnchorDescriptor &anchor,
       stage.costModelKind == StageCostModelKind::IndirectScalarMemory)
     return anchor.kind == SimtAnchorKind::DirectGather ||
            anchor.kind == SimtAnchorKind::LoadedIndexDependentMemory;
+  // Scalar-indexed dense copy stages own tensor-shaped load/store anchors.
+  // The base pointer depends on a scalar loaded index, but the per-lane
+  // offsets remain contiguous, so the Stage remains a continuous-memory model
+  // while still being materializable as a local SIMT scope.
+  if (stage.costModelKind == StageCostModelKind::ContinuousTileMemory ||
+      stage.costModelKind == StageCostModelKind::ContinuousTileStore)
+    return anchor.kind == SimtAnchorKind::LoadedIndexDependentMemory;
   return false;
 }
 
@@ -910,6 +967,31 @@ static bool operationTreeContainsLoadedIndexMemory(Operation *root) {
   return found;
 }
 
+/// A root belongs to the dense copy phase when it owns a tensor-shaped
+/// load/store/gather/atomic operation.  Scalar index/bin loads and scalar
+/// arithmetic remain in the index-setup phase even though they also use
+/// `tt.load`; the distinguishing feature is the shaped tensor payload.
+static bool isDenseCopyRoot(Operation *root) {
+  if (!root)
+    return false;
+  bool found = false;
+  root->walk([&](Operation *nested) {
+    if (found)
+      return;
+    const llvm::StringRef name = nested->getName().getStringRef();
+    if (name == "tt.load" && nested->getNumResults() > 0 &&
+        isa<RankedTensorType>(nested->getResult(0).getType())) {
+      found = true;
+    } else if (name == "tt.store" && nested->getNumOperands() > 1 &&
+               isa<RankedTensorType>(nested->getOperand(1).getType())) {
+      found = true;
+    } else if (name == "tt.gather" || name.starts_with("tt.atomic")) {
+      found = true;
+    }
+  });
+  return found;
+}
+
 /// PhaseBoundaryAnalysis owns the algorithm-level serial cut.  Each root is
 /// assigned exactly one Phase id in execution order.  The state machines are
 /// monotone: after a boundary is crossed, a later root cannot move back to an
@@ -918,9 +1000,11 @@ static llvm::Error assignRootPhaseIds(PhaseBoundaryPlan &plan) {
   enum class TriangularPhase { Head, Load, Recurrence, MergeStore };
   enum class RowwisePhase { Index, Gather, Reduction, ConvertStore };
   enum class IndirectDotPhase { Index, Gather, Dot, OutputStore };
+  enum class CopyPhase { IndexSetup, DenseCopy };
   TriangularPhase triangular = TriangularPhase::Head;
   RowwisePhase rowwise = RowwisePhase::Index;
   IndirectDotPhase indirectDot = IndirectDotPhase::Index;
+  CopyPhase copy = CopyPhase::IndexSetup;
   llvm::DenseSet<Operation *> anchorRoots(plan.localSimtAnchorRoots.begin(),
                                           plan.localSimtAnchorRoots.end());
   std::optional<size_t> firstAnchorIndex;
@@ -1034,6 +1118,18 @@ static llvm::Error assignRootPhaseIds(PhaseBoundaryPlan &plan) {
         break;
       case IndirectDotPhase::OutputStore:
         plan.rootPhaseIds.push_back("output_store");
+        break;
+      }
+      break;
+    case PhaseBoundaryDomain::ScalarIndexedDenseCopy:
+      if (isDenseCopyRoot(root))
+        copy = CopyPhase::DenseCopy;
+      switch (copy) {
+      case CopyPhase::IndexSetup:
+        plan.rootPhaseIds.push_back("binned_index_setup");
+        break;
+      case CopyPhase::DenseCopy:
+        plan.rootPhaseIds.push_back("dense_tile_copy");
         break;
       }
       break;
@@ -1160,6 +1256,12 @@ attachCompleteOperationOwnership(StagePartition &partition,
           target = findStage(partition, "tiny_cube_dot");
         else if (phaseId == "output_store")
           target = findStage(partition, "store_dot_result");
+        break;
+      case PhaseBoundaryDomain::ScalarIndexedDenseCopy:
+        if (phaseId == "binned_index_setup")
+          target = findStage(partition, "binned_index_setup");
+        else if (phaseId == "dense_tile_copy")
+          target = findStage(partition, "dense_tile_copy");
         break;
       }
     }
@@ -1499,6 +1601,14 @@ PhaseBoundaryAnalysis::analyze(const SimdSimtFeatureSummary &features,
                            "indirect_underfilled_dot", std::nullopt};
     return std::optional<PhaseBoundaryPlan>{std::move(plan)};
   }
+  if (features.dotOps == 0 && features.reduceOps == 0 &&
+      features.scanOps == 0 && features.loadOps > 0 &&
+      features.storeOps > 0 && features.loadedIndexDependentMemoryOps > 0 &&
+      features.scalarLoadOps > 0) {
+    PhaseBoundaryPlan plan{PhaseBoundaryDomain::ScalarIndexedDenseCopy,
+                           "scalar_indexed_dense_copy", std::nullopt};
+    return std::optional<PhaseBoundaryPlan>{std::move(plan)};
+  }
   return std::optional<PhaseBoundaryPlan>{};
 }
 
@@ -1543,6 +1653,10 @@ StageBoundaryAnalysis::analyze(const PhaseBoundaryPlan &phasePlan,
     break;
   case PhaseBoundaryDomain::IndirectUnderfilledDot:
     partition = partitionIndirectDot(
+        features, phasePlan.hasOperationGraph() ? &phasePlan : nullptr);
+    break;
+  case PhaseBoundaryDomain::ScalarIndexedDenseCopy:
+    partition = partitionScalarIndexedDenseCopy(
         features, phasePlan.hasOperationGraph() ? &phasePlan : nullptr);
     break;
   }

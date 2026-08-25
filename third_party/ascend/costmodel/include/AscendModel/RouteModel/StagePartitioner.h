@@ -25,6 +25,7 @@ enum class PhaseBoundaryDomain {
   TriangularRecurrence,
   LoadedIndexRowwiseReduction,
   IndirectUnderfilledDot,
+  ScalarIndexedDenseCopy,
 };
 
 /// Result of PhaseBoundaryAnalysis.  This is structural boundary evidence,
