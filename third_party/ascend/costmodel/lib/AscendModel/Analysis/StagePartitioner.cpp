@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <string>
 #include <system_error>
 #include <utility>
 
@@ -384,6 +385,7 @@ static void addPhase(StagePartition &partition, llvm::StringRef id,
 }
 
 static bool operationTreeContainsName(Operation *root, llvm::StringRef name);
+static bool operationTreeContainsLoadedIndexMemory(Operation *root);
 
 static bool hasPhase(const PhaseBoundaryPlan *plan, llvm::StringRef id) {
   return plan && llvm::is_contained(plan->rootPhaseIds, id);
@@ -518,6 +520,88 @@ partitionIndirectDot(const SimdSimtFeatureSummary &features,
            makeStage("store_dot_result",
                      StageCostModelKind::ContinuousTileStore,
                      StageScheduleKind::StraightLine, 1, {}));
+  return partition;
+}
+
+/// Generic fallback partitioner.
+///
+/// The production Route Model currently recognizes only the three specialized
+/// Phase domains above.  For every other kernel we still want to enter the
+/// Stage model so stage-level scoring can be inspected and improved.
+///
+/// The fallback first tries to map each top-level semantic root to an existing
+/// StageCostModelKind using the same dominance order as StageKindClassifier
+/// (dot > reduction > conversion > loop > indirect memory > contiguous
+/// memory > scalar).  Consecutive roots with the same semantic kind are
+/// grouped into one Phase/Stage.  If a root is too complex to classify, it is
+/// still kept as its own coarse Stage so the model can start and expose the
+/// partition for refinement.
+static llvm::StringRef getGenericRootKind(Operation *root) {
+  if (!root)
+    return "scalar";
+  if (operationTreeContainsName(root, "tt.dot"))
+    return "dot";
+  if (operationTreeContainsName(root, "tt.reduce") ||
+      operationTreeContainsName(root, "tt.scan") ||
+      operationTreeContainsName(root, "linalg.reduce"))
+    return "reduction";
+  if (operationTreeContainsName(root, "arith.extf") ||
+      operationTreeContainsName(root, "arith.truncf") ||
+      operationTreeContainsName(root, "arith.fptosi") ||
+      operationTreeContainsName(root, "arith.fptoui") ||
+      operationTreeContainsName(root, "arith.sitofp") ||
+      operationTreeContainsName(root, "arith.uitofp") ||
+      operationTreeContainsName(root, "tt.fp_to_fp") ||
+      operationTreeContainsName(root, "tt.convert") ||
+      operationTreeContainsName(root, "tt.pack") ||
+      operationTreeContainsName(root, "tt.unpack"))
+    return "conversion";
+  if (operationTreeContainsName(root, "scf.for") ||
+      operationTreeContainsName(root, "scf.while"))
+    return "loop";
+  if (operationTreeContainsLoadedIndexMemory(root))
+    return "indirect_memory";
+  if (operationTreeContainsName(root, "tt.load") ||
+      operationTreeContainsName(root, "tt.store") ||
+      operationTreeContainsName(root, "tt.gather") ||
+      root->getName().getStringRef().starts_with("tt.atomic"))
+    return "memory";
+  return "scalar";
+}
+
+static StagePartition partitionGeneric(const SimdSimtFeatureSummary &features,
+                                       const PhaseBoundaryPlan *plan) {
+  StagePartition partition;
+  partition.domain = "generic";
+  prependAutoBlockifyStages(partition, features, plan);
+
+  llvm::StringRef lastKind;
+  int64_t groupIndex = -1;
+  std::string currentPhaseId;
+  for (auto indexedRoot : llvm::enumerate(plan->rootOperations)) {
+    Operation *root = indexedRoot.value();
+    // AutoBlockify V1 roots are handled by prependAutoBlockifyStages.
+    if (root->hasAttr("ta.auto_blockify_v1.loop") ||
+        root->hasAttr("ta.auto_blockify_v1.schedule")) {
+      lastKind = {};
+      continue;
+    }
+    llvm::StringRef kind = getGenericRootKind(root);
+    if (kind != lastKind) {
+      ++groupIndex;
+      currentPhaseId = std::string("generic_") + kind.str() + "_" +
+                       std::to_string(groupIndex);
+      LogicalPhase phase;
+      phase.id = currentPhaseId;
+      // Start with ScalarIssue; StageKindClassifier derives the real kind
+      // from the owned operation tree later.
+      phase.stages.push_back(makeStage(
+          currentPhaseId, StageCostModelKind::ScalarIssue,
+          StageScheduleKind::StraightLine, 1, {}));
+      partition.phases.push_back(std::move(phase));
+      lastKind = kind;
+    }
+  }
   return partition;
 }
 
@@ -677,6 +761,8 @@ static llvm::Error assignRootPhaseIds(PhaseBoundaryPlan &plan) {
   plan.rootPhaseIds.clear();
   plan.rootPhaseIds.reserve(plan.rootOperations.size());
   llvm::StringRef current;
+  llvm::StringRef lastGenericKind;
+  int64_t genericGroupIndex = -1;
   for (auto indexedRoot : llvm::enumerate(plan.rootOperations)) {
     Operation *root = indexedRoot.value();
     if (!root)
@@ -686,10 +772,25 @@ static llvm::Error assignRootPhaseIds(PhaseBoundaryPlan &plan) {
     if (root->hasAttr("ta.auto_blockify_v1.loop") ||
         root->hasAttr("ta.auto_blockify_v1.schedule")) {
       plan.rootPhaseIds.push_back("auto_blockify_dispatch");
+      // Avoid merging generic groups across the AutoBlockify scheduling shell.
+      lastGenericKind = {};
       continue;
     }
 
     switch (plan.domain) {
+    case PhaseBoundaryDomain::Generic: {
+      // Group consecutive roots by the same dominant semantic kind so the
+      // generic partition is closer to the existing StageCostModelKind set.
+      llvm::StringRef kind = getGenericRootKind(root);
+      if (kind != lastGenericKind) {
+        ++genericGroupIndex;
+        lastGenericKind = kind;
+      }
+      plan.rootPhaseIds.push_back(
+          std::string("generic_") + kind.str() + "_" +
+          std::to_string(genericGroupIndex));
+      continue;
+    }
     case PhaseBoundaryDomain::TriangularRecurrence:
       if (firstAnchorIndex && indexedRoot.index() >= *firstAnchorIndex &&
           indexedRoot.index() <= *lastAnchorIndex)
@@ -762,6 +863,8 @@ static LogicalStage *findStage(StagePartition &partition, llvm::StringRef id) {
 
 static llvm::StringRef stageIdForPhase(PhaseBoundaryDomain domain,
                                        llvm::StringRef phaseId) {
+  if (domain == PhaseBoundaryDomain::Generic)
+    return phaseId;
   if (domain == PhaseBoundaryDomain::TriangularRecurrence)
     return llvm::StringSwitch<llvm::StringRef>(phaseId)
         .Case("head", "head_index_mask")
@@ -1136,7 +1239,12 @@ identifyPhaseBoundary(const SimdSimtFeatureSummary &features,
                            "indirect_underfilled_dot", std::nullopt};
     return plan;
   }
-  return std::optional<PhaseBoundaryPlan>{};
+  // Generic fallback: let every remaining kernel enter the Stage model so we
+  // can inspect and optimize stage scoring.  Specialized Phase detection still
+  // runs first; this only prevents "stage_model_not_applicable" for kernels
+  // not covered by the three current patterns.
+  PhaseBoundaryPlan plan{PhaseBoundaryDomain::Generic, "generic", std::nullopt};
+  return plan;
 }
 
 llvm::Expected<std::optional<PhaseBoundaryPlan>>
@@ -1167,6 +1275,9 @@ StageBoundaryAnalysis::analyze(const PhaseBoundaryPlan &phasePlan,
         "StageBoundaryAnalysis requires PreparedTTIR ownership");
   StagePartition partition;
   switch (phasePlan.domain) {
+  case PhaseBoundaryDomain::Generic:
+    partition = partitionGeneric(features, &phasePlan);
+    break;
   case PhaseBoundaryDomain::TriangularRecurrence:
     if (!phasePlan.triangularSolve)
       return llvm::createStringError(
@@ -1310,12 +1421,16 @@ llvm::Error StageKindClassifier::analyze(StagePartition &partition,
   for (LogicalPhase &phase : partition.phases) {
     for (LogicalStage &stage : phase.stages) {
       const StageModelFeatures &facts = stage.features;
-      if (facts.hasDot && (facts.hasReduction || facts.hasIndirectMemory ||
-                           facts.hasLoopCarriedDataDependency))
-        return llvm::createStringError(
-            std::errc::invalid_argument,
-            "requires_split: Stage '%s' owns incompatible dominant structures",
-            stage.id.c_str());
+      // TODO(generic-stage): the generic fallback intentionally allows a
+      // coarse Stage to contain mixed dominant structures so unknown kernels
+      // can enter stage_model immediately.  Once the generic partitioner is
+      // refined, restore this strict split check for production quality.
+      // if (facts.hasDot && (facts.hasReduction || facts.hasIndirectMemory ||
+      //                      facts.hasLoopCarriedDataDependency))
+      //   return llvm::createStringError(
+      //       std::errc::invalid_argument,
+      //       "requires_split: Stage '%s' owns incompatible dominant structures",
+      //       stage.id.c_str());
 
       auto derive = [&]() {
         if (facts.hasDot)
@@ -1341,7 +1456,13 @@ llvm::Error StageKindClassifier::analyze(StagePartition &partition,
                      : StageCostModelKind::ContinuousTileMemory;
         return StageCostModelKind::ScalarIssue;
       };
-      if (!compatible(stage.costModelKind, facts))
+      // For the generic fallback the initial kind is only a structural
+      // placeholder.  Always derive the real StageCostModelKind from the
+      // owned operation features/workload; otherwise the placeholder
+      // ScalarIssue would remain because it is compatible with every fact
+      // set.
+      if (partition.domain == "generic" ||
+          !compatible(stage.costModelKind, facts))
         stage.costModelKind = derive();
       if (!compatible(stage.costModelKind, facts) ||
           (stage.costModelKind == StageCostModelKind::TinyCubeRoofline &&

@@ -22,6 +22,7 @@ struct StagePartitionerOptions {
 };
 
 enum class PhaseBoundaryDomain {
+  Generic,
   TriangularRecurrence,
   LoadedIndexRowwiseReduction,
   IndirectUnderfilledDot,
