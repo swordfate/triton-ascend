@@ -890,6 +890,7 @@ static llvm::Error assignRootPhaseIds(PhaseBoundaryPlan &plan) {
   };
   std::string current;
   int currentRank = -1;
+  bool afterFlattenedLoop = false;
   for (auto indexedRoot : llvm::enumerate(plan.rootOperations)) {
     Operation *root = indexedRoot.value();
     if (!root)
@@ -908,6 +909,7 @@ static llvm::Error assignRootPhaseIds(PhaseBoundaryPlan &plan) {
     if (root->hasAttr(kGenericLoopShellAttr)) {
       current = "generic_loop";
       currentRank = -1;
+      afterFlattenedLoop = true;
       plan.rootPhaseIds.push_back(current);
       continue;
     }
@@ -935,7 +937,8 @@ static llvm::Error assignRootPhaseIds(PhaseBoundaryPlan &plan) {
       const RoleDefinition role = roleOf(root);
       if (role.rank > currentRank) {
         currentRank = role.rank;
-        current = (llvm::Twine(afterAnchor ? "generic_tail_" : "generic_") +
+        const bool tail = afterAnchor || afterFlattenedLoop;
+        current = (llvm::Twine(tail ? "generic_tail_" : "generic_") +
                    role.phase)
                       .str();
         costModelDebug() << "role advance: root[" << indexedRoot.index() << "] "
