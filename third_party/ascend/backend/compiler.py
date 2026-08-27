@@ -499,6 +499,10 @@ def _build_costmodel_analysis_ttir(mod, metadata, opt) -> str:
     metadata["auto_simt_costmodel_analysis_v1_materialized"] = materialized
     metadata["auto_simt_costmodel_analysis_ir"] = ("post_auto_blockify_v1_f1_ttir"
                                                    if materialized else "post_layout_ttir")
+    if opt.debug and materialized:
+        from triton.runtime.cache import get_dump_manager
+        get_dump_manager(metadata["hash"]).put(
+            str(analysis_mod), "kernel.post_auto_blockify_v1.ttir.mlir", binary=False)
     return str(analysis_mod) if materialized else ""
 
 
@@ -520,6 +524,10 @@ def ttir_to_linalg(mod, metadata, opt, *, named_ops=False):
     if metadata.get("compile_mode") == "simd_simt" and opt.auto_simt_scope_mode != "off":
         if opt.enable_ttir_layout_merge:
             _run_ttir_layout_merge(mod, metadata)
+            if opt.debug:
+                from triton.runtime.cache import get_dump_manager
+                get_dump_manager(metadata["hash"]).put(
+                    str(mod), "kernel.layout_merge.ttir.mlir", binary=False)
         else:
             metadata["ttir_layout_merge_applied"] = False
             metadata["ttir_layout_coalesce_factor"] = 1
