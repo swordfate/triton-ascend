@@ -2,6 +2,7 @@
 #define ASCENDMODEL_COSTMODELTRACE_H
 
 #include "mlir/IR/Operation.h"
+#include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstdlib>
@@ -14,6 +15,20 @@ namespace mlir::ascend {
 //                  (default)
 //   2 | "verbose" : additionally every per-stage / per-implementation detail
 inline unsigned costModelTraceDepth = 0;
+inline llvm::raw_fd_ostream *costModelLogFile = nullptr;
+
+inline void initCostModelLogFile() {
+  if (costModelLogFile)
+    return;
+  if (const char *path = std::getenv("COSTMODEL_LOG_FILE")) {
+    if (*path) {
+      std::error_code ec;
+      auto *stream = new llvm::raw_fd_ostream(path, ec, llvm::sys::fs::OF_Append);
+      if (!ec)
+        costModelLogFile = stream;
+    }
+  }
+}
 
 namespace detail {
 inline int costModelLogLevelFromEnv() {
@@ -35,7 +50,10 @@ inline int costModelLogLevel = detail::costModelLogLevelFromEnv();
 inline llvm::raw_ostream &costModelLog() {
   if (costModelLogLevel < 1)
     return llvm::nulls();
-  llvm::raw_ostream &os = llvm::errs() << "[COSTMODEL] ";
+  initCostModelLogFile();
+  llvm::raw_ostream &os =
+      costModelLogFile ? *costModelLogFile : llvm::errs();
+  os << "[COSTMODEL] ";
   for (unsigned i = 0; i < costModelTraceDepth; ++i)
     os << "  ";
   return os;
@@ -55,9 +73,12 @@ inline llvm::raw_ostream &costModelDebug() {
 inline void costModelDumpIR(const char *label, Operation *op) {
   if (!op || costModelLogLevel < 1)
     return;
-  llvm::errs() << "[COSTMODEL] ===== IR dump: " << label << " =====\n";
-  op->print(llvm::errs());
-  llvm::errs() << "\n[COSTMODEL] ===== IR dump end =====\n";
+  initCostModelLogFile();
+  llvm::raw_ostream &os =
+      costModelLogFile ? *costModelLogFile : llvm::errs();
+  os << "[COSTMODEL] ===== IR dump: " << label << " =====\n";
+  op->print(os);
+  os << "\n[COSTMODEL] ===== IR dump end =====\n";
 }
 
 class CostModelTraceScope {
