@@ -774,25 +774,26 @@ static Operation *getTopLevelSemanticRoot(Operation *operation) {
 
 static std::vector<Operation *> collectTopLevelSemanticRoots(ModuleOp module) {
   std::vector<Operation *> result;
+  auto appendOperation = [&](auto &&self, Operation &op) -> void {
+    if (op.hasTrait<OpTrait::IsTerminator>())
+      return;
+    result.push_back(&op);
+    // AutoBlockify V1's scf.for and the specialized silu kernel's inner
+    // loop are scheduling/control shells.  Own the shell separately, then
+    // recursively expose direct body operations as semantic roots so the
+    // role machine can split load/reduce/pack/store into different stages.
+    const bool isLoopShell =
+        op.hasAttr("ta.auto_blockify_v1.loop") ||
+        op.hasAttr(kGenericLoopShellAttr);
+    if (!isLoopShell || op.getNumRegions() == 0)
+      return;
+    for (Block &body : op.getRegion(0))
+      for (Operation &bodyOperation : body.getOperations())
+        self(self, bodyOperation);
+  };
   auto appendBlock = [&](Block &block) {
-    for (Operation &nested : block.getOperations()) {
-      if (nested.hasTrait<OpTrait::IsTerminator>())
-        continue;
-      result.push_back(&nested);
-      // AutoBlockify V1's scf.for and the specialized silu kernel's inner
-      // loop are scheduling/control shells.  Own the shell separately, then
-      // expose direct body operations as semantic roots so the role machine
-      // can split load/reduce/pack/store into different stages.
-      const bool isLoopShell =
-          nested.hasAttr("ta.auto_blockify_v1.loop") ||
-          nested.hasAttr(kGenericLoopShellAttr);
-      if (!isLoopShell || nested.getNumRegions() == 0)
-        continue;
-      for (Block &body : nested.getRegion(0))
-        for (Operation &bodyOperation : body.getOperations())
-          if (!bodyOperation.hasTrait<OpTrait::IsTerminator>())
-            result.push_back(&bodyOperation);
-    }
+    for (Operation &nested : block.getOperations())
+      appendOperation(appendOperation, nested);
   };
   for (Operation &operation : module.getBody()->getOperations()) {
     if (!isFunctionLikeTTIROp(&operation) || operation.getNumRegions() == 0)
