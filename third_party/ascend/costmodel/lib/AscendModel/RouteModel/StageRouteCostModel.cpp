@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <system_error>
 
@@ -15,6 +16,11 @@ using namespace mlir;
 using namespace mlir::ascend;
 
 namespace {
+
+static bool costModelDebugDetailEnabled() {
+  const char *env = std::getenv("TRITON_DEBUG");
+  return env && *env && llvm::StringRef(env).trim() != "0";
+}
 
 static double mixedEquivalentStageCost(const LogicalStageCost &stage,
                                        const StageImplementationCost &selected,
@@ -273,6 +279,21 @@ llvm::json::Object LogicalStageCost::toJSON() const {
   for (const StageImplementationCost &implementation : implementations)
     costs.push_back(implementation.toJSON());
   result["implementations"] = std::move(costs);
+
+  // Debug-only exact ownership.  This is gated by TRITON_DEBUG so normal
+  // costmodel reports do not grow extra arrays.
+  if (costModelDebugDetailEnabled()) {
+    llvm::json::Array names;
+    for (const std::string &name : operationNames)
+      names.push_back(name);
+    result["operation_names"] = std::move(names);
+
+    llvm::json::Array locations;
+    for (const std::string &location : operationLocations)
+      locations.push_back(location);
+    result["operation_locations"] = std::move(locations);
+  }
+
   return result;
 }
 

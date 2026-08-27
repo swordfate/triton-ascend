@@ -154,6 +154,10 @@ struct LogicalStageCost {
   /// Factors legal when this Stage alone is materialized as a local scope.
   std::vector<int64_t> localSimtFactors;
   std::vector<StageImplementationCost> implementations;
+  /// Debug-only exact operation ownership.  Populated and serialized only when
+  /// TRITON_DEBUG is enabled so normal costmodel reports stay unchanged.
+  std::vector<std::string> operationNames;
+  std::vector<std::string> operationLocations;
 
   llvm::json::Object toJSON() const;
 };

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <initializer_list>
 #include <system_error>
 
@@ -16,6 +17,11 @@ using namespace mlir;
 using namespace mlir::ascend;
 
 namespace {
+
+static bool costModelDebugDetailEnabled() {
+  const char *env = std::getenv("TRITON_DEBUG");
+  return env && *env && llvm::StringRef(env).trim() != "0";
+}
 
 static double iterations(const LogicalStage &stage) {
   return static_cast<double>(std::max<int64_t>(1, stage.iterationCount));
@@ -436,6 +442,17 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
       logicalCost.localSimtMaterializable = stage.localSimtMaterializable;
       logicalCost.legalSimtFactors = stage.legalSimtFactors;
       logicalCost.localSimtFactors = stage.localSimtFactors;
+
+      if (costModelDebugDetailEnabled()) {
+        for (Operation *op : stage.operations) {
+          logicalCost.operationNames.push_back(
+              op->getName().getStringRef().str());
+          std::string loc;
+          llvm::raw_string_ostream os(loc);
+          op->getLoc().print(os);
+          logicalCost.operationLocations.push_back(std::move(loc));
+        }
+      }
 
       llvm::SmallVector<StageImplementation> implementations;
       if (stage.simdLegal)
