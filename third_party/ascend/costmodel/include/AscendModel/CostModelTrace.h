@@ -3,6 +3,7 @@
 
 #include "mlir/IR/Operation.h"
 #include "llvm/Support/FileSystem.h"
+#include "llvm/Support/Path.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstdlib>
@@ -22,8 +23,11 @@ inline void initCostModelLogFile() {
     return;
   if (const char *path = std::getenv("COSTMODEL_LOG_FILE")) {
     if (*path) {
+      llvm::StringRef parent = llvm::sys::path::parent_path(path);
+      if (!parent.empty())
+        llvm::sys::fs::create_directories(parent);
       std::error_code ec;
-      auto *stream = new llvm::raw_fd_ostream(path, ec, llvm::sys::fs::OF_Append);
+      auto *stream = new llvm::raw_fd_ostream(path, ec, llvm::sys::fs::OF_None);
       if (!ec)
         costModelLogFile = stream;
     }
