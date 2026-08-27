@@ -2,6 +2,7 @@
 
 #include "AscendModel/Analysis/StagePartitioner.h"
 
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
@@ -21,6 +22,8 @@ using namespace mlir;
 using namespace mlir::ascend;
 
 namespace {
+
+constexpr llvm::StringLiteral kGenericLoopShellAttr = "ta.generic_loop_shell";
 
 static void recomputeIssueElements(StageWorkload &work) {
   double elements = work.scalarOperations + work.predicateElements;
@@ -586,6 +589,18 @@ static StagePartition partitionGeneric(const SimdSimtFeatureSummary &features,
       lastKind = {};
       continue;
     }
+    if (root->hasAttr(kGenericLoopShellAttr)) {
+      ++groupIndex;
+      currentPhaseId = "generic_loop_" + std::to_string(groupIndex);
+      LogicalPhase phase;
+      phase.id = currentPhaseId;
+      phase.stages.push_back(makeStage(
+          currentPhaseId, StageCostModelKind::IndependentPipelinedLoop,
+          StageScheduleKind::IndependentPipelined, 1, {}));
+      partition.phases.push_back(std::move(phase));
+      lastKind = {};
+      continue;
+    }
     llvm::StringRef kind = getGenericRootKind(root);
     if (kind != lastKind) {
       ++groupIndex;
@@ -670,11 +685,24 @@ static Operation *getTopLevelSemanticRoot(Operation *operation) {
   Operation *root = operation;
   while (Operation *parent = root->getParentOp()) {
     if (isFunctionLikeTTIROp(parent) ||
-        parent->hasAttr("ta.auto_blockify_v1.loop"))
+        parent->hasAttr("ta.auto_blockify_v1.loop") ||
+        parent->hasAttr(kGenericLoopShellAttr))
       return root;
     root = parent;
   }
   return nullptr;
+}
+
+static void markGenericLoopShells(ModuleOp module) {
+  module.walk([&](Operation *op) {
+    if (op->hasAttr("ta.auto_blockify_v1.loop") ||
+        op->hasAttr(kGenericLoopShellAttr))
+      return;
+    const llvm::StringRef name = op->getName().getStringRef();
+    if ((name == "scf.for" || name == "scf.while") &&
+        op->getNumRegions() > 0 && !op->getRegion(0).empty())
+      op->setAttr(kGenericLoopShellAttr, UnitAttr::get(op->getContext()));
+  });
 }
 
 static std::vector<Operation *> collectTopLevelSemanticRoots(ModuleOp module) {
@@ -684,12 +712,15 @@ static std::vector<Operation *> collectTopLevelSemanticRoots(ModuleOp module) {
       if (nested.hasTrait<OpTrait::IsTerminator>())
         continue;
       result.push_back(&nested);
-      // AutoBlockify V1's scf.for is a scheduling shell.  Own the shell as
-      // loop control, then expose its direct body operations as semantic
-      // roots.  Other structured operations remain atomic roots so their
-      // nested recurrence/reduction work is not double-owned.
-      if (!nested.hasAttr("ta.auto_blockify_v1.loop") ||
-          nested.getNumRegions() == 0)
+      // AutoBlockify V1 and generic flattened loops are scheduling/control
+      // shells.  Own the shell separately, then expose its direct body
+      // operations as semantic roots.  Other structured operations remain
+      // atomic roots so their nested recurrence/reduction work is not
+      // double-owned.
+      const bool isLoopShell =
+          nested.hasAttr("ta.auto_blockify_v1.loop") ||
+          nested.hasAttr(kGenericLoopShellAttr);
+      if (!isLoopShell || nested.getNumRegions() == 0)
         continue;
       for (Block &body : nested.getRegion(0))
         for (Operation &bodyOperation : body.getOperations())
@@ -779,6 +810,15 @@ static llvm::Error assignRootPhaseIds(PhaseBoundaryPlan &plan) {
 
     switch (plan.domain) {
     case PhaseBoundaryDomain::Generic: {
+      if (root->hasAttr(kGenericLoopShellAttr)) {
+        // A flattened generic loop is a control shell.  Give it its own
+        // Phase/Stage; the exposed body roots are handled separately.
+        ++genericGroupIndex;
+        lastGenericKind = {};
+        plan.rootPhaseIds.push_back(
+            "generic_loop_" + std::to_string(genericGroupIndex));
+        continue;
+      }
       // Group consecutive roots by the same dominant semantic kind so the
       // generic partition is closer to the existing StageCostModelKind set.
       llvm::StringRef kind = getGenericRootKind(root);
@@ -982,10 +1022,11 @@ static void collectOwnedOperationTree(Operation *root,
   if (!root)
     return;
   owned.insert(root);
-  // The AutoBlockify loop is intentionally split into a scheduling shell and
-  // direct semantic body roots.  Treating the shell as the owner of its body
-  // would double-own every algorithm operation.
-  if (root->hasAttr("ta.auto_blockify_v1.loop"))
+  // AutoBlockify V1 and generic flattened loops are scheduling/control shells.
+  // Treating the shell as the owner of its body would double-own every
+  // algorithm operation that is exposed as a separate semantic root.
+  if (root->hasAttr("ta.auto_blockify_v1.loop") ||
+      root->hasAttr(kGenericLoopShellAttr))
     return;
   root->walk([&](Operation *nested) {
     if (nested != root)
@@ -1141,11 +1182,14 @@ static void deriveLocalSimtScopeTraffic(StagePartition &partition,
 
 llvm::Expected<ProgramStructure>
 ProgramStructureAnalysis::analyze(ModuleOp module,
-                                  const SimtAnchorPlan &anchorPlan) const {
+                                  const SimtAnchorPlan &anchorPlan,
+                                  bool flattenGenericLoops) const {
   if (!module)
     return llvm::createStringError(
         std::errc::invalid_argument,
         "ProgramStructureAnalysis requires ModuleOp");
+  if (flattenGenericLoops)
+    markGenericLoopShells(module);
   ProgramStructure structure;
   structure.rootOperations = collectTopLevelSemanticRoots(module);
   if (structure.rootOperations.empty())
@@ -1255,7 +1299,8 @@ PhaseBoundaryAnalysis::analyze(ModuleOp module,
   auto plan = identifyPhaseBoundary(features, options);
   if (!plan)
     return std::optional<PhaseBoundaryPlan>{};
-  auto structure = ProgramStructureAnalysis().analyze(module, anchorPlan);
+  auto structure = ProgramStructureAnalysis().analyze(
+      module, anchorPlan, plan->domain == PhaseBoundaryDomain::Generic);
   if (!structure)
     return structure.takeError();
   plan->rootOperations = std::move(structure->rootOperations);
@@ -1654,5 +1699,14 @@ StagePartitioner::partition(ModuleOp module, const SimtAnchorPlan &anchorPlan,
     return std::move(error);
   if (llvm::Error error = StagePartitionVerifier().verify(*result))
     return std::move(error);
+
+  // The generic loop-shell attribute is analysis-only.  Remove it before the
+  // partition escapes so the real module is not polluted for later passes.
+  if ((**phasePlan).domain == PhaseBoundaryDomain::Generic)
+    module.walk([&](Operation *op) {
+      if (op->hasAttr(kGenericLoopShellAttr))
+        op->removeAttr(kGenericLoopShellAttr);
+    });
+
   return std::optional<StagePartition>{std::move(*result)};
 }

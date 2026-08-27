@@ -61,7 +61,8 @@ struct ProgramStructure {
 class ProgramStructureAnalysis {
 public:
   llvm::Expected<ProgramStructure>
-  analyze(ModuleOp module, const SimtAnchorPlan &anchorPlan) const;
+  analyze(ModuleOp module, const SimtAnchorPlan &anchorPlan,
+          bool flattenGenericLoops = false) const;
 };
 
 /// Recognizes algorithm-level serial regions.  The current feature-summary
