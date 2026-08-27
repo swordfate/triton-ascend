@@ -21,19 +21,16 @@ struct StagePartitionerOptions {
   bool scopeSuperblockMaterializable = false;
 };
 
-enum class PhaseBoundaryDomain {
-  Generic,
-  TriangularRecurrence,
-  LoadedIndexRowwiseReduction,
-  IndirectUnderfilledDot,
-};
-
 /// Result of PhaseBoundaryAnalysis.  This is structural boundary evidence,
-/// not a route or a cost-model decision.
+/// not a route or a cost-model decision.  Every kernel with memory traffic
+/// is partitioned by one fine-grained monotonic dataflow-role state machine
+/// (setup < load < gather < dot < reduce < loop < convert < store); there is
+/// no domain dispatch.  Roles only ever advance, so each Phase id forms one
+/// contiguous run.  The materializable anchor interval is mapped to a single
+/// anchor phase and the machine restarts behind it under tail_* prefixes.
+/// Any partition failure soft-falls back to backend_default instead of
+/// raising a hard error.
 struct PhaseBoundaryPlan {
-  PhaseBoundaryDomain domain;
-  std::string domainName;
-  std::optional<TriangularSolveFacts> triangularSolve;
   /// Top-level semantic TTIR operations in execution order.  Nested region
   /// operations are owned transitively by their top-level root.
   std::vector<Operation *> rootOperations;
@@ -61,8 +58,7 @@ struct ProgramStructure {
 class ProgramStructureAnalysis {
 public:
   llvm::Expected<ProgramStructure>
-  analyze(ModuleOp module, const SimtAnchorPlan &anchorPlan,
-          bool flattenGenericLoops = false) const;
+  analyze(ModuleOp module, const SimtAnchorPlan &anchorPlan) const;
 };
 
 /// Recognizes algorithm-level serial regions.  The current feature-summary
