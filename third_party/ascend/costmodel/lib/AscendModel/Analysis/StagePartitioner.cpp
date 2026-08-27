@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <string>
 #include <system_error>
@@ -1192,6 +1193,9 @@ ProgramStructureAnalysis::analyze(ModuleOp module,
     markGenericLoopShells(module);
   ProgramStructure structure;
   structure.rootOperations = collectTopLevelSemanticRoots(module);
+  if (flattenGenericLoops && std::getenv("TRITON_DEBUG"))
+    llvm::errs() << "[costmodel][debug] generic flatten: root_operations="
+                 << structure.rootOperations.size() << "\n";
   if (structure.rootOperations.empty())
     return llvm::createStringError(
         std::errc::invalid_argument,
