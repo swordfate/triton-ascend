@@ -3,6 +3,7 @@
 #include "AscendModel/Analysis/StagePartitioner.h"
 #include "AscendModel/CostModelTrace.h"
 
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
@@ -21,6 +22,10 @@ using namespace mlir;
 using namespace mlir::ascend;
 
 namespace {
+
+constexpr llvm::StringLiteral kGenericLoopShellAttr = "ta.generic_loop_shell";
+constexpr llvm::StringLiteral kSiluQuantizeMx4UnpackKernel =
+    "_kernel_silu_quantize_mx4_unpack";
 
 static void recomputeIssueElements(StageWorkload &work) {
   double elements = work.scalarOperations + work.predicateElements;
@@ -730,13 +735,37 @@ static bool isFunctionLikeTTIROp(Operation *operation) {
   return name == "tt.func" || name == "func.func";
 }
 
+static bool isSpecialSiluQuantizeMx4Unpack(ModuleOp module) {
+  bool found = false;
+  module.walk([&](Operation *op) {
+    if (isFunctionLikeTTIROp(op) && op->getAttrOfType<StringAttr>("sym_name") &&
+        op->getAttrOfType<StringAttr>("sym_name").getValue() ==
+            kSiluQuantizeMx4UnpackKernel)
+      found = true;
+  });
+  return found;
+}
+
+static void markGenericLoopShells(ModuleOp module) {
+  module.walk([&](Operation *op) {
+    if (op->hasAttr("ta.auto_blockify_v1.loop") ||
+        op->hasAttr(kGenericLoopShellAttr))
+      return;
+    const llvm::StringRef name = op->getName().getStringRef();
+    if ((name == "scf.for" || name == "scf.while") &&
+        op->getNumRegions() > 0 && !op->getRegion(0).empty())
+      op->setAttr(kGenericLoopShellAttr, UnitAttr::get(op->getContext()));
+  });
+}
+
 static Operation *getTopLevelSemanticRoot(Operation *operation) {
   if (!operation)
     return nullptr;
   Operation *root = operation;
   while (Operation *parent = root->getParentOp()) {
     if (isFunctionLikeTTIROp(parent) ||
-        parent->hasAttr("ta.auto_blockify_v1.loop"))
+        parent->hasAttr("ta.auto_blockify_v1.loop") ||
+        parent->hasAttr(kGenericLoopShellAttr))
       return root;
     root = parent;
   }
@@ -750,12 +779,14 @@ static std::vector<Operation *> collectTopLevelSemanticRoots(ModuleOp module) {
       if (nested.hasTrait<OpTrait::IsTerminator>())
         continue;
       result.push_back(&nested);
-      // AutoBlockify V1's scf.for is a scheduling shell.  Own the shell as
-      // loop control, then expose its direct body operations as semantic
-      // roots.  Other structured operations remain atomic roots so their
-      // nested recurrence/reduction work is not double-owned.
-      if (!nested.hasAttr("ta.auto_blockify_v1.loop") ||
-          nested.getNumRegions() == 0)
+      // AutoBlockify V1's scf.for and the specialized silu kernel's inner
+      // loop are scheduling/control shells.  Own the shell separately, then
+      // expose direct body operations as semantic roots so the role machine
+      // can split load/reduce/pack/store into different stages.
+      const bool isLoopShell =
+          nested.hasAttr("ta.auto_blockify_v1.loop") ||
+          nested.hasAttr(kGenericLoopShellAttr);
+      if (!isLoopShell || nested.getNumRegions() == 0)
         continue;
       for (Block &body : nested.getRegion(0))
         for (Operation &bodyOperation : body.getOperations())
@@ -830,6 +861,8 @@ static llvm::Error assignRootPhaseIds(PhaseBoundaryPlan &plan) {
   auto roleOf = [&](Operation *root) -> RoleDefinition {
     // Each role reports the op-tree evidence that matched it, so the
     // root -> role -> Phase decision chain is auditable in the log.
+    if (root->hasAttr(kGenericLoopShellAttr))
+      return {5, "loop", "generic loop shell"};
     if (operationTreeContainsName(root, "tt.store"))
       return {7, "store", "contains tt.store"};
     if (operationTreeContainsName(root, "tt.dot"))
@@ -865,6 +898,16 @@ static llvm::Error assignRootPhaseIds(PhaseBoundaryPlan &plan) {
     if (root->hasAttr("ta.auto_blockify_v1.loop") ||
         root->hasAttr("ta.auto_blockify_v1.schedule")) {
       plan.rootPhaseIds.push_back("auto_blockify_dispatch");
+      continue;
+    }
+
+    // Specialized flattened loop shell: keep the loop control as its own
+    // generic_loop phase, then restart the role machine so the exposed body
+    // roots can advance through load/reduce/convert/store independently.
+    if (root->hasAttr(kGenericLoopShellAttr)) {
+      current = "generic_loop";
+      currentRank = -1;
+      plan.rootPhaseIds.push_back(current);
       continue;
     }
 
@@ -1097,10 +1140,11 @@ static void collectOwnedOperationTree(Operation *root,
   if (!root)
     return;
   owned.insert(root);
-  // The AutoBlockify loop is intentionally split into a scheduling shell and
-  // direct semantic body roots.  Treating the shell as the owner of its body
-  // would double-own every algorithm operation.
-  if (root->hasAttr("ta.auto_blockify_v1.loop"))
+  // AutoBlockify V1 and the specialized silu kernel's flattened loop are
+  // scheduling/control shells.  Treating the shell as the owner of its body
+  // would double-own every algorithm operation exposed as a separate root.
+  if (root->hasAttr("ta.auto_blockify_v1.loop") ||
+      root->hasAttr(kGenericLoopShellAttr))
     return;
   root->walk([&](Operation *nested) {
     if (nested != root)
@@ -1278,6 +1322,13 @@ ProgramStructureAnalysis::analyze(ModuleOp module,
     return llvm::createStringError(
         std::errc::invalid_argument,
         "ProgramStructureAnalysis requires ModuleOp");
+  // Specialized partition for the silu/mx4 quantize kernel: flatten its inner
+  // loop so the GenericDataflow role machine can split load, silu, reduce,
+  // pack and store into separate stages instead of treating the whole loop as
+  // one store stage.
+  if (isSpecialSiluQuantizeMx4Unpack(module))
+    markGenericLoopShells(module);
+
   ProgramStructure structure;
   structure.rootOperations = collectTopLevelSemanticRoots(module);
   if (structure.rootOperations.empty())
@@ -1891,5 +1942,14 @@ StagePartitioner::partition(ModuleOp module, const SimtAnchorPlan &anchorPlan,
 
   if (llvm::Error error = StagePartitionVerifier().verify(*result))
     return softFail(std::move(error));
+
+  // The specialized loop-shell attribute is analysis-only; remove it before
+  // the partition escapes so the real module is not polluted.
+  if (isSpecialSiluQuantizeMx4Unpack(module))
+    module.walk([&](Operation *op) {
+      if (op->hasAttr(kGenericLoopShellAttr))
+        op->removeAttr(kGenericLoopShellAttr);
+    });
+
   return std::optional<StagePartition>{std::move(*result)};
 }
