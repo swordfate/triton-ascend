@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <limits>
+#include <set>
 #include <system_error>
 
 using namespace mlir;
@@ -284,13 +285,17 @@ llvm::json::Object LogicalStageCost::toJSON() const {
   // costmodel reports do not grow extra arrays.
   if (costModelDebugDetailEnabled()) {
     llvm::json::Array names;
-    for (const std::string &name : operationNames)
-      names.push_back(name);
-    result["operation_names"] = std::move(names);
-
     llvm::json::Array locations;
-    for (const std::string &location : operationLocations)
-      locations.push_back(location);
+    std::set<std::string> seen;
+    const size_t count = std::min(operationNames.size(), operationLocations.size());
+    for (size_t i = 0; i < count; ++i) {
+      std::string key = operationNames[i] + "\n" + operationLocations[i];
+      if (!seen.insert(key).second)
+        continue;
+      names.push_back(operationNames[i]);
+      locations.push_back(operationLocations[i]);
+    }
+    result["operation_names"] = std::move(names);
     result["operation_locations"] = std::move(locations);
   }
 
