@@ -876,9 +876,8 @@ static llvm::Error assignRootPhaseIds(PhaseBoundaryPlan &plan) {
     if (operationTreeContainsName(root, "tt.load"))
       return {1, "load", "contains tt.load"};
     if (operationTreeContainsName(root, "scf.for") ||
-        operationTreeContainsName(root, "scf.while") ||
-        operationTreeContainsName(root, "scf.if"))
-      return {5, "loop", "contains scf.for/scf.while/scf.if"};
+        operationTreeContainsName(root, "scf.while"))
+      return {5, "loop", "contains scf.for/scf.while"};
     if (operationTreeContainsName(root, "arith.extf") ||
         operationTreeContainsName(root, "arith.truncf") ||
         operationTreeContainsName(root, "arith.sitofp") ||
