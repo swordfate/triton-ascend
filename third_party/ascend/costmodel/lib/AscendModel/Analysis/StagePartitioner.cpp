@@ -998,18 +998,18 @@ static llvm::Error assignRootPhaseIds(PhaseBoundaryPlan &plan) {
     costModelLog() << os.str() << "\n";
     for (size_t i = run.begin; i <= run.end; ++i) {
       Operation *root = plan.rootOperations[i];
-      costModelLog() << "root[" << i << "] ";
+      llvm::raw_ostream &os = costModelLog();
+      os << "root[" << i << "] ";
       if (root->hasAttr("ta.auto_blockify_v1.loop")) {
         // The AutoBlockify scf.for is a scheduling shell: it owns loop
         // control only and its direct body operations are the roots that
         // follow, so the region is elided here to avoid printing the same
         // ops twice.
-        root->print(llvm::errs(), mlir::OpPrintingFlags().skipRegions());
-        llvm::errs()
-            << " {scheduling shell: body ops follow as separate roots}\n";
+        root->print(os, mlir::OpPrintingFlags().skipRegions());
+        os << " {scheduling shell: body ops follow as separate roots}\n";
       } else {
-        root->print(llvm::errs());
-        llvm::errs() << "\n";
+        root->print(os);
+        os << "\n";
       }
     }
   }
