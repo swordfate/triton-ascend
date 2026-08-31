@@ -308,8 +308,9 @@ static int64_t getLoopTripCount(Operation *operation,
 /// resulting total dynamic work is normalized to one Stage iteration by
 /// makePerIteration().  Consequently N_iter * C_body accounts for every
 /// loop iteration instead of accidentally counting the body once.
-/// AutoBlockify V1 is the exception: its loop is a scheduling shell and its
-/// direct body operations are already separate semantic roots.
+/// AutoBlockify V1 and generic loop shells are the exceptions: their loops
+/// are scheduling/control shells whose direct body operations are already
+/// exposed as separate semantic roots.
 static void accumulateDynamicOperationTree(Operation *operation,
                                            StageWorkload &work,
                                            double multiplicity,
@@ -321,7 +322,8 @@ static void accumulateDynamicOperationTree(Operation *operation,
   scaleWorkload(local, multiplicity);
   mergeWorkload(work, std::move(local));
 
-  if (operation->hasAttr("ta.auto_blockify_v1.loop"))
+  if (operation->hasAttr("ta.auto_blockify_v1.loop") ||
+      operation->hasAttr(kGenericLoopShellAttr))
     return;
   const double childMultiplicity =
       multiplicity *
