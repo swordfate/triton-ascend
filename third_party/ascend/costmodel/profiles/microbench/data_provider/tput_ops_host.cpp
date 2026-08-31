@@ -82,6 +82,16 @@ static double cycPerIter(const char *fn, rtStream_t s, void *dout, int nl,
   return (double)(c2 - c1) / ((double)(I2 - I1) * K);
 }
 
+static double cycPerIterSmall(const char *fn, rtStream_t s, void *dout, int nl,
+                              int nw, int md) {
+  // exp/abs can be much slower; keep the same slope methodology but use
+  // smaller iteration counts so the probe finishes quickly.
+  const int K = 10, I1 = 20, I2 = 60;
+  long long c1 = mn(fn, s, dout, K, nl, nw, I1, md, 5);
+  long long c2 = mn(fn, s, dout, K, nl, nw, I2, md, 5);
+  return (double)(c2 - c1) / ((double)(I2 - I1) * K);
+}
+
 int main() {
   aclInit(0);
   rtSetDevice(0);
@@ -99,7 +109,8 @@ int main() {
 
   printf("== SIMT scalar op throughput (32 warps, ILP8) ==\n");
   for (int i = 0; i < 5; i++) {
-    double cpi = cycPerIter(fn, s, dout, 32, 32, i);
+    double cpi = (i >= 3) ? cycPerIterSmall(fn, s, dout, 32, 32, i)
+                          : cycPerIter(fn, s, dout, 32, 32, i);
     double ops = 32.0 * 32 * 8;
     printf("simt.%-4s : %8.2f cyc/iter -> %8.1f scalar_ops/cyc\n",
            simtNames[i], cpi, ops / cpi);
@@ -107,7 +118,8 @@ int main() {
 
   printf("\n== SIMD vector op throughput (ILP8, full-width) ==\n");
   for (int i = 0; i < 5; i++) {
-    double cpi = cycPerIter(fn, s, dout, 0, 8, 10 + i);
+    double cpi = (i >= 3) ? cycPerIterSmall(fn, s, dout, 0, 8, 10 + i)
+                          : cycPerIter(fn, s, dout, 0, 8, 10 + i);
     double ops = 8.0 * 64;
     printf("simd.%-4s : %8.2f cyc/iter -> %8.1f scalar_ops/cyc = %.3f full-width ops/cyc\n",
            simdNames[i], cpi, ops / cpi, (ops / cpi) / 64.0);
