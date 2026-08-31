@@ -47,7 +47,7 @@ run_probe() {
   echo
 }
 
-targets="${*:-meas busy tput decomp}"
+targets="${*:-meas busy tput tput_ops decomp}"
 for t in $targets; do
   build_probe "$t"
 done

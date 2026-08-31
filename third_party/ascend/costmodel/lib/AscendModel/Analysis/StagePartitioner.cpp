@@ -432,6 +432,7 @@ static StageCostModelKind predictGenericStageKind(const PhaseBoundaryPlan *plan,
   bool hasIndirect = false;
   bool hasLoad = false;
   bool hasStore = false;
+  bool hasCompute = false;
   for (auto indexedRoot : llvm::enumerate(plan->rootOperations)) {
     if (plan->rootPhaseIds[indexedRoot.index()] != phaseId)
       continue;
@@ -446,6 +447,7 @@ static StageCostModelKind predictGenericStageKind(const PhaseBoundaryPlan *plan,
     hasIndirect |= operationTreeContainsLoadedIndexMemory(root);
     hasLoad |= operationTreeContainsName(root, "tt.load");
     hasStore |= operationTreeContainsName(root, "tt.store");
+    hasCompute |= operationTreeContainsElementwiseCompute(root);
   }
   if (hasDot)
     return StageCostModelKind::CubeRoofline;
@@ -461,6 +463,8 @@ static StageCostModelKind predictGenericStageKind(const PhaseBoundaryPlan *plan,
     return StageCostModelKind::ContinuousTileStore;
   if (hasLoad || hasStore)
     return StageCostModelKind::ContinuousTileMemory;
+  if (hasCompute)
+    return StageCostModelKind::ElementwiseCompute;
   return StageCostModelKind::ScalarIssue;
 }
 
@@ -471,6 +475,7 @@ scheduleForGenericKind(StageCostModelKind kind) {
   case StageCostModelKind::TinyCubeRoofline:
   case StageCostModelKind::IndependentPipelinedLoop:
   case StageCostModelKind::ConversionPack:
+  case StageCostModelKind::ElementwiseCompute:
   case StageCostModelKind::ContinuousTileMemory:
     return StageScheduleKind::IndependentPipelined;
   case StageCostModelKind::RowwiseReduction:
@@ -504,6 +509,8 @@ static const GenericRoleSpec kGenericRoles[] = {
      StageCostModelKind::ScalarIssue, false},
     {"load", "input_load", "tail_load",
      StageCostModelKind::ContinuousTileMemory, false},
+    {"compute", "elementwise_compute", "tail_elementwise_compute",
+     StageCostModelKind::ElementwiseCompute, true},
     {"gather", "indirect_gather", "tail_indirect_gather",
      StageCostModelKind::IndirectGatherMemory, false},
     {"dot", "cube_dot", "tail_cube_dot", StageCostModelKind::CubeRoofline,
@@ -827,6 +834,29 @@ static bool operationTreeContainsLoadedIndexMemory(Operation *root) {
   return found;
 }
 
+static bool operationTreeContainsElementwiseCompute(Operation *root) {
+  if (!root)
+    return false;
+  bool found = false;
+  root->walk([&](Operation *nested) {
+    if (found)
+      return;
+    const llvm::StringRef name = nested->getName().getStringRef();
+    // Elementwise vector/scalar math that is not memory, dot, reduce,
+    // conversion, or control flow.
+    if (name == "arith.addf" || name == "arith.subf" ||
+        name == "arith.mulf" || name == "arith.divf" ||
+        name == "arith.maximumf" || name == "arith.maxnumf" ||
+        name == "arith.minimumf" || name == "arith.minnumf" ||
+        name == "math.absf" || name == "math.exp" || name == "math.exp2" ||
+        name == "math.log" || name == "math.log2" || name == "math.sqrt" ||
+        name == "math.rsqrt" || name == "math.tanh") {
+      found = true;
+    }
+  });
+  return found;
+}
+
 /// PhaseBoundaryAnalysis owns the algorithm-level serial cut.  Each root is
 /// assigned exactly one Phase id in execution order.  The state machines are
 /// monotone: after a boundary is crossed, a later root cannot move back to an
@@ -850,12 +880,12 @@ static llvm::Error assignRootPhaseIds(PhaseBoundaryPlan &plan) {
   }
   plan.rootPhaseIds.clear();
   plan.rootPhaseIds.reserve(plan.rootOperations.size());
-  // Fine-grained monotonic dataflow-role machine: setup < load < gather <
-  // dot < reduce < loop < convert < store.  Roles only ever advance, so each
-  // Phase id forms one contiguous run.  The materializable anchor interval
-  // is mapped to a single generic_anchor phase; the machine restarts behind
-  // it under generic_tail_* prefixes so head and tail roles never share a
-  // Phase id.
+  // Fine-grained monotonic dataflow-role machine: setup < load < compute <
+  // gather < dot < reduce < loop < convert < store.  Roles only ever
+  // advance, so each Phase id forms one contiguous run.  The materializable
+  // anchor interval is mapped to a single generic_anchor phase; the machine
+  // restarts behind it under generic_tail_* prefixes so head and tail roles
+  // never share a Phase id.
   struct RoleDefinition {
     int rank;
     llvm::StringRef phase;
@@ -865,28 +895,30 @@ static llvm::Error assignRootPhaseIds(PhaseBoundaryPlan &plan) {
     // Each role reports the op-tree evidence that matched it, so the
     // root -> role -> Phase decision chain is auditable in the log.
     if (root->hasAttr(kGenericLoopShellAttr))
-      return {5, "loop", "generic loop shell"};
+      return {6, "loop", "generic loop shell"};
     if (operationTreeContainsName(root, "tt.store"))
-      return {7, "store", "contains tt.store"};
+      return {8, "store", "contains tt.store"};
     if (operationTreeContainsName(root, "tt.dot"))
-      return {3, "dot", "contains tt.dot"};
+      return {4, "dot", "contains tt.dot"};
     if (operationTreeContainsName(root, "tt.reduce") ||
         operationTreeContainsName(root, "tt.scan"))
-      return {4, "reduce", "contains tt.reduce/tt.scan"};
+      return {5, "reduce", "contains tt.reduce/tt.scan"};
     if (operationTreeContainsLoadedIndexMemory(root))
-      return {2, "gather", "contains loaded-index dependent memory op"};
+      return {3, "gather", "contains loaded-index dependent memory op"};
     if (operationTreeContainsName(root, "tt.load"))
       return {1, "load", "contains tt.load"};
     if (operationTreeContainsName(root, "scf.for") ||
         operationTreeContainsName(root, "scf.while"))
-      return {5, "loop", "contains scf.for/scf.while"};
+      return {6, "loop", "contains scf.for/scf.while"};
+    if (operationTreeContainsElementwiseCompute(root))
+      return {2, "compute", "contains elementwise compute op"};
     if (operationTreeContainsName(root, "arith.extf") ||
         operationTreeContainsName(root, "arith.truncf") ||
         operationTreeContainsName(root, "arith.sitofp") ||
         operationTreeContainsName(root, "arith.uitofp") ||
         operationTreeContainsName(root, "arith.fpext") ||
         operationTreeContainsName(root, "arith.fptrunc"))
-      return {6, "convert", "contains cast op"};
+      return {7, "convert", "contains cast op"};
     return {0, "setup", "no memory/dot/reduce/cast op"};
   };
   std::string current;
@@ -1033,6 +1065,7 @@ static llvm::StringRef stageIdForPhase(llvm::StringRef phaseId) {
   return llvm::StringSwitch<llvm::StringRef>(phaseId)
       .Case("generic_setup", "prologue_setup")
       .Case("generic_load", "input_load")
+      .Case("generic_compute", "elementwise_compute")
       .Case("generic_gather", "indirect_gather")
       .Case("generic_dot", "cube_dot")
       .Case("generic_reduce", "rowwise_reduce")
@@ -1042,6 +1075,7 @@ static llvm::StringRef stageIdForPhase(llvm::StringRef phaseId) {
       .Case("generic_anchor", "local_simt_anchor")
       .Case("generic_tail_setup", "epilogue_setup")
       .Case("generic_tail_load", "tail_load")
+      .Case("generic_tail_compute", "tail_elementwise_compute")
       .Case("generic_tail_gather", "tail_indirect_gather")
       .Case("generic_tail_dot", "tail_cube_dot")
       .Case("generic_tail_reduce", "tail_rowwise_reduce")
@@ -1548,6 +1582,14 @@ llvm::Error StageFeatureAnalysis::analyze(StagePartition &partition) const {
             name == "arith.sitofp" || name == "arith.uitofp" ||
             name == "tt.fp_to_fp" || name.contains("convert") ||
             name.contains("pack") || name.contains("unpack");
+        facts.hasElementwiseCompute |=
+            name == "arith.addf" || name == "arith.subf" ||
+            name == "arith.mulf" || name == "arith.divf" ||
+            name == "arith.maximumf" || name == "arith.maxnumf" ||
+            name == "arith.minimumf" || name == "arith.minnumf" ||
+            name == "math.absf" || name == "math.exp" || name == "math.exp2" ||
+            name == "math.log" || name == "math.log2" || name == "math.sqrt" ||
+            name == "math.rsqrt" || name == "math.tanh";
       }
       facts.hasContiguousMemory = hasMemory && !facts.hasIndirectMemory;
       if (algorithmLoopCount > 0 && stage.iterationCount > 1) {
@@ -1570,6 +1612,8 @@ llvm::Error StageFeatureAnalysis::analyze(StagePartition &partition) const {
                        << " hasIndirectMemory=" << facts.hasIndirectMemory
                        << " hasContiguousMemory=" << facts.hasContiguousMemory
                        << " hasConversionPack=" << facts.hasConversionPack
+                       << " hasElementwiseCompute="
+                       << facts.hasElementwiseCompute
                        << " conditionalBranchCount="
                        << facts.conditionalBranchCount
                        << " divergentBranchCount=" << facts.divergentBranchCount
@@ -1613,6 +1657,8 @@ llvm::Error StageKindClassifier::analyze(StagePartition &partition,
       return facts.hasContiguousMemory;
     case StageCostModelKind::ConversionPack:
       return facts.hasConversionPack;
+    case StageCostModelKind::ElementwiseCompute:
+      return facts.hasElementwiseCompute;
     default:
       return true;
     }
@@ -1642,6 +1688,8 @@ llvm::Error StageKindClassifier::analyze(StagePartition &partition,
           return facts.hasLoopCarriedDataDependency
                      ? StageCostModelKind::LoopCarriedRecurrence
                      : StageCostModelKind::IndependentPipelinedLoop;
+        if (facts.hasElementwiseCompute)
+          return StageCostModelKind::ElementwiseCompute;
         if (facts.hasIndirectMemory)
           return StageCostModelKind::IndirectGatherMemory;
         if (facts.hasContiguousMemory)
@@ -1662,7 +1710,8 @@ llvm::Error StageKindClassifier::analyze(StagePartition &partition,
             "Stage '%s' operation graph does not match StageCostModelKind '%s'",
             stage.id.c_str(),
             stringifyStageCostModel(stage.costModelKind).str().c_str());
-      if (stage.costModelKind == StageCostModelKind::IndependentPipelinedLoop)
+      if (stage.costModelKind == StageCostModelKind::IndependentPipelinedLoop ||
+          stage.costModelKind == StageCostModelKind::ElementwiseCompute)
         stage.scheduleKind = StageScheduleKind::IndependentPipelined;
       else if (stage.costModelKind == StageCostModelKind::LoopCarriedRecurrence)
         stage.scheduleKind = StageScheduleKind::LoopCarriedSerial;

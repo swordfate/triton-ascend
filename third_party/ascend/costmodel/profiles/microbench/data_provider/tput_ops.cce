@@ -1,0 +1,83 @@
+// Saturated-throughput comparison for additional FP32 ops: sub/mul/div/exp/abs.
+// This is a standalone companion to tput.cce.  It uses the same measurement
+// methodology: SIMD full-width vector chains and SIMT scalar chains.
+//   mode 0..4 : SIMT sub/mul/div/exp/abs
+//   mode 10..14: SIMD sub/mul/div/exp/abs (ILP=8 saturated)
+#include "RegBase/VecUtils.h"
+#include "Vector/VecUtils.h"
+#include "Utils.h"
+
+using DT = float;
+constexpr int W = 64;
+
+#if defined(__DAV_C310__)
+#define SIMT_OP(NAME, EXPR)                                                    \
+  template <typename T>                                                        \
+  __simt_vf__ LAUNCH_BOUND(1024) __aiv__ __attribute__((always_inline)) static void \
+  NAME(__ubuf__ T *out, int nlane, int nwarp, int iters, T k) {                \
+    int lane = threadIdx.x;                                                    \
+    int warp = threadIdx.y;                                                    \
+    if (lane >= nlane || warp >= nwarp) return;                                \
+    T b = (T)(lane + warp + 1);                                                \
+    T a0=b, a1=b+1, a2=b+2, a3=b+3, a4=b+4, a5=b+5, a6=b+6, a7=b+7;            \
+    for (int i = 0; i < iters; i++) {                                          \
+      EXPR;                                                                    \
+    }                                                                          \
+    out[warp * 32 + lane] = a0+a1+a2+a3+a4+a5+a6+a7;                           \
+  }
+
+SIMT_OP(simt_sub, a0-=k; a1-=k; a2-=k; a3-=k; a4-=k; a5-=k; a6-=k; a7-=k)
+SIMT_OP(simt_mul, a0*=k; a1*=k; a2*=k; a3*=k; a4*=k; a5*=k; a6*=k; a7*=k)
+SIMT_OP(simt_div, a0/=k; a1/=k; a2/=k; a3/=k; a4/=k; a5/=k; a6/=k; a7/=k)
+SIMT_OP(simt_exp, a0=__builtin_expf(a0*k); a1=__builtin_expf(a1*k); a2=__builtin_expf(a2*k); a3=__builtin_expf(a3*k); a4=__builtin_expf(a4*k); a5=__builtin_expf(a5*k); a6=__builtin_expf(a6*k); a7=__builtin_expf(a7*k))
+SIMT_OP(simt_abs, a0=__builtin_fabsf(a0+k); a1=__builtin_fabsf(a1+k); a2=__builtin_fabsf(a2+k); a3=__builtin_fabsf(a3+k); a4=__builtin_fabsf(a4+k); a5=__builtin_fabsf(a5+k); a6=__builtin_fabsf(a6+k); a7=__builtin_fabsf(a7+k))
+#undef SIMT_OP
+#endif
+
+#define VLD(reg, j) VectorReg<DT> reg; vlds(reg, ob + (j) * W, 0, NORM)
+#define VST(reg, j) vsts(reg, ob + (j) * W, 0, NORM_B32, m)
+#define SIMD_CHAIN8(OP)                                                        \
+  VLD(a0,0); VLD(a1,1); VLD(a2,2); VLD(a3,3); VLD(a4,4); VLD(a5,5); VLD(a6,6); VLD(a7,7); \
+  for (uint16_t r = 0; r < (uint16_t)iters; r++) {                             \
+    OP(a0,a0,kk,m); OP(a1,a1,kk,m); OP(a2,a2,kk,m); OP(a3,a3,kk,m);            \
+    OP(a4,a4,kk,m); OP(a5,a5,kk,m); OP(a6,a6,kk,m); OP(a7,a7,kk,m);            \
+  }                                                                            \
+  VST(a0,0); VST(a1,1); VST(a2,2); VST(a3,3); VST(a4,4); VST(a5,5); VST(a6,6); VST(a7,7)
+
+extern "C" __global__ [aicore] void measure(__gm__ long long *out, int K, int nlane, int nwarp, int iters, int mode) {
+  auto ob = reinterpret_cast<__ubuf__ DT *>(0);
+  auto kb = reinterpret_cast<__ubuf__ DT *>(8192);
+  uint32_t cnt = (uint32_t)W;
+
+  pipe_barrier(PIPE_ALL);
+  long long t0 = get_sys_cnt();
+  for (int i = 0; i < K; i++) {
+    if (mode >= 0 && mode <= 4) {
+      switch (mode) {
+      case 0: cce::async_invoke<simt_sub<DT>>(cce::dim3{32, 32, 1}, ob, nlane, nwarp, iters, (DT)1.0000001f); break;
+      case 1: cce::async_invoke<simt_mul<DT>>(cce::dim3{32, 32, 1}, ob, nlane, nwarp, iters, (DT)1.0000001f); break;
+      case 2: cce::async_invoke<simt_div<DT>>(cce::dim3{32, 32, 1}, ob, nlane, nwarp, iters, (DT)1.0000001f); break;
+      case 3: cce::async_invoke<simt_exp<DT>>(cce::dim3{32, 32, 1}, ob, nlane, nwarp, iters, (DT)1.0000001f); break;
+      case 4: cce::async_invoke<simt_abs<DT>>(cce::dim3{32, 32, 1}, ob, nlane, nwarp, iters, (DT)1.0000001f); break;
+      }
+    } else {
+      __VEC_SCOPE__ {
+        vector_bool m;
+        CREATE_MASK_BY_SIZE(m, DT, cnt);
+        VectorReg<DT> kk;
+        vlds(kk, kb, 0, NORM);
+        switch (mode) {
+        case 10: SIMD_CHAIN8(vsub); break;
+        case 11: SIMD_CHAIN8(vmul); break;
+        case 12: SIMD_CHAIN8(vdiv); break;
+        case 13: SIMD_CHAIN8(vexp); break;
+        case 14: SIMD_CHAIN8(vabs); break;
+        }
+      }
+    }
+    pipe_barrier(PIPE_ALL);
+  }
+  long long t1 = get_sys_cnt();
+  pipe_barrier(PIPE_ALL);
+  out[0] = t1 - t0;
+}

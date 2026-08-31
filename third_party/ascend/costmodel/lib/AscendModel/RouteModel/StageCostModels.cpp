@@ -411,6 +411,27 @@ static double estimateStage(const LogicalStage &stage,
       os.flush();
     }
     break;
+  case StageCostModelKind::ElementwiseCompute:
+    if (mode == StageMode::SIMD && permitsSimdOverlap(stage)) {
+      result = r.setup + count * (r.predicate + control + r.spill +
+                                  std::max({r.scalar + r.compute, r.load,
+                                            r.store, r.issue}));
+      llvm::raw_string_ostream os(formula);
+      os << "setup(" << r.setup << ") + iterations(" << count
+         << ") * (predicate(" << r.predicate << ") + control(" << control
+         << ") + spill(" << r.spill << ") + max(scalar+compute("
+         << r.scalar + r.compute << "), load(" << r.load << "), store("
+         << r.store << "), issue(" << r.issue << "))) [SIMD overlap]";
+      os.flush();
+    } else {
+      result = serial;
+      llvm::raw_string_ostream os(formula);
+      os << "setup(" << r.setup << ") + iterations(" << count
+         << ") * max(execution(" << execution << "), issue(" << r.issue
+         << ")) [serial]";
+      os.flush();
+    }
+    break;
   default:
     result = serial;
     {
@@ -489,6 +510,8 @@ llvm::StringRef mlir::ascend::stringifyStageCostModel(StageCostModelKind kind) {
     return "tiny_cube_roofline";
   case StageCostModelKind::ConversionPack:
     return "conversion_pack";
+  case StageCostModelKind::ElementwiseCompute:
+    return "elementwise_compute";
   }
   llvm_unreachable("unknown StageCostModelKind");
 }

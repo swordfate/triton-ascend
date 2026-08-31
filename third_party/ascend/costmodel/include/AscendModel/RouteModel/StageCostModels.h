@@ -43,6 +43,7 @@ enum class StageCostModelKind {
   CubeRoofline,
   TinyCubeRoofline,
   ConversionPack,
+  ElementwiseCompute,
 };
 
 llvm::StringRef stringifyStageCostModel(StageCostModelKind kind);

@@ -57,6 +57,7 @@ struct StageModelFeatures {
   bool hasReduction = false;
   bool hasDot = false;
   bool hasConversionPack = false;
+  bool hasElementwiseCompute = false;
   int64_t conditionalBranchCount = 0;
   int64_t divergentBranchCount = 0;
   int64_t loopBackedgeCount = 0;

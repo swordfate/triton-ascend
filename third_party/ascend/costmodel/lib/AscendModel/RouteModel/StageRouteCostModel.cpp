@@ -222,6 +222,7 @@ llvm::json::Object StageModelFeatures::toJSON() const {
   result["has_reduction"] = hasReduction;
   result["has_dot"] = hasDot;
   result["has_conversion_pack"] = hasConversionPack;
+  result["has_elementwise_compute"] = hasElementwiseCompute;
   result["conditional_branch_count"] = conditionalBranchCount;
   result["divergent_branch_count"] = divergentBranchCount;
   result["loop_backedge_count"] = loopBackedgeCount;
