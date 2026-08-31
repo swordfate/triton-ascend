@@ -44,6 +44,16 @@ SIMT_OP(simt_abs, a0=__builtin_fabsf(a0+k); a1=__builtin_fabsf(a1+k); a2=__built
   }                                                                            \
   VST(a0,0); VST(a1,1); VST(a2,2); VST(a3,3); VST(a4,4); VST(a5,5); VST(a6,6); VST(a7,7)
 
+#define SIMD_CHAIN8_UNARY(OP)                                                  \
+  VLD(a0,0); VLD(a1,1); VLD(a2,2); VLD(a3,3); VLD(a4,4); VLD(a5,5); VLD(a6,6); VLD(a7,7); \
+  for (uint16_t r = 0; r < (uint16_t)iters; r++) {                             \
+    OP(a0,a0,m,MODE_ZEROING); OP(a1,a1,m,MODE_ZEROING);                         \
+    OP(a2,a2,m,MODE_ZEROING); OP(a3,a3,m,MODE_ZEROING);                         \
+    OP(a4,a4,m,MODE_ZEROING); OP(a5,a5,m,MODE_ZEROING);                         \
+    OP(a6,a6,m,MODE_ZEROING); OP(a7,a7,m,MODE_ZEROING);                         \
+  }                                                                            \
+  VST(a0,0); VST(a1,1); VST(a2,2); VST(a3,3); VST(a4,4); VST(a5,5); VST(a6,6); VST(a7,7)
+
 extern "C" __global__ [aicore] void measure(__gm__ long long *out, int K, int nlane, int nwarp, int iters, int mode) {
   auto ob = reinterpret_cast<__ubuf__ DT *>(0);
   auto kb = reinterpret_cast<__ubuf__ DT *>(8192);
@@ -70,8 +80,8 @@ extern "C" __global__ [aicore] void measure(__gm__ long long *out, int K, int nl
         case 10: { SIMD_CHAIN8(vsub); break; }
         case 11: { SIMD_CHAIN8(vmul); break; }
         case 12: { SIMD_CHAIN8(vdiv); break; }
-        case 13: { SIMD_CHAIN8(vexp); break; }
-        case 14: { SIMD_CHAIN8(vabs); break; }
+        case 13: { SIMD_CHAIN8_UNARY(vexp); break; }
+        case 14: { SIMD_CHAIN8_UNARY(vabs); break; }
         }
       }
     }
