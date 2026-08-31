@@ -67,11 +67,11 @@ extern "C" __global__ [aicore] void measure(__gm__ long long *out, int K, int nl
         VectorReg<DT> kk;
         vlds(kk, kb, 0, NORM);
         switch (mode) {
-        case 10: SIMD_CHAIN8(vsub); break;
-        case 11: SIMD_CHAIN8(vmul); break;
-        case 12: SIMD_CHAIN8(vdiv); break;
-        case 13: SIMD_CHAIN8(vexp); break;
-        case 14: SIMD_CHAIN8(vabs); break;
+        case 10: { SIMD_CHAIN8(vsub); break; }
+        case 11: { SIMD_CHAIN8(vmul); break; }
+        case 12: { SIMD_CHAIN8(vdiv); break; }
+        case 13: { SIMD_CHAIN8(vexp); break; }
+        case 14: { SIMD_CHAIN8(vabs); break; }
         }
       }
     }
