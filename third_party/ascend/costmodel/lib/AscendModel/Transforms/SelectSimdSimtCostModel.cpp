@@ -20,6 +20,7 @@
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/Pass.h"
 #include "llvm/ADT/DenseSet.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FormatVariadic.h"
@@ -79,9 +80,19 @@ static void clearPreviousSelection(ModuleOp module) {
   module->removeAttr(kSuperblockFactorAttr);
 }
 
+static const LogicalStage *findPartitionStage(const StagePartition &partition,
+                                              llvm::StringRef id) {
+  for (const LogicalPhase &phase : partition.phases)
+    for (const LogicalStage &stage : phase.stages)
+      if (stage.id == id)
+        return &stage;
+  return nullptr;
+}
+
 static SimtAnchorPlan
 buildSelectedMixedAnchorPlan(const StageCostModelSummary &stageModel,
-                             const SimtAnchorPlan &completePlan) {
+                             const SimtAnchorPlan &completePlan,
+                             const StagePartition *partition = nullptr) {
   SimtAnchorPlan selected;
   selected.kernelLowerability = completePlan.kernelLowerability;
   if (!stageModel.mixed.legal ||
@@ -101,11 +112,33 @@ buildSelectedMixedAnchorPlan(const StageCostModelSummary &stageModel,
     for (unsigned index : stage.simtAnchorIndices)
       if (index < completePlan.anchors.size() && included.insert(index).second)
         stageAnchorIndices.push_back(index);
-    auto merged = mergeSimtStageAnchors(completePlan, stageAnchorIndices);
-    if (!stageAnchorIndices.empty() && !merged)
-      return SimtAnchorPlan{};
-    if (merged)
+
+    if (!stageAnchorIndices.empty()) {
+      auto merged = mergeSimtStageAnchors(completePlan, stageAnchorIndices);
+      if (!merged)
+        return SimtAnchorPlan{};
       selected.anchors.push_back(std::move(*merged));
+      continue;
+    }
+
+    // Anchorless local SIMT: synthesize a whole-Stage generic scope from the
+    // analysis partition so the materializer has an exact operation list.
+    if (!partition)
+      return SimtAnchorPlan{};
+    const LogicalStage *logicalStage = findPartitionStage(*partition, stage.id);
+    if (!logicalStage || logicalStage->operations.empty())
+      return SimtAnchorPlan{};
+    SimtAnchorDescriptor descriptor;
+    descriptor.operation = logicalStage->operations.front();
+    descriptor.scopeInsertionPoint = logicalStage->operations.front();
+    descriptor.scopeOperations.assign(logicalStage->operations.begin(),
+                                      logicalStage->operations.end());
+    descriptor.kind = SimtAnchorKind::GenericComputeRegion;
+    descriptor.lowerability.allSimd = true;
+    descriptor.lowerability.allSimtOnly = true;
+    descriptor.lowerability.mixed = true;
+    descriptor.materializable = true;
+    selected.anchors.push_back(std::move(descriptor));
   }
   return selected;
 }
@@ -113,13 +146,19 @@ buildSelectedMixedAnchorPlan(const StageCostModelSummary &stageModel,
 static bool
 anchorPlansHaveCompatibleIndices(const SimtAnchorPlan &analysis,
                                  const SimtAnchorPlan &materialization) {
-  if (analysis.anchors.size() != materialization.anchors.size())
-    return false;
-  for (auto [analysisAnchor, materializationAnchor] :
-       llvm::zip_equal(analysis.anchors, materialization.anchors))
-    if (analysisAnchor.kind != materializationAnchor.kind ||
-        analysisAnchor.materializable != materializationAnchor.materializable)
+  // The materialization plan may contain extra synthesized whole-Stage
+  // anchors, but every original analysis anchor must still be present with
+  // the same kind and materializability.
+  for (const SimtAnchorDescriptor &analysisAnchor : analysis.anchors) {
+    bool found = llvm::any_of(
+        materialization.anchors, [&](const SimtAnchorDescriptor &materialized) {
+          return materialized.kind == analysisAnchor.kind &&
+                 materialized.materializable == analysisAnchor.materializable &&
+                 materialized.operation == analysisAnchor.operation;
+        });
+    if (!found)
       return false;
+  }
   return true;
 }
 
@@ -269,8 +308,9 @@ struct SelectSimdSimtCostModelPass
         applicationReason = "analysis_materialization_anchor_mismatch";
         costModelLog() << "actionSupported=false reason=analysis_materialization_anchor_mismatch\n";
       } else {
-        selectedMixedAnchorPlan =
-            buildSelectedMixedAnchorPlan(report.stageModel, anchorPlan);
+        selectedMixedAnchorPlan = buildSelectedMixedAnchorPlan(
+            report.stageModel, anchorPlan,
+            report.stagePartition ? &*report.stagePartition : nullptr);
         mixedAnchors = selectedMixedAnchorPlan.materializableRoots();
         costModelDebug()
             << "selectedMixedAnchorPlan.anchors.size()="

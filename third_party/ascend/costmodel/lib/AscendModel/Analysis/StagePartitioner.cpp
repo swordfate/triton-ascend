@@ -710,8 +710,23 @@ static void attachExactAnchorOwnership(StagePartition &partition,
   COSTMODEL_TRACE_DEBUG("attachExactAnchorOwnership");
   for (LogicalPhase &phase : partition.phases) {
     for (LogicalStage &stage : phase.stages) {
-      if (!stage.localSimtMaterializable)
+      // AutoBlockify scheduling shells are not local SIMT scope candidates.
+      if (stage.costModelKind == StageCostModelKind::AutoBlockifyDispatch ||
+          stage.costModelKind == StageCostModelKind::AutoBlockifyLoop) {
+        stage.localSimtMaterializable = false;
+        stage.localSimtFactors.clear();
         continue;
+      }
+      // Any non-AutoBlockify stage with exact operation ownership may become
+      // a local SIMT scope even when it has no specialized anchor.  The
+      // materializer will wrap the whole Stage as a synthesized generic scope;
+      // deriveLocalSimtScopeTraffic validates the SSA contract later.
+      stage.localSimtMaterializable =
+          partition.operationOwnershipComplete && !stage.operations.empty();
+      if (!stage.localSimtMaterializable) {
+        stage.localSimtFactors.clear();
+        continue;
+      }
       stage.simtAnchorIndices.clear();
       for (auto indexedAnchor : llvm::enumerate(anchorPlan.anchors)) {
         const SimtAnchorDescriptor &anchor = indexedAnchor.value();
@@ -725,9 +740,8 @@ static void attachExactAnchorOwnership(StagePartition &partition,
           llvm::errs() << "\n";
         }
       }
-      stage.localSimtMaterializable = !stage.simtAnchorIndices.empty();
-      if (!stage.localSimtMaterializable)
-        stage.localSimtFactors.clear();
+      // Keep the stage eligible even if no specialized anchor was found.  The
+      // absence of an anchor no longer prevents local SIMT materialization.
       costModelDebug() << "stage \"" << stage.id
                        << "\" simtAnchorIndices.size()="
                        << stage.simtAnchorIndices.size()
@@ -1265,6 +1279,45 @@ static void deriveStageLiveValues(StagePartition &partition) {
   }
 }
 
+/// Check whether the operations owned by a Stage can be wrapped as one
+/// synthesized local SIMT scope.  This is the anchorless counterpart of
+/// spanRootsCanBeLocalScope: it validates the same SSA contract so the
+/// materializer can wrap the whole Stage even without a specialized anchor.
+static bool stageCanBeLocalSimtScope(const LogicalStage &stage) {
+  if (stage.operations.empty())
+    return false;
+  Block *block = nullptr;
+  for (Operation *root : stage.operations) {
+    if (!root)
+      return false;
+    if (!block)
+      block = root->getBlock();
+    else if (block != root->getBlock())
+      return false;
+    if (root->hasTrait<OpTrait::IsTerminator>() ||
+        root->hasTrait<OpTrait::IsIsolatedFromAbove>() ||
+        root->getName().getStringRef() == "scope.scope" ||
+        root->getName().getStringRef() == "scope.return")
+      return false;
+    // Avoid synthesizing scopes around loops for now; the current
+    // materializer is not validated for wrapping an entire loop shell.
+    bool hasLoop = false;
+    root->walk([&](Operation *nested) {
+      const llvm::StringRef nestedName = nested->getName().getStringRef();
+      if (nestedName == "scf.for" || nestedName == "scf.while")
+        hasLoop = true;
+    });
+    if (hasLoop)
+      return false;
+  }
+  // A whole-Stage scope returns every escaping value.  Reject pointer-like
+  // returns because TritonToUnstructure cannot reconstruct them.
+  for (Value value : stage.liveOuts)
+    if (isPointerLikeType(value.getType()))
+      return false;
+  return true;
+}
+
 /// Derive the physical tensor traffic of the exact local SIMT scopes that the
 /// materializer will create.  Stage live values are intentionally not used:
 /// a Stage can own SIMD operations around a much smaller local scope, and
@@ -1279,8 +1332,23 @@ static void deriveLocalSimtScopeTraffic(StagePartition &partition,
       stage.scopeOutputTensorBytes = 0;
       auto merged = mergeSimtStageAnchors(anchorPlan, stage.simtAnchorIndices);
       if (!merged) {
+        if (stage.localSimtMaterializable &&
+            stageCanBeLocalSimtScope(stage)) {
+          // Anchorless Stage: synthesize a whole-Stage local SIMT scope.
+          stage.localSimtScopeCount = 1;
+          stage.scopeInputTensorBytes = stage.liveInBytes;
+          stage.scopeOutputTensorBytes = stage.liveOutBytes;
+          costModelDebug() << "stage \"" << stage.id
+                           << "\" synthesized whole-stage scope "
+                              "(localSimtScopeCount=1)\n";
+          continue;
+        }
+        stage.localSimtMaterializable = false;
+        stage.localSimtFactors.clear();
+        stage.simtAnchorIndices.clear();
         costModelDebug() << "stage \"" << stage.id
-                         << "\" no merged anchor (localSimtScopeCount=0)\n";
+                         << "\" cannot be local SIMT (no merged anchor and "
+                            "stage scope invalid)\n";
         continue;
       }
       {
@@ -1802,10 +1870,11 @@ StagePartitionVerifier::verify(const StagePartition &partition) const {
             stage.id.c_str());
       if (stage.localSimtMaterializable &&
           partition.operationOwnershipComplete &&
-          stage.simtAnchorIndices.empty())
+          stage.simtAnchorIndices.empty() && stage.localSimtScopeCount == 0)
         return llvm::createStringError(
             std::errc::invalid_argument,
-            "materializable Stage '%s' has no exact SIMT anchor ownership",
+            "materializable Stage '%s' has no exact SIMT anchor ownership "
+            "and no synthesized whole-stage scope",
             stage.id.c_str());
       if (partition.operationOwnershipComplete)
         for (unsigned index : stage.simtAnchorIndices)

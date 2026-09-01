@@ -600,7 +600,7 @@ static llvm::Expected<std::optional<StageCostModelSummary>> evaluateStageModel(
     unsigned numWarps, bool wholeKernelSuperblockMaterializable,
     bool scopeSuperblockMaterializable, int64_t logicalProgramCountHint,
     int64_t physicalCoreCountHint, ModuleOp module,
-    const SimtAnchorPlan *anchorPlan) {
+    const SimtAnchorPlan *anchorPlan, StagePartition *outPartition = nullptr) {
   COSTMODEL_TRACE("evaluateStageModel");
   costModelDebug() << "numWarps=" << numWarps << "\n";
   costModelDebug() << "wholeKernelSuperblockMaterializable="
@@ -663,6 +663,8 @@ static llvm::Expected<std::optional<StageCostModelSummary>> evaluateStageModel(
   auto costTable = evaluator.evaluate(**partition, hardwareProfile);
   if (!costTable)
     return costTable.takeError();
+  if (outPartition)
+    *outPartition = std::move(**partition);
   costTable->logicalProgramCountHint = logicalProgramCountHint;
   costTable->physicalCoreCountHint = physicalCoreCountHint;
   auto routes = solveStageRoutes(*costTable, hardwareProfile.transition);
@@ -1048,15 +1050,18 @@ estimateSimdSimtCandidatesImpl(const SimdSimtFeatureSummary &features,
 
   const int64_t numWarps =
       std::max<int64_t>(1, static_cast<int64_t>(options.numWarps));
+  StagePartition stagePartitionStorage;
   auto stageModel = evaluateStageModel(
       features, profile, static_cast<unsigned>(numWarps),
       options.wholeKernelSuperblockMaterializable,
       options.scopeSuperblockMaterializable, options.logicalProgramCountHint,
-      options.physicalVectorCoreCountHint, module, anchorPlan);
+      options.physicalVectorCoreCountHint, module, anchorPlan,
+      &stagePartitionStorage);
   if (!stageModel)
     return stageModel.takeError();
   if (*stageModel) {
     report.stageModel = std::move(**stageModel);
+    report.stagePartition = std::move(stagePartitionStorage);
     report.candidateCosts.allSimd = report.stageModel.allSimd.totalCycles;
     report.candidateCosts.allSimtOnly = report.stageModel.allSimt.totalCycles;
     report.candidateCosts.mixedSimdSimt = report.stageModel.mixed.totalCycles;

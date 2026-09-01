@@ -88,7 +88,9 @@ struct LogicalStage {
   bool simdLegal = false;
   bool simtLegal = false;
   /// True when this Stage has exact operation ownership/live-in/live-out and
-  /// can therefore become a local SIMT scope inside a mixed kernel.
+  /// can therefore become a local SIMT scope inside a mixed kernel.  This may
+  /// be true even when `simtAnchorIndices` is empty; in that case the Stage is
+  /// materialized as a synthesized whole-Stage generic scope.
   bool localSimtMaterializable = false;
   std::vector<int64_t> legalSimtFactors;
   std::vector<int64_t> localSimtFactors;

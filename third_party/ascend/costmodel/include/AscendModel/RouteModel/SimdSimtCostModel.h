@@ -9,6 +9,7 @@
 #define ASCENDMODEL_ROUTEMODEL_SIMDSIMTCOSTMODEL_H
 
 #include "AscendModel/Analysis/SimtAnchorAnalysis.h"
+#include "AscendModel/RouteModel/StageCostModels.h"
 #include "AscendModel/RouteModel/StageRouteCostModel.h"
 #include "mlir/IR/BuiltinOps.h"
 #include "llvm/Support/Error.h"
@@ -16,6 +17,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -124,6 +126,8 @@ struct SimdSimtCostReport {
   std::vector<std::string> unsupported;
   SimdSimtFeatureSummary features;
   StageCostModelSummary stageModel;
+  /// Non-serialized analysis partition used to materialize anchorless local SIMT stages.
+  std::optional<StagePartition> stagePartition;
   bool includeFeaturesInJSON = true;
 
   llvm::json::Object toJSON() const;
