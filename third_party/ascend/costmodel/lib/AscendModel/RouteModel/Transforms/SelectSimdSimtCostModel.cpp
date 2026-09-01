@@ -149,6 +149,12 @@ struct SelectSimdSimtCostModelPass
       return;
     }
     SimdSimtCostReport report = std::move(*reportOr);
+    // 临时实验：只对 scalar_indexed_dense_copy 强制 mixed
+    if (report.stageModel.applied &&
+        report.stageModel.domain == "scalar_indexed_dense_copy" &&
+        report.stageModel.mixed.legal) {
+      report.decision = SimdSimtCandidateKind::MixedSIMDSIMT;
+    }
 
     std::string recommended = stringifySimdSimtCandidate(report.decision).str();
     std::string effective = kBackendDefault.str();
