@@ -393,6 +393,7 @@ static void addPhase(StagePartition &partition, llvm::StringRef id,
 
 static bool operationTreeContainsName(Operation *root, llvm::StringRef name);
 static bool operationTreeContainsLoadedIndexMemory(Operation *root);
+static bool operationTreeContainsElementwiseCompute(Operation *root);
 static Operation *getTopLevelSemanticRoot(Operation *operation);
 
 static bool hasPhase(const PhaseBoundaryPlan *plan, llvm::StringRef id) {
