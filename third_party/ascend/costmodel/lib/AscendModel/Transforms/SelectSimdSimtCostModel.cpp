@@ -214,6 +214,11 @@ struct SelectSimdSimtCostModelPass
       return;
     }
     SimdSimtCostReport report = std::move(*reportOr);
+    // Temporary experiment: force mixed whenever the stage model applied and
+    // a mixed route is materializable.
+    if (report.stageModel.applied && report.stageModel.mixed.legal) {
+      report.decision = SimdSimtCandidateKind::MixedSIMDSIMT;
+    }
     costModelLog() << "report: decision="
                    << stringifySimdSimtCandidate(report.decision)
                    << " stageModel.applied="
