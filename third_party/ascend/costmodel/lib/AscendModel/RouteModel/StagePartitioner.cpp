@@ -21,6 +21,8 @@ using namespace mlir::ascend;
 
 namespace {
 
+constexpr llvm::StringLiteral kGenericLoopShellAttr = "ta.generic_loop_shell";
+
 static double mapValue(const llvm::StringMap<int64_t> &map,
                        llvm::StringRef name) {
   auto iterator = map.find(name);
