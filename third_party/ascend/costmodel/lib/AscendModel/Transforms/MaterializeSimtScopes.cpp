@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "AscendModel/Analysis/SimtAnchorAnalysis.h"
+#include "AscendModel/CostModelTrace.h"
 #include "AscendModel/Transforms/Passes.h"
 #include "AscendModel/Transforms/SimtSelection.h"
 #include "ascend/include/Utils/SuperBlockFactor.h"
@@ -164,6 +165,7 @@ static LogicalResult wrapAnchorRange(ArrayRef<Operation *> ops,
 LogicalResult materializeSimtAnchorPlan(ModuleOp module,
                                         const SimtAnchorPlan &plan,
                                         int64_t superblockFactor) {
+  COSTMODEL_TRACE("materializeSimtAnchorPlan");
   if (!isSupportedSuperBlockFactor(superblockFactor))
     return module.emitError("SIMT scope superblock factor must be one of ")
            << kSupportedSuperBlockFactorsDescription;
@@ -238,6 +240,7 @@ struct MaterializeSimtScopesPass
   using MaterializeSimtScopesPassBase::MaterializeSimtScopesPassBase;
 
   void runOnOperation() override {
+    COSTMODEL_TRACE("MaterializeSimtScopesPass::runOnOperation");
     ModuleOp module = getOperation();
     if (!isMixedModelDecision(module))
       return;

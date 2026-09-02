@@ -1,6 +1,7 @@
 //===- StageCostModels.cpp - Per-stage analytical models -----------------===//
 
 #include "AscendModel/RouteModel/StageCostModels.h"
+#include "AscendModel/CostModelTrace.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/StringSet.h"
@@ -83,6 +84,7 @@ materializeControlFlow(const LogicalStage &stage, StageMode mode,
 static StageResourceCycles mapWorkload(const LogicalStage &stage,
                                        const StageModeProfile &profile,
                                        StageMode mode) {
+  COSTMODEL_TRACE_DEBUG("mapWorkload");
   StageResourceCycles resources;
   const StageWorkload &work = stage.workload;
   const bool simd = mode == StageMode::SIMD;
@@ -165,6 +167,7 @@ static StageResourceCycles mapWorkload(const LogicalStage &stage,
   else if (stage.features.hasReduction)
     resources.criticalPath =
         resources.compute + resources.predicate + resources.shuffle;
+    costModelDebug() << "resources: setup=" << resources.setup << " scalar=" << resources.scalar << " load=" << resources.load << " store=" << resources.store << " compute=" << resources.compute << " predicate=" << resources.predicate << " shuffle=" << resources.shuffle << " dot=" << resources.dot << " issue=" << resources.issue << " spill=" << resources.spill << "\n";
   return materializeControlFlow(stage, mode, resources, profile.controlFlow);
 }
 
@@ -173,6 +176,7 @@ static double applySuperBlock(const LogicalStage &stage,
                               const StageImplementation &implementation,
                               const HardwareProfile &profile,
                               double stageCycles) {
+  COSTMODEL_TRACE_DEBUG("applySuperBlock");
   if (implementation.mode != StageMode::SIMT ||
       implementation.superblockFactor == 1)
     return stageCycles;
@@ -233,6 +237,7 @@ static double applySuperBlock(const LogicalStage &stage,
 static double estimateStage(const LogicalStage &stage,
                             const HardwareProfile &profile, StageMode mode,
                             const StageResourceCycles &r) {
+  COSTMODEL_TRACE_DEBUG("estimateStage");
   const double count = iterations(stage);
   const double serial = r.setup + count * serialBody(r);
   switch (stage.costModelKind) {
@@ -491,6 +496,8 @@ bool HardwareProfile::isValid() const {
 llvm::Expected<StageCostTable>
 StageCostEvaluator::evaluate(const StagePartition &partition,
                              const HardwareProfile &profile) const {
+  COSTMODEL_TRACE("StageCostEvaluator::evaluate");
+  costModelLog() << "input: stages=" << partition.stages.size() << "\n";
   if (partition.stages.empty())
     return llvm::createStringError(
         std::errc::invalid_argument,
@@ -546,6 +553,7 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
         stage.localSuperblockMaterializable;
     logicalCost.legalSimtFactors = stage.legalSimtFactors;
     logicalCost.localSimtFactors = stage.localSimtFactors;
+    costModelLog() << "stage \"" << stage.id << "\" model=" << logicalCost.model << " iter=" << stage.iterationCount << "\n";
 
     llvm::SmallVector<StageImplementation> implementations;
     if (stage.simdLegal)
@@ -577,6 +585,7 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
                                        "Stage '%s' produced an invalid cost",
                                        stage.id.c_str());
       logicalCost.implementations.push_back(std::move(cost));
+      costModelLog() << "  impl " << (implementation.mode == StageMode::SIMD ? "SIMD" : "SIMT") << " F=" << implementation.superblockFactor << " local=" << (implementation.localScope ? "yes" : "no") << " cycles=" << cost.totalCycles << "\n";
     }
 
     table.stages.push_back(std::move(logicalCost));
