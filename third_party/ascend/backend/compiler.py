@@ -317,7 +317,7 @@ def _publish_route_transform_capability(metadata, opt) -> str:
     return capability_json
 
 
-def _run_cpp_simd_simt_costmodel(mod, metadata, opt, analysis_ttir_code: str = "") -> str:
+def _run_cpp_simd_simt_costmodel(mod, metadata, opt, analysis_ttir_code: str = "", pre_layout_ttir_code: str = "", post_layout_ttir_code: str = "") -> str:
     """Run native selection/materialization; Python only schedules the passes."""
     mode = opt.auto_simt_scope_mode
     if mode == "off" or metadata.get("compile_mode") != "simd_simt":
@@ -338,6 +338,14 @@ def _run_cpp_simd_simt_costmodel(mod, metadata, opt, analysis_ttir_code: str = "
                                                                         whole_kernel_superblock_materializable)
     metadata["auto_simt_scope_superblock_materializable"] = scope_superblock_materializable
     with tempfile.TemporaryDirectory() as tmpdir:
+        pre_layout_path = ""
+        if pre_layout_ttir_code:
+            pre_layout_path = os.path.join(tmpdir, "pre_layout.ttir.mlir")
+            Path(pre_layout_path).write_text(pre_layout_ttir_code, encoding="utf-8", newline="\n")
+        post_layout_path = ""
+        if post_layout_ttir_code:
+            post_layout_path = os.path.join(tmpdir, "post_layout.ttir.mlir")
+            Path(post_layout_path).write_text(post_layout_ttir_code, encoding="utf-8", newline="\n")
         analysis_path = ""
         if analysis_ttir_code:
             analysis_path = os.path.join(tmpdir, "post_auto_blockify_v1.ttir.mlir")
@@ -352,6 +360,8 @@ def _run_cpp_simd_simt_costmodel(mod, metadata, opt, analysis_ttir_code: str = "
             whole_kernel_superblock_materializable,
             scope_superblock_materializable,
             int(json.loads(capability_json).get("logical_program_count_hint", 0)),
+            pre_layout_path,
+            post_layout_path,
             analysis_path,
             capability_json,
             str(opt.auto_simt_scope_dump),
@@ -519,7 +529,10 @@ def _refine_ta_simt_auto_blockify_v1_superblock(mod, metadata, super_block_facto
 def ttir_to_linalg(mod, metadata, opt, *, named_ops=False):
     # use triton_adapter to lower Triton-MLIR to linalg
     analysis_ttir_code = ""
+    pre_layout_ttir_code = ""
+    post_layout_ttir_code = ""
     if metadata.get("compile_mode") == "simd_simt" and opt.auto_simt_scope_mode != "off":
+        pre_layout_ttir_code = str(mod)
         if opt.enable_ttir_layout_merge:
             _run_ttir_layout_merge(mod, metadata)
         else:
@@ -527,10 +540,11 @@ def ttir_to_linalg(mod, metadata, opt, *, named_ops=False):
             metadata["ttir_layout_coalesce_factor"] = 1
             metadata["ttir_layout_coalesce_axis"] = -1
             metadata["ttir_layout_coalesce_grid_ceil_div"] = False
+        post_layout_ttir_code = str(mod)
         _resolve_auto_blockify_v1_policy(str(mod), metadata, opt)
         _publish_route_transform_capability(metadata, opt)
         analysis_ttir_code = _build_costmodel_analysis_ttir(mod, metadata, opt)
-    cpp_decision = _run_cpp_simd_simt_costmodel(mod, metadata, opt, analysis_ttir_code)
+    cpp_decision = _run_cpp_simd_simt_costmodel(mod, metadata, opt, analysis_ttir_code, pre_layout_ttir_code, post_layout_ttir_code)
     cpp_all_simt = cpp_decision == "all_simt_only"
     if metadata.get("compile_mode") == "simd_simt" and (cpp_all_simt or ascend.ir.is_whole_body_void_simt_scope(mod)):
         metadata["scope_pure_simt_auto"] = True

@@ -1,6 +1,7 @@
 //===- StagePartitioner.cpp - Build semantic Stage IR -------------------===//
 
 #include "AscendModel/Analysis/StagePartitioner.h"
+#include "AscendModel/CostModelTrace.h"
 
 #include "mlir/IR/BuiltinTypes.h"
 #include "llvm/ADT/DenseSet.h"
@@ -738,6 +739,7 @@ static void deriveLocalSimtScopeTraffic(StagePartition &partition,
 llvm::Expected<ProgramStructure>
 ProgramStructureAnalysis::analyze(ModuleOp module,
                                   const SimtAnchorPlan &anchorPlan) const {
+  COSTMODEL_TRACE("ProgramStructureAnalysis::analyze");
   if (!module)
     return llvm::createStringError(
         std::errc::invalid_argument,
@@ -938,6 +940,9 @@ buildAnchorGroups(const ProgramStructure &structure,
 llvm::Expected<StagePartition>
 StageBoundaryAnalysis::analyze(const ProgramStructure &structure,
                                const SimtAnchorPlan &anchorPlan) const {
+  COSTMODEL_TRACE("StageBoundaryAnalysis::analyze");
+  costModelLog() << "rootOperations=" << structure.rootOperations.size()
+                 << "\n";
   if (structure.rootOperations.empty())
     return llvm::createStringError(
         std::errc::invalid_argument,
@@ -1009,6 +1014,12 @@ StageBoundaryAnalysis::analyze(const ProgramStructure &structure,
   if (!partition.stages.empty())
     partition.stages.front().workload.paysKernelSetup = true;
 
+  for (const LogicalStage &stage : partition.stages)
+    costModelLog() << "stage \"" << stage.id << "\" kind="
+                   << stringifyStageCostModel(stage.costModelKind)
+                   << " ops=" << stage.operations.size()
+                   << " iter=" << stage.iterationCount << "\n";
+
   attachExactAnchorOwnership(partition, anchorPlan);
   deriveStageLiveValues(partition);
   deriveLocalSimtScopeTraffic(partition, anchorPlan);
@@ -1016,6 +1027,7 @@ StageBoundaryAnalysis::analyze(const ProgramStructure &structure,
 }
 
 llvm::Error StageFeatureAnalysis::analyze(StagePartition &partition) const {
+  COSTMODEL_TRACE("StageFeatureAnalysis::analyze");
   for (LogicalStage &stage : partition.stages) {
     StageModelFeatures &facts = stage.features;
     const double activeLaneRatio = facts.activeLaneRatio;
@@ -1083,6 +1095,7 @@ llvm::Error StageFeatureAnalysis::analyze(StagePartition &partition) const {
           name.contains("pack") || name.contains("unpack");
     }
     facts.hasContiguousMemory = hasMemory && !facts.hasIndirectMemory;
+    costModelDebug() << "features stage=" << stage.id << " loop=" << facts.hasLoop << " carried=" << facts.hasLoopCarriedDataDependency << " reduction=" << facts.hasReduction << " dot=" << facts.hasDot << " indirect=" << facts.hasIndirectMemory << " contiguous=" << facts.hasContiguousMemory << " conversion=" << facts.hasConversionPack << "\n";
     if (algorithmLoopCount > 0 && stage.iterationCount > 1) {
       if (facts.hasLoopCarriedDataDependency)
         facts.parallelRecurrenceGroupCount = algorithmLoopCount;
@@ -1104,6 +1117,7 @@ llvm::Error StageFeatureAnalysis::analyze(StagePartition &partition) const {
 
 llvm::Error StageKindClassifier::analyze(StagePartition &partition,
                                          int64_t tinyDotFlopsMax) const {
+  COSTMODEL_TRACE("StageKindClassifier::analyze");
   if (!partition.operationOwnershipComplete)
     return llvm::Error::success();
   auto compatible = [](StageCostModelKind kind,
@@ -1187,6 +1201,7 @@ llvm::Error StageKindClassifier::analyze(StagePartition &partition,
       stage.scheduleKind = StageScheduleKind::IndependentPipelined;
     else if (stage.costModelKind == StageCostModelKind::LoopCarriedRecurrence)
       stage.scheduleKind = StageScheduleKind::LoopCarriedSerial;
+    costModelLog() << "stage \"" << stage.id << "\" final kind=" << stringifyStageCostModel(stage.costModelKind) << " schedule=" << static_cast<int>(stage.scheduleKind) << "\n";
   }
   for (auto indexedStage : llvm::enumerate(partition.stages))
     indexedStage.value().id =
@@ -1195,6 +1210,7 @@ llvm::Error StageKindClassifier::analyze(StagePartition &partition,
 }
 
 llvm::Error StageWorkloadAnalysis::analyze(StagePartition &partition) const {
+  COSTMODEL_TRACE("StageWorkloadAnalysis::analyze");
   if (!partition.operationOwnershipComplete)
     return llvm::createStringError(
         std::errc::invalid_argument,
@@ -1211,6 +1227,7 @@ llvm::Error StageWorkloadAnalysis::analyze(StagePartition &partition) const {
     recomputeIssueElements(work);
     stage.workload = std::move(work);
     makePerIteration(stage);
+    costModelLog() << "stage \"" << stage.id << "\" workload scalar=" << stage.workload.scalarOperations << " loadBytes=" << stage.workload.loadBytes << " storeBytes=" << stage.workload.storeBytes << " dotFlops=" << stage.workload.dotFlops << " issueElements=" << stage.workload.issueElements << "\n";
     if (!stage.workload.isFiniteAndNonNegative())
       return llvm::createStringError(
           std::errc::invalid_argument,
@@ -1222,6 +1239,7 @@ llvm::Error StageWorkloadAnalysis::analyze(StagePartition &partition) const {
 
 llvm::Error
 StagePartitionVerifier::verify(const StagePartition &partition) const {
+  COSTMODEL_TRACE("StagePartitionVerifier::verify");
   if (partition.stages.empty())
     return llvm::createStringError(std::errc::invalid_argument,
                                    "StagePartition has no Stage");
@@ -1278,6 +1296,7 @@ llvm::Error
 StageModeLegalityAnalysis::analyze(StagePartition &partition,
                                    int64_t maximumSuperblockFactor,
                                    bool scopeSuperblockMaterializable) const {
+  COSTMODEL_TRACE("StageModeLegalityAnalysis::analyze");
   const int64_t maximum = std::clamp<int64_t>(maximumSuperblockFactor, 1, 4);
   // Local and whole-kernel SuperBlock candidates consume the same SIMT warp
   // resources.  Do not regenerate F4 here after evaluateStageModel has
@@ -1297,6 +1316,7 @@ StageModeLegalityAnalysis::analyze(StagePartition &partition,
       stage.legalSimtFactors.push_back(2);
     if (maximum >= 4)
       stage.legalSimtFactors.push_back(4);
+    costModelDebug() << "stage \"" << stage.id << "\" simdLegal=" << stage.simdLegal << " simtLegal=" << stage.simtLegal << " localSimt=" << stage.localSimtMaterializable << "\n";
     if (stage.localSimtMaterializable) {
       // The ABI-v2 scope materializer batches complete logical programs
       // around this Stage.  F2/F4 therefore does not require multiple
@@ -1324,6 +1344,9 @@ StageModeLegalityAnalysis::analyze(StagePartition &partition,
 llvm::Expected<StagePartition>
 StagePartitioner::partition(ModuleOp module, const SimtAnchorPlan &anchorPlan,
                             const StagePartitionerOptions &options) const {
+  COSTMODEL_TRACE("StagePartitioner::partition");
+  costModelLog() << "maxFactor=" << options.maximumSuperblockFactor
+                 << " tinyDotFlopsMax=" << options.tinyDotFlopsMax << "\n";
   auto structure = ProgramStructureAnalysis().analyze(module, anchorPlan);
   if (!structure)
     return structure.takeError();

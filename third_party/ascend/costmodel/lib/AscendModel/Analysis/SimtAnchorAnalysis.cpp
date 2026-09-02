@@ -1,6 +1,7 @@
 //===- SimtAnchorAnalysis.cpp - Materializable SIMT anchors --------------===//
 
 #include "AscendModel/Analysis/SimtAnchorAnalysis.h"
+#include "AscendModel/CostModelTrace.h"
 
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -652,6 +653,7 @@ bool mlir::ascend::isLoadedIndexDependentMemoryOp(Operation *op) {
 
 SimtAnchorPlan mlir::ascend::buildMixedSimtAnchorPlan(ModuleOp module,
                                                       bool compileOn91095) {
+  COSTMODEL_TRACE("buildMixedSimtAnchorPlan");
   SimtAnchorPlan plan;
   llvm::DenseSet<Operation *> operationsInPlannedScope;
   module.walk<WalkOrder::PreOrder>([&](Operation *op) {
@@ -688,5 +690,6 @@ SimtAnchorPlan mlir::ascend::buildMixedSimtAnchorPlan(ModuleOp module,
     mixedBlocked |= !anchor.lowerability.mixed && !anchor.lowerability.allSimd;
   }
   plan.kernelLowerability.mixed = anyMixed && !mixedBlocked;
+  costModelLog() << "anchors=" << plan.anchors.size() << " allSimd=" << plan.kernelLowerability.allSimd << " allSimtOnly=" << plan.kernelLowerability.allSimtOnly << " mixed=" << plan.kernelLowerability.mixed << "\n";
   return plan;
 }

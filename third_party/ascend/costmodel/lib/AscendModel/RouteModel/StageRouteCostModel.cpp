@@ -1,6 +1,7 @@
 //===- StageRouteCostModel.cpp - Logical-stage route solver ---------------===//
 
 #include "AscendModel/RouteModel/StageRouteCostModel.h"
+#include "AscendModel/CostModelTrace.h"
 
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -19,6 +20,7 @@ namespace {
 static double mixedEquivalentStageCost(const LogicalStageCost &stage,
                                        const StageImplementationCost &selected,
                                        const StageTransitionCost &transition) {
+  COSTMODEL_TRACE_DEBUG("mixedEquivalentStageCost");
   if (selected.implementation.mode != StageMode::SIMT ||
       !selected.implementation.localScope || !stage.localSimtMaterializable)
     return selected.totalCycles;
@@ -376,6 +378,8 @@ llvm::json::Object StageCostModelSummary::toJSON() const {
 llvm::Expected<StageCostModelSummary>
 mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
                                const StageTransitionCost &transition) {
+  COSTMODEL_TRACE("solveStageRoutes");
+  costModelLog() << "input: stages=" << costTable.stages.size() << "\n";
   if (costTable.stages.empty())
     return llvm::createStringError(std::errc::invalid_argument,
                                    "stage route model requires at least one "
@@ -401,6 +405,7 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
     StageRoutePlan plan;
     plan.candidate = kind;
     plan.routeSuperblockFactor = factor;
+    costModelLog() << "route=" << stringifyStageKernelRoute(kind) << " F=" << factor << ": solving per-stage choices\n";
     struct MixedChoice {
       const StageImplementationCost *simd = nullptr;
       const StageImplementationCost *simt = nullptr;
@@ -446,6 +451,7 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
       plan.entryTransitionCycles.push_back(transitionCycles);
       plan.logicalStageCycles.push_back(stageCycles);
       plan.totalCycles += stageCycles;
+      costModelLog() << "  stage \"" << stage.id << "\" -> " << (selected->implementation.mode == StageMode::SIMD ? "SIMD" : "SIMT") << " cycles=" << stageCycles << "\n";
     }
     if (kind == StageKernelRouteKind::Mixed) {
       if (factor > 1) {
@@ -571,6 +577,7 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
       plan.totalCycles *= static_cast<double>(plan.runtimeWaveCount);
     }
     plan.legal = true;
+    costModelLog() << "route=" << stringifyStageKernelRoute(kind) << " F=" << factor << " totalCycles=" << plan.totalCycles << " legal=true\n";
     return plan;
   };
 
@@ -597,6 +604,7 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
   result.allSimt = bestFactoredPlan(StageKernelRouteKind::AllSIMT);
   result.mixed = bestFactoredPlan(StageKernelRouteKind::Mixed);
   removeAutoBlockifyCostFromAllSIMD(result.allSimd, costTable);
+  costModelLog() << "output: allSimd=" << result.allSimd.totalCycles << " legal=" << result.allSimd.legal << " | allSimt=" << result.allSimt.totalCycles << " legal=" << result.allSimt.legal << " F=" << result.allSimt.routeSuperblockFactor << " | mixed=" << result.mixed.totalCycles << " legal=" << result.mixed.legal << " F=" << result.mixed.routeSuperblockFactor << "\n";
 
   return result;
 }

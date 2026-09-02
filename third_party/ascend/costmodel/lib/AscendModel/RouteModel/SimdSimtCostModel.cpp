@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "AscendModel/RouteModel/SimdSimtCostModel.h"
+#include "AscendModel/CostModelTrace.h"
 #include "AscendModel/Analysis/SimtAnchorAnalysis.h"
 #include "AscendModel/Analysis/StagePartitioner.h"
 #include "AscendModel/Profile/MicrobenchmarkProfile.h"
@@ -268,6 +269,7 @@ static void readStageResources(ProfileJSONReader &reader,
 
 static llvm::Expected<CandidateProfile>
 loadCandidateProfile(llvm::StringRef requestedPath) {
+  COSTMODEL_TRACE("loadCandidateProfile");
   std::string path = requestedPath.empty() ? getDefaultSimdSimtProfilePath()
                                            : requestedPath.str();
   if (path.empty())
@@ -515,6 +517,9 @@ static llvm::Expected<StageCostModelSummary> evaluateStageModel(
     bool scopeSuperblockMaterializable, int64_t logicalProgramCountHint,
     int64_t physicalCoreCountHint, ModuleOp module,
     const SimtAnchorPlan *anchorPlan) {
+  COSTMODEL_TRACE("evaluateStageModel");
+  costModelLog() << "numWarps=" << numWarps << " logicalProgramCountHint="
+                 << logicalProgramCountHint << "\n";
   StagePartitionerOptions partitionerOptions;
   partitionerOptions.tinyDotFlopsMax = profile.structural.tinyDotFlopsMax;
   partitionerOptions.maximumSuperblockFactor =
@@ -704,6 +709,7 @@ std::string mlir::ascend::getDefaultSimdSimtProfilePath() {
 
 llvm::Expected<SimdSimtFeatureSummary>
 mlir::ascend::analyzeSimdSimtFeatures(ModuleOp module, bool compileOn91095) {
+  COSTMODEL_TRACE("analyzeSimdSimtFeatures (module, compileOn91095)");
   if (!module)
     return llvm::createStringError(std::errc::invalid_argument,
                                    "cannot analyze a null ModuleOp");
@@ -714,6 +720,7 @@ mlir::ascend::analyzeSimdSimtFeatures(ModuleOp module, bool compileOn91095) {
 llvm::Expected<SimdSimtFeatureSummary>
 mlir::ascend::analyzeSimdSimtFeatures(ModuleOp module,
                                       const SimtAnchorPlan &anchorPlan) {
+  COSTMODEL_TRACE("analyzeSimdSimtFeatures");
   if (!module)
     return llvm::createStringError(std::errc::invalid_argument,
                                    "cannot analyze a null ModuleOp");
@@ -736,6 +743,7 @@ mlir::ascend::analyzeSimdSimtFeatures(ModuleOp module,
     features.hasExplicitScope |=
         operation->getName().getStringRef() == "scope.scope";
   });
+  costModelLog() << "features: anchors=" << features.simtAnchors.count << " autoBlockifyV1=" << features.autoBlockifyV1Applied << " explicitScope=" << features.hasExplicitScope << "\n";
   return features;
 }
 
@@ -744,6 +752,7 @@ estimateSimdSimtCandidatesImpl(const SimdSimtFeatureSummary &features,
                                const SimdSimtCostModelOptions &options,
                                ModuleOp module,
                                const SimtAnchorPlan *anchorPlan) {
+  COSTMODEL_TRACE("estimateSimdSimtCandidatesImpl");
   auto profileOrError = loadCandidateProfile(options.profilePath);
   if (!profileOrError)
     return profileOrError.takeError();
@@ -804,6 +813,7 @@ estimateSimdSimtCandidatesImpl(const SimdSimtFeatureSummary &features,
 
 llvm::Expected<SimdSimtCostReport> mlir::ascend::analyzeSimdSimtCandidates(
     ModuleOp module, const SimdSimtCostModelOptions &options) {
+  COSTMODEL_TRACE("analyzeSimdSimtCandidates (module, options)");
   if (!module)
     return llvm::createStringError(std::errc::invalid_argument,
                                    "cannot analyze a null ModuleOp");
@@ -815,6 +825,7 @@ llvm::Expected<SimdSimtCostReport> mlir::ascend::analyzeSimdSimtCandidates(
 llvm::Expected<SimdSimtCostReport> mlir::ascend::analyzeSimdSimtCandidates(
     ModuleOp module, const SimtAnchorPlan &anchorPlan,
     const SimdSimtCostModelOptions &options) {
+  COSTMODEL_TRACE("analyzeSimdSimtCandidates (module, anchorPlan, options)");
   auto features = analyzeSimdSimtFeatures(module, anchorPlan);
   if (!features)
     return features.takeError();
