@@ -201,17 +201,11 @@ static double applySuperBlock(const LogicalStage &stage,
   // A recurrence is serial inside one logical program.  SuperBlock contributes
   // F independent logical programs to the same physical program, allowing the
   // scheduler to cover one program's dependency stalls with another program.
-  // Normalize the critical-path portion per logical program, but retain the
-  // aggregate issue floor: F2/F4 cannot create additional issue bandwidth.
-  // This applies equally to whole-kernel and scope-local SuperBlock because
-  // both materializers batch complete logical programs around the Stage.
-  if (stage.costModelKind == StageCostModelKind::LoopCarriedRecurrence) {
-    const double recurrenceBody = std::max(0.0, stageCycles - fixed);
-    return std::max(issueFloor, fixed + recurrenceBody + pressure) +
-           persistentStatePressure;
-  }
-  // Proven persistent-state pressure is additional register/stack work and
-  // cannot disappear behind the ordinary issue floor.
+  // Recurrence stages therefore use the same latency-hiding formula as other
+  // stages: latency-sensitive load/store/shuffle/divergence is amortized by
+  // the effective factor, while non-latency work is replicated per logical
+  // program.  The serial recurrence chain is already separated by
+  // StageRecurrenceAnalysis for future, more precise critical-path modeling.
   const double body = std::max(0.0, stageCycles - fixed);
   const double groupedBody = factor * std::max(0.0, body - latencySensitive) +
                              factor * latencySensitive / effectiveFactor;
