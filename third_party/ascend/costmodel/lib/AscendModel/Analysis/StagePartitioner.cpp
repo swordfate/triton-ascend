@@ -4,6 +4,7 @@
 #include "AscendModel/CostModelTrace.h"
 
 #include "mlir/IR/BuiltinTypes.h"
+#include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
@@ -974,6 +975,9 @@ StageBoundaryAnalysis::analyze(const ProgramStructure &structure,
     return anchorGroups.takeError();
 
   StagePartition partition;
+  llvm::DenseMap<Operation *, size_t> rootIndex;
+  for (auto indexedRoot : llvm::enumerate(structure.rootOperations))
+    rootIndex[indexedRoot.value()] = indexedRoot.index();
   llvm::DenseSet<Operation *> owned;
   for (size_t index = 0; index < structure.rootOperations.size();) {
     Operation *root = structure.rootOperations[index];
@@ -1036,11 +1040,30 @@ StageBoundaryAnalysis::analyze(const ProgramStructure &structure,
   if (!partition.stages.empty())
     partition.stages.front().workload.paysKernelSetup = true;
 
-  for (const LogicalStage &stage : partition.stages)
-    costModelLog() << "stage \"" << stage.id << "\" kind="
-                   << stringifyStageCostModel(stage.costModelKind)
-                   << " ops=" << stage.operations.size()
-                   << " iter=" << stage.iterationCount << "\n";
+  for (const LogicalStage &stage : partition.stages) {
+    std::string operationList;
+    llvm::raw_string_ostream os(operationList);
+    os << "[";
+    for (size_t i = 0; i < stage.operations.size(); ++i) {
+      if (i)
+        os << ", ";
+      Operation *op = stage.operations[i];
+      auto it = rootIndex.find(op);
+      if (it != rootIndex.end())
+        os << "root[" << it->second << "] ";
+      os << op->getName().getStringRef();
+      if (op->hasAttr("ta.auto_blockify_v1.schedule"))
+        os << "{schedule}";
+      if (op->hasAttr("ta.auto_blockify_v1.loop"))
+        os << "{loop}";
+    }
+    os << "]";
+    os.flush();
+    costModelLog() << "stage \"" << stage.id
+                   << "\" kind=" << stringifyStageCostModel(stage.costModelKind)
+                   << " iter=" << stage.iterationCount
+                   << " ops=" << operationList << "\n";
+  }
 
   attachExactAnchorOwnership(partition, anchorPlan);
   deriveStageLiveValues(partition);
