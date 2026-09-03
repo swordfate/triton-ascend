@@ -757,6 +757,110 @@ static void deriveLocalSimtScopeTraffic(StagePartition &partition,
   }
 }
 
+/// A loop-carried block argument is a real recurrence only when it is not a
+/// pointer/address-only induction.  Address/pointer induction is removed by
+/// later address lowering and should not serialize the whole Stage.
+static bool isRealCarriedArgument(BlockArgument argument) {
+  if (!argument)
+    return false;
+  return !isPointerLikeType(argument.getType()) &&
+         !isAddressOnlyLoopValue(argument);
+}
+
+/// Accumulate only the operations that lie on the true cross-iteration serial
+/// dependency chain of one scf.for.  An operation is on the chain when it is
+/// both:
+///   - reachable forward from a real carried block argument, and
+///   - able to reach the corresponding scf.yield operand.
+/// This excludes independent per-iteration loads/computes that only feed the
+/// recurrence from outside the carried cycle.
+static void accumulateSerialRecurrenceForLoop(Operation *forOp,
+                                              StageWorkload &serial) {
+  if (!forOp || forOp->getName().getStringRef() != "scf.for" ||
+      forOp->getNumRegions() == 0 || forOp->getRegion(0).empty())
+    return;
+  Block &body = forOp->getRegion(0).front();
+  Operation *yield = body.getTerminator();
+  if (!yield || yield->getName().getStringRef() != "scf.yield")
+    return;
+
+  llvm::SmallVector<BlockArgument> carriedArgs;
+  for (BlockArgument argument : body.getArguments()) {
+    if (argument.getArgNumber() == 0)
+      continue;
+    if (isRealCarriedArgument(argument))
+      carriedArgs.push_back(argument);
+  }
+  if (carriedArgs.empty())
+    return;
+
+  llvm::DenseSet<Value> targets;
+  for (BlockArgument argument : carriedArgs) {
+    const unsigned yieldIndex = argument.getArgNumber() - 1;
+    if (yieldIndex < yield->getNumOperands())
+      targets.insert(yield->getOperand(yieldIndex));
+  }
+  if (targets.empty())
+    return;
+
+  // Backward slice from the yielded carried values.
+  llvm::DenseSet<Value> backwardValues;
+  llvm::DenseSet<Operation *> backwardOps;
+  llvm::SmallVector<Value> worklist(targets.begin(), targets.end());
+  while (!worklist.empty()) {
+    Value value = worklist.pop_back_val();
+    if (!backwardValues.insert(value).second)
+      continue;
+    Operation *definition = value.getDefiningOp();
+    if (!definition || definition->getBlock() != &body)
+      continue;
+    backwardOps.insert(definition);
+    for (Value operand : definition->getOperands())
+      worklist.push_back(operand);
+  }
+
+  // Forward slice from the real carried block arguments.
+  llvm::DenseSet<Value> forwardValues;
+  llvm::DenseSet<Operation *> forwardOps;
+  worklist.clear();
+  for (BlockArgument argument : carriedArgs)
+    worklist.push_back(argument);
+  while (!worklist.empty()) {
+    Value value = worklist.pop_back_val();
+    if (!forwardValues.insert(value).second)
+      continue;
+    for (OpOperand &use : value.getUses()) {
+      Operation *user = use.getOwner();
+      if (user->getBlock() != &body)
+        continue;
+      forwardOps.insert(user);
+      for (Value result : user->getResults())
+        worklist.push_back(result);
+    }
+  }
+
+  // The serial recurrence chain is the intersection of the two slices.
+  for (Operation *op : backwardOps)
+    if (forwardOps.contains(op))
+      accumulateOneOperation(op, serial);
+}
+
+static void collectSerialRecurrenceWorkload(Operation *root,
+                                            StageWorkload &serial) {
+  if (!root)
+    return;
+  if (root->getName().getStringRef() == "scf.for" &&
+      !root->hasAttr("ta.auto_blockify_v1.loop")) {
+    accumulateSerialRecurrenceForLoop(root, serial);
+    return;
+  }
+  root->walk([&](Operation *op) {
+    if (op->getName().getStringRef() == "scf.for" &&
+        !op->hasAttr("ta.auto_blockify_v1.loop"))
+      accumulateSerialRecurrenceForLoop(op, serial);
+  });
+}
+
 } // namespace
 
 llvm::Expected<ProgramStructure>
@@ -1282,6 +1386,30 @@ llvm::Error StageWorkloadAnalysis::analyze(StagePartition &partition) const {
   return llvm::Error::success();
 }
 
+llvm::Error StageRecurrenceAnalysis::analyze(StagePartition &partition) const {
+  COSTMODEL_TRACE("StageRecurrenceAnalysis::analyze");
+  if (!partition.operationOwnershipComplete)
+    return llvm::createStringError(
+        std::errc::invalid_argument,
+        "StageRecurrenceAnalysis requires complete operation ownership");
+  for (LogicalStage &stage : partition.stages) {
+    stage.serialRecurrenceWorkload = StageWorkload{};
+    if (stage.costModelKind != StageCostModelKind::LoopCarriedRecurrence)
+      continue;
+    for (Operation *root : stage.operations)
+      collectSerialRecurrenceWorkload(root, stage.serialRecurrenceWorkload);
+    recomputeIssueElements(stage.serialRecurrenceWorkload);
+    costModelLog() << "stage \"" << stage.id
+                   << "\" serialRecurrence scalar="
+                   << stage.serialRecurrenceWorkload.scalarOperations
+                   << " computeElements="
+                   << stage.serialRecurrenceWorkload.operationElements.size()
+                   << " issueElements="
+                   << stage.serialRecurrenceWorkload.issueElements << "\n";
+  }
+  return llvm::Error::success();
+}
+
 llvm::Error
 StagePartitionVerifier::verify(const StagePartition &partition) const {
   COSTMODEL_TRACE("StagePartitionVerifier::verify");
@@ -1406,6 +1534,8 @@ StagePartitioner::partition(ModuleOp module, const SimtAnchorPlan &anchorPlan,
     return std::move(error);
   if (llvm::Error error =
           StageKindClassifier().analyze(*result, options.tinyDotFlopsMax))
+    return std::move(error);
+  if (llvm::Error error = StageRecurrenceAnalysis().analyze(*result))
     return std::move(error);
   StageModeLegalityAnalysis legalityAnalysis;
   if (llvm::Error error =

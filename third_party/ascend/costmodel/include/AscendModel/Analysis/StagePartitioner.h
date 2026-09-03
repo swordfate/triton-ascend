@@ -68,6 +68,15 @@ public:
   llvm::Error analyze(StagePartition &partition) const;
 };
 
+/// For LoopCarriedRecurrence stages, isolates the mode-independent workload
+/// that lies on the true cross-iteration serial dependency chain.  This lets
+/// the cost model avoid treating every load/compute in the loop body as
+/// non-hidden serial recurrence work.
+class StageRecurrenceAnalysis {
+public:
+  llvm::Error analyze(StagePartition &partition) const;
+};
+
 /// Derives legal SIMD/SIMT implementations from structural Stage facts.
 class StageModeLegalityAnalysis {
 public:

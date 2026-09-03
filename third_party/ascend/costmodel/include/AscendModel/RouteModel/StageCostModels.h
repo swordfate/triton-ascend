@@ -63,6 +63,10 @@ struct LogicalStage {
   int64_t iterationCount = 1;
   StageModelFeatures features;
   StageWorkload workload;
+  /// Mode-independent workload on the true cross-iteration serial recurrence
+  /// chain.  Only meaningful for LoopCarriedRecurrence stages; it is used to
+  /// distinguish serial dependency work from latency-hiding load/store work.
+  StageWorkload serialRecurrenceWorkload;
   /// Exact TTIR ownership when StagePartition was built from an operation
   /// graph.  Feature-summary fallback partitions deliberately leave this
   /// empty and must not be treated as materialization evidence.

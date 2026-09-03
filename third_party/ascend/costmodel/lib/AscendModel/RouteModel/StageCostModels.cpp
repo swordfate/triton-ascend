@@ -60,33 +60,33 @@ static bool permitsSimdOverlap(const LogicalStage &stage) {
 }
 
 static StageResourceCycles
-materializeControlFlow(const LogicalStage &stage, StageMode mode,
+materializeControlFlow(const StageModelFeatures &features, StageMode mode,
                        StageResourceCycles resources,
                        const StageControlFlowRates &rates) {
   resources.loopControl +=
-      static_cast<double>(stage.features.loopBackedgeCount) *
+      static_cast<double>(features.loopBackedgeCount) *
       rates.loopBackedgeCycles;
   resources.branchControl +=
-      static_cast<double>(stage.features.conditionalBranchCount) *
+      static_cast<double>(features.conditionalBranchCount) *
       rates.conditionalBranchCycles;
   resources.synchronization +=
-      static_cast<double>(stage.features.synchronizationCount) *
+      static_cast<double>(features.synchronizationCount) *
       rates.synchronizationCycles;
   if (mode == StageMode::SIMT) {
     resources.divergence +=
-        static_cast<double>(stage.features.divergentBranchCount) *
-        (1.0 - stage.features.activeLaneRatio) *
+        static_cast<double>(features.divergentBranchCount) *
+        (1.0 - features.activeLaneRatio) *
         rates.divergentBranchPenaltyCycles;
   }
   return resources;
 }
 
-static StageResourceCycles mapWorkload(const LogicalStage &stage,
+static StageResourceCycles mapWorkload(const StageWorkload &work,
+                                       const StageModelFeatures &features,
                                        const StageModeProfile &profile,
                                        StageMode mode) {
   COSTMODEL_TRACE_DEBUG("mapWorkload");
   StageResourceCycles resources;
-  const StageWorkload &work = stage.workload;
   const bool simd = mode == StageMode::SIMD;
   resources.setup = work.paysKernelSetup ? profile.setupCycles : 0.0;
   for (const auto &[name, elements] : work.operationElements) {
@@ -100,7 +100,7 @@ static StageResourceCycles mapWorkload(const LogicalStage &stage,
         instructions / rate->second.throughput * rate->second.factor;
   }
   resources.scalar = work.scalarOperations / profile.scalarOperationsPerCycle;
-  if (stage.features.hasIndirectMemory) {
+  if (features.hasIndirectMemory) {
     const double loads =
         std::max(work.loadWarpInstructions, work.loadBytes > 0.0 ? 1.0 : 0.0);
     const double stores =
@@ -133,15 +133,28 @@ static StageResourceCycles mapWorkload(const LogicalStage &stage,
       profile.issueOperationsPerCycle;
   resources.spill =
       work.estimatedSpillTransactions / profile.spillTransactionsPerCycle;
-  if (stage.features.hasLoopCarriedDataDependency)
+  if (features.hasLoopCarriedDataDependency)
     resources.criticalPath = resources.scalar + resources.compute +
                              resources.predicate + resources.shuffle +
                              resources.dot;
-  else if (stage.features.hasReduction)
+  else if (features.hasReduction)
     resources.criticalPath =
         resources.compute + resources.predicate + resources.shuffle;
-    costModelDebug() << "resources: setup=" << resources.setup << " scalar=" << resources.scalar << " load=" << resources.load << " store=" << resources.store << " compute=" << resources.compute << " predicate=" << resources.predicate << " shuffle=" << resources.shuffle << " dot=" << resources.dot << " issue=" << resources.issue << " spill=" << resources.spill << "\n";
-  return materializeControlFlow(stage, mode, resources, profile.controlFlow);
+  costModelDebug() << "resources: setup=" << resources.setup
+                   << " scalar=" << resources.scalar
+                   << " load=" << resources.load << " store=" << resources.store
+                   << " compute=" << resources.compute
+                   << " predicate=" << resources.predicate
+                   << " shuffle=" << resources.shuffle
+                   << " dot=" << resources.dot << " issue=" << resources.issue
+                   << " spill=" << resources.spill << "\n";
+  return materializeControlFlow(features, mode, resources, profile.controlFlow);
+}
+
+static StageResourceCycles mapWorkload(const LogicalStage &stage,
+                                       const StageModeProfile &profile,
+                                       StageMode mode) {
+  return mapWorkload(stage.workload, stage.features, profile, mode);
 }
 
 static double applySuperBlock(const LogicalStage &stage,
@@ -465,7 +478,8 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
         stage.localSuperblockMaterializable;
     logicalCost.legalSimtFactors = stage.legalSimtFactors;
     logicalCost.localSimtFactors = stage.localSimtFactors;
-    costModelLog() << "stage \"" << stage.id << "\" model=" << logicalCost.model << " iter=" << stage.iterationCount << "\n";
+    costModelLog() << "stage \"" << stage.id << "\" model=" << logicalCost.model
+                   << " iter=" << stage.iterationCount << "\n";
 
     llvm::SmallVector<StageImplementation> implementations;
     if (stage.simdLegal)
@@ -497,7 +511,12 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
                                        "Stage '%s' produced an invalid cost",
                                        stage.id.c_str());
       logicalCost.implementations.push_back(std::move(cost));
-      costModelLog() << "  impl " << (implementation.mode == StageMode::SIMD ? "SIMD" : "SIMT") << " F=" << implementation.superblockFactor << " local=" << (implementation.localScope ? "yes" : "no") << " cycles=" << cost.totalCycles << "\n";
+      costModelLog() << "  impl "
+                     << (implementation.mode == StageMode::SIMD ? "SIMD"
+                                                                : "SIMT")
+                     << " F=" << implementation.superblockFactor
+                     << " local=" << (implementation.localScope ? "yes" : "no")
+                     << " cycles=" << cost.totalCycles << "\n";
     }
 
     table.stages.push_back(std::move(logicalCost));
