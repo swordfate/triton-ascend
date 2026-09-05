@@ -45,7 +45,8 @@ static double controlBody(const StageResourceCycles &resources) {
 }
 
 static double serialBody(const StageResourceCycles &resources) {
-  const double execution = resources.scalar + resources.load + resources.store +
+  const double execution = resources.scalar + resources.scalarMemory +
+                           resources.load + resources.store +
                            resources.compute + resources.predicate +
                            resources.shuffle + resources.dot +
                            controlBody(resources) + resources.spill;
@@ -118,6 +119,35 @@ static StageResourceCycles mapWorkload(const LogicalStage &stage,
     resources.store =
         work.storeWarpInstructions / profile.storeWarpInstructionsPerCycle;
   }
+  // Scalar loads/stores execute on the scalar pipe, not on vector MTE.  They
+  // are counted as individual scalar instructions plus a load/store latency.
+  // For indirect scalar memory (address produced by a scalar load), add the
+  // extra dependency latency so scalar-load-to-scalar-load and
+  // scalar-load-to-scalar-store chains are not hidden behind ordinary
+  // scalar-issue throughput.
+  if (work.scalarLoadCount > 0.0) {
+    resources.scalarMemory +=
+        work.scalarLoadCount / profile.scalarLoadInstructionsPerCycle +
+        profile.scalarLoadLatencyCycles;
+    // Each dependent scalar-load edge exposes an additional serial
+    // load-to-use latency that cannot be hidden by independent-issue
+    // overlap. Charge it per dependent load, not once per stage.
+    if (stage.features.hasScalarIndirectLoad)
+      resources.scalarMemory +=
+          work.indirectScalarLoadCount *
+          profile.scalarIndirectDependencyLatencyCycles;
+  }
+  if (work.scalarStoreCount > 0.0) {
+    resources.scalarMemory +=
+        work.scalarStoreCount / profile.scalarStoreInstructionsPerCycle +
+        profile.scalarStoreLatencyCycles;
+    // A scalar store whose address depends on an earlier scalar load also
+    // exposes a serial load-to-address-use latency.
+    if (stage.features.hasScalarIndirectStore)
+      resources.scalarMemory +=
+          work.indirectScalarStoreCount *
+          profile.scalarIndirectDependencyLatencyCycles;
+  }
   resources.predicate =
       (simd ? std::ceil(work.predicateElements /
                         static_cast<double>(profile.vectorWidth))
@@ -140,7 +170,7 @@ static StageResourceCycles mapWorkload(const LogicalStage &stage,
   else if (stage.features.hasReduction)
     resources.criticalPath =
         resources.compute + resources.predicate + resources.shuffle;
-    costModelDebug() << "resources: setup=" << resources.setup << " scalar=" << resources.scalar << " load=" << resources.load << " store=" << resources.store << " compute=" << resources.compute << " predicate=" << resources.predicate << " shuffle=" << resources.shuffle << " dot=" << resources.dot << " issue=" << resources.issue << " spill=" << resources.spill << "\n";
+    costModelDebug() << "resources: setup=" << resources.setup << " scalar=" << resources.scalar << " scalarMemory=" << resources.scalarMemory << " load=" << resources.load << " store=" << resources.store << " compute=" << resources.compute << " predicate=" << resources.predicate << " shuffle=" << resources.shuffle << " dot=" << resources.dot << " issue=" << resources.issue << " spill=" << resources.spill << "\n";
   return materializeControlFlow(stage, mode, resources, profile.controlFlow);
 }
 
@@ -157,9 +187,9 @@ static double applySuperBlock(const LogicalStage &stage,
   const double factor = static_cast<double>(implementation.superblockFactor);
   const double effectiveFactor = std::min(
       factor, static_cast<double>(profile.superblockUsefulFactorLimit));
-  const double latencySensitivePerIteration = resources.load + resources.store +
-                                              resources.shuffle +
-                                              resources.divergence;
+  const double latencySensitivePerIteration =
+      resources.scalarMemory + resources.load + resources.store +
+      resources.shuffle + resources.divergence;
   const double latencySensitive =
       iterations(stage) * latencySensitivePerIteration;
   // SuperBlock creates `factor` independent logical-program groups on one
@@ -219,27 +249,32 @@ static double estimateStage(const LogicalStage &stage,
         stage.costModelKind == StageCostModelKind::AutoBlockifyLoop ? count
                                                                     : 1.0;
     return r.setup +
-           dispatchCount * std::max(r.scalar + controlBody(r), r.issue);
+           dispatchCount *
+               std::max(r.scalar + r.scalarMemory + controlBody(r), r.issue);
   }
   case StageCostModelKind::ContinuousTileMemory:
   case StageCostModelKind::ContinuousTileStore:
   case StageCostModelKind::ContinuousShortLoad:
   case StageCostModelKind::CachePolicyStore:
     if (mode == StageMode::SIMD && permitsSimdOverlap(stage))
-      return r.setup + count * (r.scalar + r.predicate + controlBody(r) +
-                                r.spill + std::max({r.load, r.store, r.issue}));
+      return r.setup + count * (r.scalar + r.scalarMemory + r.predicate +
+                                controlBody(r) + r.spill +
+                                std::max({r.load, r.store, r.issue}));
     return serial;
   case StageCostModelKind::IndependentPipelinedLoop:
     if (mode == StageMode::SIMD && permitsSimdOverlap(stage))
       return r.setup +
              count *
                  (std::max({r.load, r.store, r.compute + r.dot + r.shuffle,
-                            r.scalar + r.predicate + controlBody(r), r.issue}) +
+                            r.scalar + r.scalarMemory + r.predicate +
+                                controlBody(r),
+                            r.issue}) +
                   r.spill);
     return serial;
   case StageCostModelKind::LoopCarriedRecurrence: {
     const double critical = r.criticalPath > 0.0
                                 ? std::max(r.criticalPath + r.load + r.store +
+                                               r.scalarMemory +
                                                controlBody(r) + r.spill,
                                            r.issue)
                                 : serialBody(r);
@@ -264,22 +299,22 @@ static double estimateStage(const LogicalStage &stage,
   }
   case StageCostModelKind::RowwiseReduction:
     return r.setup +
-           count * std::max(r.scalar + r.load + r.store + r.criticalPath +
-                                controlBody(r) + r.spill,
+           count * std::max(r.scalar + r.scalarMemory + r.load + r.store +
+                                r.criticalPath + controlBody(r) + r.spill,
                             r.issue);
   case StageCostModelKind::CubeRoofline:
   case StageCostModelKind::TinyCubeRoofline:
     if (mode == StageMode::SIMD && permitsSimdOverlap(stage))
       return r.setup +
-             count * (r.scalar + r.predicate + controlBody(r) + r.shuffle +
-                      r.spill +
+             count * (r.scalar + r.scalarMemory + r.predicate +
+                      controlBody(r) + r.shuffle + r.spill +
                       std::max({r.load, r.compute + r.dot, r.store, r.issue}));
     return serial;
   case StageCostModelKind::ConversionPack:
     if (mode == StageMode::SIMD && permitsSimdOverlap(stage))
       return r.setup + count * (r.predicate + controlBody(r) + r.spill +
-                                std::max({r.scalar + r.compute, r.load, r.store,
-                                          r.issue}));
+                                std::max({r.scalar + r.scalarMemory + r.compute,
+                                          r.load, r.store, r.issue}));
     return serial;
   default:
     return serial;
@@ -316,6 +351,10 @@ llvm::StringRef mlir::ascend::stringifyStageCostModel(StageCostModelKind kind) {
     return "scalar_control";
   case StageCostModelKind::ScalarMath:
     return "scalar_math";
+  case StageCostModelKind::ScalarLoad:
+    return "scalar_load";
+  case StageCostModelKind::ScalarStore:
+    return "scalar_store";
   case StageCostModelKind::IndexGeneration:
     return "index_generation";
   case StageCostModelKind::PredicateMask:
@@ -360,7 +399,7 @@ bool StageControlFlowRates::isFiniteAndNonNegative() const {
 }
 
 bool StageModeProfile::isValid(StageMode mode) const {
-  const std::array<double, 12> common = {setupCycles,
+  const std::array<double, 14> common = {setupCycles,
                                          predicateOperationsPerCycle,
                                          shuffleLanesPerCycle,
                                          dotSetupCycles,
@@ -370,6 +409,8 @@ bool StageModeProfile::isValid(StageMode mode) const {
                                          spillTransactionsPerCycle,
                                          indirectLoadTransactionsPerCycle,
                                          indirectStoreTransactionsPerCycle,
+                                         scalarLoadInstructionsPerCycle,
+                                         scalarStoreInstructionsPerCycle,
                                          static_cast<double>(vectorWidth),
                                          static_cast<double>(issueWidth)};
   if (!std::all_of(
@@ -377,6 +418,12 @@ bool StageModeProfile::isValid(StageMode mode) const {
           [](double value) { return std::isfinite(value) && value > 0.0; }) ||
       !std::isfinite(indirectDependencyLatencyCycles) ||
       indirectDependencyLatencyCycles < 0.0 ||
+      !std::isfinite(scalarLoadLatencyCycles) ||
+      scalarLoadLatencyCycles < 0.0 ||
+      !std::isfinite(scalarStoreLatencyCycles) ||
+      scalarStoreLatencyCycles < 0.0 ||
+      !std::isfinite(scalarIndirectDependencyLatencyCycles) ||
+      scalarIndirectDependencyLatencyCycles < 0.0 ||
       !controlFlow.isFiniteAndNonNegative())
     return false;
   if (mode == StageMode::SIMD) {

@@ -254,6 +254,66 @@
       "source_kind": "isolated_microbenchmark",
       "source": "data_provider/transition.cce; data_provider/transition_host.cpp; triton_cases/SIMT_Test/run_transition.remote.sh; data_provider/build_commands.md",
       "confidence": "low"
+    },
+    "simd.scalar.load.throughput": {
+      "description": "Effective SIMD MainScalar scalar GM-load throughput measured by CCE scalar-path probe on Ascend 950PR. 8 independent scalar loads per inner iteration give about 0.154 scalar loads/system-cycle with the two-point slope method.",
+      "value": 0.177913,
+      "unit": "scalar_instruction/system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_main_scalar_gm_load_runtime_loop",
+      "source_kind": "isolated_microbenchmark",
+      "source": "data_provider/scalar_ldst/simd_scalar_gm_memory.cce; data_provider/scalar_ldst/simd_scalar_gm_memory_host.cpp",
+      "confidence": "medium"
+    },
+    "simd.scalar.load.direct_latency": {
+      "description": "Direct scalar load-use overhead component on SIMD/MainScalar derived from CCE probe: one load per iteration costs ~11.9 cycles; with 0.154 instr/cycle throughput this leaves ~5.4 cycles per-iteration overhead.",
+      "value": 7.414187,
+      "unit": "system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_main_scalar_gm_load_runtime_loop",
+      "source_kind": "isolated_microbenchmark",
+      "source": "data_provider/scalar_ldst/simd_scalar_gm_memory.cce; data_provider/scalar_ldst/simd_scalar_gm_memory_host.cpp",
+      "confidence": "medium"
+    },
+    "simd.scalar.store.throughput": {
+      "description": "Effective SIMD MainScalar scalar GM-store throughput measured by CCE scalar-path probe on Ascend 950PR. 8 independent scalar stores per inner iteration give about 0.166 scalar stores/system-cycle with the two-point slope method.",
+      "value": 0.181104,
+      "unit": "scalar_instruction/system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_main_scalar_gm_store_runtime_loop",
+      "source_kind": "isolated_microbenchmark",
+      "source": "data_provider/scalar_ldst/simd_scalar_gm_memory.cce; data_provider/scalar_ldst/simd_scalar_gm_memory_host.cpp",
+      "confidence": "medium"
+    },
+    "simd.scalar.store.direct_latency": {
+      "description": "Direct scalar store overhead component on SIMD/MainScalar derived from CCE probe: one store per iteration costs ~8.7 cycles; with 0.166 instr/cycle throughput this leaves ~2.7 cycles per-iteration overhead.",
+      "value": 4.327973,
+      "unit": "system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_main_scalar_gm_store_runtime_loop",
+      "source_kind": "isolated_microbenchmark",
+      "source": "data_provider/scalar_ldst/simd_scalar_gm_memory.cce; data_provider/scalar_ldst/simd_scalar_gm_memory_host.cpp",
+      "confidence": "medium"
+    },
+    "simt.scalar_gm.load.throughput": {
+      "description": "SIMT per-warp uniform-scalar GM load throughput measured by a dedicated CCE __simt_vf__ probe. All lanes in a warp read the same address; 32-warp one-op result is 0.19985 warp-instruction/system-cycle.",
+      "value": 0.207053,
+      "unit": "warp_instruction/system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_32_warps_uniform_same_address_gm_load_runtime_loop",
+      "source_kind": "isolated_microbenchmark",
+      "source": "data_provider/scalar_ldst/simt_scalar_gm_memory.cce; data_provider/scalar_ldst/simt_scalar_gm_memory_host.cpp",
+      "confidence": "medium"
+    },
+    "simt.scalar_gm.store.throughput": {
+      "description": "SIMT per-warp uniform-scalar GM store throughput measured by a dedicated CCE __simt_vf__ probe. All lanes in a warp write the same address; 32-warp one-op result is 0.3295 warp-instruction/system-cycle.",
+      "value": 0.329916,
+      "unit": "warp_instruction/system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_32_warps_uniform_same_address_gm_store_runtime_loop",
+      "source_kind": "isolated_microbenchmark",
+      "source": "data_provider/scalar_ldst/simt_scalar_gm_memory.cce; data_provider/scalar_ldst/simt_scalar_gm_memory_host.cpp",
+      "confidence": "medium"
     }
   }
 }

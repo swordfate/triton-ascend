@@ -138,6 +138,14 @@
       "scalar_operations_per_system_cycle": 1.0,
       "issue_instructions_per_system_cycle": 6.0,
       "spill_transactions_per_system_cycle": 1.0,
+      "scalar_memory": {
+        "load_throughput_measurement": "simd.scalar.load.throughput",
+        "store_throughput_measurement": "simd.scalar.store.throughput",
+        "load_latency_measurement": "simd.scalar.load.direct_latency",
+        "store_latency_measurement": "simd.scalar.store.direct_latency",
+        "indirect_dependency_latency_system_cycles": 1.65,
+        "description": "SIMD MainScalar scalar memory parameters resolved from scalar_ldst CCE probes; indirect scalar dependency is measured by scalar_ldst/simd_scalar_gm_dep and is per indirect scalar-load/store edge."
+      },
       "indirect_memory": {
         "load_transactions_per_system_cycle": 0.125,
         "store_transactions_per_system_cycle": 0.125,
@@ -272,6 +280,14 @@
       "scalar_operations_per_system_cycle": 4.0,
       "issue_instructions_per_system_cycle": 4.0,
       "spill_transactions_per_system_cycle": 1.0,
+      "scalar_memory": {
+        "load_throughput_measurement": "simt.scalar_gm.load.throughput",
+        "store_throughput_measurement": "simt.scalar_gm.store.throughput",
+        "load_latency_system_cycles": 0.0,
+        "store_latency_system_cycles": 0.0,
+        "indirect_dependency_latency_system_cycles": 14.0,
+        "description": "SIMT uniform-scalar GM memory parameters resolved from scalar_ldst CCE probes; indirect scalar dependency is measured by scalar_ldst/simt_scalar_gm_dep."
+      },
       "indirect_memory": {
         "load_transactions_per_system_cycle": 0.5,
         "store_transactions_per_system_cycle": 0.5,

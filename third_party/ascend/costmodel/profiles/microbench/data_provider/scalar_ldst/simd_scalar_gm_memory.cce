@@ -1,0 +1,83 @@
+// SIMD/MainScalar scalar GM load/store probe for dav-c310.
+//
+// This runs in the ordinary __global__ [aicore] scalar path (MainScalar),
+// not in a SIMT VF and not through Triton.  It measures:
+//   mode 0: scalar GM loads
+//   mode 1: scalar GM stores
+//
+// `ops` is the number of independent scalar accesses per inner iteration.
+// The host uses the same two-point slope method as the other CCE probes:
+// cyclesPerIter = (c2 - c1) / ((I2 - I1) * K).
+#include "RegBase/VecUtils.h"
+#include "Vector/VecUtils.h"
+#include "Utils.h"
+
+using DT = float;
+
+extern "C" __global__ [aicore] void measure(__gm__ long long *out,
+                                             __gm__ DT *gm, int K, int iters,
+                                             int mode, int ops) {
+  if (ops < 1)
+    ops = 1;
+  if (ops > 8)
+    ops = 8;
+
+  DT acc = (DT)1;
+  pipe_barrier(PIPE_ALL);
+  long long t0 = get_sys_cnt();
+  for (int k = 0; k < K; ++k) {
+    for (int i = 0; i < iters; ++i) {
+      int base = (i & 4095) * ops;
+      if (mode == 0) {
+        if (ops == 1) {
+          acc += gm[base];
+        } else if (ops == 2) {
+          acc += gm[base];
+          acc += gm[base + 1];
+        } else if (ops == 4) {
+          acc += gm[base];
+          acc += gm[base + 1];
+          acc += gm[base + 2];
+          acc += gm[base + 3];
+        } else {
+          acc += gm[base];
+          acc += gm[base + 1];
+          acc += gm[base + 2];
+          acc += gm[base + 3];
+          acc += gm[base + 4];
+          acc += gm[base + 5];
+          acc += gm[base + 6];
+          acc += gm[base + 7];
+        }
+      } else {
+        if (ops == 1) {
+          gm[base] = acc;
+        } else if (ops == 2) {
+          gm[base] = acc;
+          gm[base + 1] = acc + (DT)1;
+        } else if (ops == 4) {
+          gm[base] = acc;
+          gm[base + 1] = acc + (DT)1;
+          gm[base + 2] = acc + (DT)2;
+          gm[base + 3] = acc + (DT)3;
+        } else {
+          gm[base] = acc;
+          gm[base + 1] = acc + (DT)1;
+          gm[base + 2] = acc + (DT)2;
+          gm[base + 3] = acc + (DT)3;
+          gm[base + 4] = acc + (DT)4;
+          gm[base + 5] = acc + (DT)5;
+          gm[base + 6] = acc + (DT)6;
+          gm[base + 7] = acc + (DT)7;
+        }
+        acc += (DT)1;
+      }
+    }
+    pipe_barrier(PIPE_ALL);
+  }
+  long long t1 = get_sys_cnt();
+  pipe_barrier(PIPE_ALL);
+  out[0] = t1 - t0;
+  // Keep acc alive after the timed region so loads/stores are not optimized.
+  gm[0] = acc;
+}

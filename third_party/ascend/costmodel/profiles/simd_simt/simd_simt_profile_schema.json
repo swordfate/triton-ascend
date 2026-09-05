@@ -446,6 +446,7 @@
         "scalar_operations_per_system_cycle",
         "issue_instructions_per_system_cycle",
         "spill_transactions_per_system_cycle",
+        "scalar_memory",
         "indirect_memory",
         "control_flow",
         "source"
@@ -466,6 +467,57 @@
         "spill_transactions_per_system_cycle": {
           "type": "number",
           "exclusiveMinimum": 0
+        },
+        "scalar_memory": {
+          "type": "object",
+          "required": [],
+          "properties": {
+            "load_instructions_per_system_cycle": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "load_throughput_measurement": {
+              "type": "string",
+              "minLength": 1
+            },
+            "store_instructions_per_system_cycle": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "store_throughput_measurement": {
+              "type": "string",
+              "minLength": 1
+            },
+            "load_latency_system_cycles": {
+              "type": "number",
+              "minimum": 0
+            },
+            "load_latency_measurement": {
+              "type": "string",
+              "minLength": 1
+            },
+            "store_latency_system_cycles": {
+              "type": "number",
+              "minimum": 0
+            },
+            "store_latency_measurement": {
+              "type": "string",
+              "minLength": 1
+            },
+            "indirect_dependency_latency_system_cycles": {
+              "type": "number",
+              "minimum": 0
+            },
+            "indirect_dependency_latency_measurement": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "additionalProperties": false
         },
         "indirect_memory": {
           "type": "object",

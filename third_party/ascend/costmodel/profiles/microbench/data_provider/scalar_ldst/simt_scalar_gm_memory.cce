@@ -1,0 +1,72 @@
+// Dedicated SIMT uniform-scalar GM load/store probe for dav-c310.
+//
+// mode 0: per-warp uniform loads.  All lanes in a warp read the same address;
+//         each warp reads a different address. OPS is compile-time unrolled.
+// mode 1: per-warp uniform stores.
+#include "RegBase/VecUtils.h"
+#include "Vector/VecUtils.h"
+#include "Utils.h"
+
+using DT = float;
+
+template <typename T, int OPS>
+__simt_vf__ LAUNCH_BOUND(1024) __aiv__ __attribute__((always_inline)) static void
+simt_uniform_core(__gm__ T *gm, __ubuf__ T *sink, int nlane, int nwarp,
+                  int iters, int mode) {
+  int lane = threadIdx.x;
+  int warp = threadIdx.y;
+  if (lane >= nlane || warp >= nwarp)
+    return;
+
+  T acc = (T)(warp + 1);
+  for (int i = 0; i < iters; ++i) {
+    int base = (i & 4095) * (nwarp * OPS) + warp * OPS;
+    if (mode == 0) {
+      if (OPS >= 1) acc += gm[base + 0];
+      if (OPS >= 2) acc += gm[base + 1];
+      if (OPS >= 4) { acc += gm[base + 2]; acc += gm[base + 3]; }
+      if (OPS >= 8) {
+        acc += gm[base + 4]; acc += gm[base + 5];
+        acc += gm[base + 6]; acc += gm[base + 7];
+      }
+    } else {
+      if (OPS >= 1) gm[base + 0] = acc;
+      if (OPS >= 2) gm[base + 1] = acc + (T)1;
+      if (OPS >= 4) { gm[base + 2] = acc + (T)2; gm[base + 3] = acc + (T)3; }
+      if (OPS >= 8) {
+        gm[base + 4] = acc + (T)4; gm[base + 5] = acc + (T)5;
+        gm[base + 6] = acc + (T)6; gm[base + 7] = acc + (T)7;
+      }
+      acc += (T)1;
+    }
+  }
+  sink[warp * 32 + lane] = acc;
+}
+
+extern "C" __global__ [aicore] void measure(__gm__ long long *out,
+                                             __gm__ DT *gm, int K, int nlane,
+                                             int nwarp, int iters, int mode,
+                                             int ops) {
+  auto sink = reinterpret_cast<__ubuf__ DT *>(0);
+  pipe_barrier(PIPE_ALL);
+  long long t0 = get_sys_cnt();
+  for (int i = 0; i < K; ++i) {
+    if (ops == 1) {
+      cce::async_invoke<simt_uniform_core<DT, 1>>(
+          cce::dim3{32, (unsigned)nwarp, 1}, gm, sink, nlane, nwarp, iters, mode);
+    } else if (ops == 2) {
+      cce::async_invoke<simt_uniform_core<DT, 2>>(
+          cce::dim3{32, (unsigned)nwarp, 1}, gm, sink, nlane, nwarp, iters, mode);
+    } else if (ops == 4) {
+      cce::async_invoke<simt_uniform_core<DT, 4>>(
+          cce::dim3{32, (unsigned)nwarp, 1}, gm, sink, nlane, nwarp, iters, mode);
+    } else {
+      cce::async_invoke<simt_uniform_core<DT, 8>>(
+          cce::dim3{32, (unsigned)nwarp, 1}, gm, sink, nlane, nwarp, iters, mode);
+    }
+    pipe_barrier(PIPE_ALL);
+  }
+  long long t1 = get_sys_cnt();
+  pipe_barrier(PIPE_ALL);
+  out[0] = t1 - t0;
+}

@@ -26,7 +26,8 @@ using namespace mlir::ascend;
 namespace {
 
 static void recomputeIssueElements(StageWorkload &work) {
-  double elements = work.scalarOperations + work.predicateElements;
+  double elements = work.scalarOperations + work.predicateElements +
+                     work.scalarLoadCount + work.scalarStoreCount;
   for (const auto &entry : work.operationElements)
     elements += entry.second;
   elements += 32.0 * (work.loadWarpInstructions + work.storeWarpInstructions);
@@ -186,6 +187,9 @@ static void accumulateReductionWorkload(Operation *operation,
   work.shuffleLaneSteps += getTypeElementCount(input) * depth;
 }
 
+static bool isScalarIndirectLoadOperation(Operation *op);
+static bool isScalarIndirectStoreOperation(Operation *op);
+
 static void accumulateOneOperation(Operation *operation, StageWorkload &work) {
   if (!operation || operation->hasTrait<OpTrait::IsTerminator>())
     return;
@@ -195,6 +199,16 @@ static void accumulateOneOperation(Operation *operation, StageWorkload &work) {
   if ((name == "tt.load" || name == "tt.gather") &&
       operation->getNumResults() > 0) {
     Value result = operation->getResult(0);
+    // A scalar tt.load (non-shaped result) is executed by the scalar unit,
+    // not by the vector MTE pipes.  Keep it separate from tile loads.
+    if (name == "tt.load" && !isa<ShapedType>(result.getType())) {
+      work.scalarLoadCount += 1.0;
+      if (isScalarIndirectLoadOperation(operation))
+        work.indirectScalarLoadCount += 1.0;
+      else
+        work.directScalarLoadCount += 1.0;
+      return;
+    }
     work.loadBytes += getValueBytes(result);
     work.loadWarpInstructions += std::ceil(elements / 32.0);
     return;
@@ -202,6 +216,14 @@ static void accumulateOneOperation(Operation *operation, StageWorkload &work) {
   if ((name == "tt.store" || name.starts_with("tt.atomic")) &&
       operation->getNumOperands() > 1) {
     Value value = operation->getOperand(1);
+    // A scalar tt.store (non-shaped stored value) is executed by the scalar
+    // unit and should not be counted as a vector tile store.
+    if (name == "tt.store" && !isa<ShapedType>(value.getType())) {
+      work.scalarStoreCount += 1.0;
+      if (isScalarIndirectStoreOperation(operation))
+        work.indirectScalarStoreCount += 1.0;
+      return;
+    }
     work.storeBytes += getValueBytes(value);
     work.storeWarpInstructions +=
         std::ceil(getTypeElementCount(value.getType()) / 32.0);
@@ -239,6 +261,11 @@ static void scaleWorkload(StageWorkload &work, double scale) {
   work.shuffleLaneSteps *= scale;
   work.dotFlops *= scale;
   work.estimatedSpillTransactions *= scale;
+  work.scalarLoadCount *= scale;
+  work.directScalarLoadCount *= scale;
+  work.indirectScalarLoadCount *= scale;
+  work.scalarStoreCount *= scale;
+  work.indirectScalarStoreCount *= scale;
   for (auto &entry : work.operationElements)
     entry.second *= scale;
   recomputeIssueElements(work);
@@ -327,6 +354,11 @@ static void mergeWorkload(StageWorkload &into, StageWorkload from) {
   into.shuffleLaneSteps += from.shuffleLaneSteps;
   into.dotFlops += from.dotFlops;
   into.estimatedSpillTransactions += from.estimatedSpillTransactions;
+  into.scalarLoadCount += from.scalarLoadCount;
+  into.directScalarLoadCount += from.directScalarLoadCount;
+  into.indirectScalarLoadCount += from.indirectScalarLoadCount;
+  into.scalarStoreCount += from.scalarStoreCount;
+  into.indirectScalarStoreCount += from.indirectScalarStoreCount;
   for (const auto &[name, elements] : from.operationElements)
     into.operationElements[name] += elements;
   recomputeIssueElements(into);
@@ -523,6 +555,97 @@ static bool operationTreeHasAnyName(Operation *root,
   });
 }
 
+static bool isScalarLoadOperation(Operation *op) {
+  if (!op || op->getName().getStringRef() != "tt.load" ||
+      op->getNumResults() == 0)
+    return false;
+  return !isa<ShapedType>(op->getResult(0).getType());
+}
+
+static bool isScalarStoreOperation(Operation *op) {
+  if (!op || op->getName().getStringRef() != "tt.store" ||
+      op->getNumOperands() < 2)
+    return false;
+  return !isa<ShapedType>(op->getOperand(1).getType());
+}
+
+static bool operationTreeHasScalarLoad(Operation *root) {
+  bool found = root && isScalarLoadOperation(root);
+  if (!root || found)
+    return found;
+  root->walk([&](Operation *nested) {
+    if (!found)
+      found = isScalarLoadOperation(nested);
+  });
+  return found;
+}
+
+static bool operationTreeHasScalarStore(Operation *root) {
+  bool found = root && isScalarStoreOperation(root);
+  if (!root || found)
+    return found;
+  root->walk([&](Operation *nested) {
+    if (!found)
+      found = isScalarStoreOperation(nested);
+  });
+  return found;
+}
+
+static bool scalarPointerDependsOnLoadedIndex(Operation *memoryOp) {
+  if (!memoryOp || memoryOp->getNumOperands() == 0)
+    return false;
+  llvm::SmallVector<Value> worklist{memoryOp->getOperand(0)};
+  llvm::DenseSet<Value> visited;
+  while (!worklist.empty()) {
+    Value value = worklist.pop_back_val();
+    if (!visited.insert(value).second)
+      continue;
+
+    if (auto argument = dyn_cast<BlockArgument>(value)) {
+      Operation *parent = argument.getOwner()->getParentOp();
+      unsigned number = argument.getArgNumber();
+      if (parent && parent->getName().getStringRef() == "scf.for" &&
+          number > 0 && number + 2 < parent->getNumOperands()) {
+        worklist.push_back(parent->getOperand(number + 2));
+        Operation *yield = argument.getOwner()->getTerminator();
+        if (yield && number - 1 < yield->getNumOperands())
+          worklist.push_back(yield->getOperand(number - 1));
+      }
+      continue;
+    }
+
+    Operation *producer = value.getDefiningOp();
+    if (!producer)
+      continue;
+    const llvm::StringRef name = producer->getName().getStringRef();
+    if (name == "tt.load" || name == "tt.gather")
+      return true;
+    llvm::append_range(worklist, producer->getOperands());
+  }
+  return false;
+}
+
+static bool isScalarIndirectLoadOperation(Operation *op) {
+  return isScalarLoadOperation(op) && scalarPointerDependsOnLoadedIndex(op);
+}
+
+static bool isScalarIndirectStoreOperation(Operation *op) {
+  return isScalarStoreOperation(op) && scalarPointerDependsOnLoadedIndex(op);
+}
+
+static bool operationTreeHasScalarIndirectMemory(Operation *root) {
+  bool found = root && (isScalarIndirectLoadOperation(root) ||
+                        isScalarIndirectStoreOperation(root));
+  if (!root || found)
+    return found;
+  root->walk([&](Operation *nested) {
+    if (!found)
+      found = isScalarIndirectLoadOperation(nested) ||
+              isScalarIndirectStoreOperation(nested);
+  });
+  return found;
+}
+
 /// Classify one transitive semantic ownership unit.  This function consumes
 /// only TTIR structure; it does not inspect a kernel name, workload name,
 /// measured performance, or route score.
@@ -546,6 +669,15 @@ static StageCostModelKind classifySemanticRoot(Operation *root) {
           root, {"tt.fp_to_fp", "arith.extf", "arith.truncf", "arith.fptosi",
                  "arith.fptoui", "arith.sitofp", "arith.uitofp"}))
     return StageCostModelKind::ConversionPack;
+  // Scalar indirect memory remains in the ScalarLoad/ScalarStore family for
+  // now.  hasScalarIndirectMemory is a feature modifier that adds dependency
+  // latency; IndirectScalarMemory is reserved for a future discrete-kind split.
+  const bool hasScalarLoad = operationTreeHasScalarLoad(root);
+  const bool hasScalarStore = operationTreeHasScalarStore(root);
+  if (hasScalarStore && !hasScalarLoad)
+    return StageCostModelKind::ScalarStore;
+  if (hasScalarLoad || hasScalarStore)
+    return StageCostModelKind::ScalarLoad;
   const bool hasLoad = operationTreeHasAnyName(root, {"tt.load"});
   const bool hasStore = operationTreeHasAnyName(root, {"tt.store"});
   if (hasStore && !hasLoad)
@@ -848,6 +980,9 @@ static int semanticKindPriority(StageCostModelKind kind) {
   case StageCostModelKind::PredicateMask:
   case StageCostModelKind::LoopPredicate:
     return 20;
+  case StageCostModelKind::ScalarLoad:
+  case StageCostModelKind::ScalarStore:
+    return 35;
   case StageCostModelKind::IndexGeneration:
     return 10;
   default:
@@ -1123,7 +1258,30 @@ llvm::Error StageFeatureAnalysis::analyze(StagePartition &partition) const {
         ++facts.synchronizationCount;
       if (name == "tt.load" || name == "tt.store" || name == "tt.gather" ||
           name.starts_with("tt.atomic")) {
-        hasMemory = true;
+        const bool scalarLoad = isScalarLoadOperation(operation);
+        const bool scalarStore = isScalarStoreOperation(operation);
+        const bool scalarIndirect =
+            isScalarIndirectLoadOperation(operation) ||
+            isScalarIndirectStoreOperation(operation);
+        if (scalarLoad)
+          facts.hasScalarLoad = true;
+        if (scalarStore)
+          facts.hasScalarStore = true;
+        if (scalarIndirect) {
+          facts.hasScalarIndirectMemory = true;
+          if (scalarLoad)
+            facts.hasScalarIndirectLoad = true;
+          if (scalarStore)
+            facts.hasScalarIndirectStore = true;
+        }
+        // Scalar loads/stores are scalar-pipe operations, not vector tile
+        // memory.  Only non-scalar memory should mark hasContiguousMemory.
+        if (!scalarLoad && !scalarStore)
+          hasMemory = true;
+        // Scalar indirect memory is represented by hasScalarIndirectMemory,
+        // not by the tensor/vector hasIndirectMemory path.  This keeps it in
+        // the ScalarLoad/ScalarStore family until discrete indirect kinds are
+        // introduced.
         facts.hasIndirectMemory |= isLoadedIndexDependentMemoryOp(operation) ||
                                    name == "tt.gather" ||
                                    name.starts_with("tt.atomic");
@@ -1187,6 +1345,10 @@ llvm::Error StageKindClassifier::analyze(StagePartition &partition,
       return facts.hasContiguousMemory;
     case StageCostModelKind::ConversionPack:
       return facts.hasConversionPack;
+    case StageCostModelKind::ScalarLoad:
+      return facts.hasScalarLoad && !facts.hasContiguousMemory;
+    case StageCostModelKind::ScalarStore:
+      return facts.hasScalarStore && !facts.hasContiguousMemory;
     default:
       return true;
     }
@@ -1220,6 +1382,10 @@ llvm::Error StageKindClassifier::analyze(StagePartition &partition,
         return StageCostModelKind::IndirectGatherMemory;
       if (facts.hasConversionPack)
         return StageCostModelKind::ConversionPack;
+      if (!facts.hasContiguousMemory && facts.hasScalarLoad)
+        return StageCostModelKind::ScalarLoad;
+      if (!facts.hasContiguousMemory && facts.hasScalarStore)
+        return StageCostModelKind::ScalarStore;
       if (facts.hasContiguousMemory)
         return stage.workload.storeBytes > 0.0 &&
                        stage.workload.loadBytes == 0.0
@@ -1272,7 +1438,7 @@ llvm::Error StageWorkloadAnalysis::analyze(StagePartition &partition) const {
     recomputeIssueElements(work);
     stage.workload = std::move(work);
     makePerIteration(stage);
-    costModelLog() << "stage \"" << stage.id << "\" workload scalar=" << stage.workload.scalarOperations << " loadBytes=" << stage.workload.loadBytes << " storeBytes=" << stage.workload.storeBytes << " dotFlops=" << stage.workload.dotFlops << " issueElements=" << stage.workload.issueElements << "\n";
+    costModelLog() << "stage \"" << stage.id << "\" workload scalar=" << stage.workload.scalarOperations << " scalarLoad=" << stage.workload.scalarLoadCount << " scalarStore=" << stage.workload.scalarStoreCount << " indirectScalarStore=" << stage.workload.indirectScalarStoreCount << " loadBytes=" << stage.workload.loadBytes << " storeBytes=" << stage.workload.storeBytes << " dotFlops=" << stage.workload.dotFlops << " issueElements=" << stage.workload.issueElements << "\n";
     if (!stage.workload.isFiniteAndNonNegative())
       return llvm::createStringError(
           std::errc::invalid_argument,

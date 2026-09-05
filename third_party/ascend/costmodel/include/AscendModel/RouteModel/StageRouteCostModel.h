@@ -54,6 +54,11 @@ struct StageModelFeatures {
   bool hasPointerInduction = false;
   bool hasContiguousMemory = false;
   bool hasIndirectMemory = false;
+  bool hasScalarLoad = false;
+  bool hasScalarStore = false;
+  bool hasScalarIndirectMemory = false;
+  bool hasScalarIndirectLoad = false;
+  bool hasScalarIndirectStore = false;
   bool hasReduction = false;
   bool hasDot = false;
   bool hasConversionPack = false;
@@ -92,6 +97,11 @@ struct StageWorkload {
   double dotFlops = 0.0;
   double issueElements = 0.0;
   double estimatedSpillTransactions = 0.0;
+  double scalarLoadCount = 0.0;
+  double directScalarLoadCount = 0.0;
+  double indirectScalarLoadCount = 0.0;
+  double scalarStoreCount = 0.0;
+  double indirectScalarStoreCount = 0.0;
   bool paysKernelSetup = false;
 
   bool isFiniteAndNonNegative() const;
@@ -104,6 +114,10 @@ struct StageWorkload {
 struct StageResourceCycles {
   double setup = 0.0;
   double scalar = 0.0;
+  /// Scalar-pipe load/store cycles.  Kept separate from vector tile
+  /// load/store so scalar memory is never hidden inside the vector MTE
+  /// roofline max, while still participating in memory latency hiding.
+  double scalarMemory = 0.0;
   double load = 0.0;
   double store = 0.0;
   double compute = 0.0;

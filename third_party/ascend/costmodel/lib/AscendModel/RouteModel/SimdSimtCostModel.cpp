@@ -233,7 +233,8 @@ static std::string resolveProfileReference(llvm::StringRef ownerPath,
 static void readStageResources(ProfileJSONReader &reader,
                                const llvm::json::Object &mode,
                                llvm::StringRef context,
-                               StageModeProfile &profile) {
+                               StageModeProfile &profile,
+                               const MicrobenchmarkProfile *microbench) {
   const auto *resources = reader.object(mode, "stage_resources", context);
   if (!resources)
     return;
@@ -244,6 +245,31 @@ static void readStageResources(ProfileJSONReader &reader,
       reader.number(*resources, "issue_instructions_per_system_cycle", prefix);
   profile.spillTransactionsPerCycle =
       reader.number(*resources, "spill_transactions_per_system_cycle", prefix);
+  const llvm::StringRef throughputUnit =
+      context == "simt" ? "warp_instruction/system_cycle"
+                        : "scalar_instruction/system_cycle";
+  if (const auto *scalarMemory =
+          reader.object(*resources, "scalar_memory", prefix)) {
+    const std::string path = prefix + ".scalar_memory";
+    profile.scalarLoadInstructionsPerCycle = resolveNumberOrMeasurement(
+        *scalarMemory, "load_instructions_per_system_cycle",
+        "load_throughput_measurement", throughputUnit, microbench, reader,
+        path);
+    profile.scalarStoreInstructionsPerCycle = resolveNumberOrMeasurement(
+        *scalarMemory, "store_instructions_per_system_cycle",
+        "store_throughput_measurement", throughputUnit, microbench, reader,
+        path);
+    profile.scalarLoadLatencyCycles = resolveNumberOrMeasurement(
+        *scalarMemory, "load_latency_system_cycles", "load_latency_measurement",
+        "system_cycle", microbench, reader, path);
+    profile.scalarStoreLatencyCycles = resolveNumberOrMeasurement(
+        *scalarMemory, "store_latency_system_cycles",
+        "store_latency_measurement", "system_cycle", microbench, reader, path);
+    profile.scalarIndirectDependencyLatencyCycles = resolveNumberOrMeasurement(
+        *scalarMemory, "indirect_dependency_latency_system_cycles",
+        "indirect_dependency_latency_measurement", "system_cycle", microbench,
+        reader, path);
+  }
   if (const auto *indirect =
           reader.object(*resources, "indirect_memory", prefix)) {
     const std::string path = prefix + ".indirect_memory";
@@ -377,7 +403,7 @@ loadCandidateProfile(llvm::StringRef requestedPath) {
       hardware.simd.dotFlopsPerCycle =
           reader.number(*dot, "flops_per_system_cycle", "simd.dot");
     }
-    readStageResources(reader, *simd, "simd", hardware.simd);
+    readStageResources(reader, *simd, "simd", hardware.simd, microbench);
     const auto predicate = hardware.simd.operationRates.lookup("predicate.cmp");
     hardware.simd.predicateOperationsPerCycle =
         predicate.throughput / std::max(1.0, predicate.factor);
@@ -437,7 +463,7 @@ loadCandidateProfile(llvm::StringRef requestedPath) {
           "store_throughput_measurement", "warp_instruction/system_cycle",
           microbench, reader, "simt.memory");
     }
-    readStageResources(reader, *simt, "simt", hardware.simt);
+    readStageResources(reader, *simt, "simt", hardware.simt, microbench);
     if (const auto *resources = simt->getObject("stage_resources")) {
       if (const auto *superblock = resources->getObject("superblock")) {
         hardware.superblockUsefulFactorLimit =
