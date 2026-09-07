@@ -1903,6 +1903,28 @@ class AscendBackend(BaseBackend):
             # Include all binary file extensions (mlirbc is used in bytecode mode)
             self.binary_extensions = {"npubin", "mlirbc"}
 
+    def prepare_options_for_grid(self, grid, options):
+        """Ascend hook invoked before backend option parsing.
+
+        The SIMD/SIMT cost model needs the concrete logical-program count to
+        price whole-kernel wave/superblock factors.  TTIR only contains
+        symbolic tt.get_num_programs, so the concrete value is supplied from
+        the launch grid here when the wrapper did not already pass it.
+        """
+        if "logical_program_count_hint" in options:
+            return options
+        compile_mode = options.get("compile_mode") or os.environ.get("TRITON_ASCEND_COMPILE_MODE", "")
+        auto_mode = options.get("auto_simt_scope_mode") or os.environ.get("TRITON_ASCEND_AUTO_SIMT_SCOPE", "")
+        if compile_mode != "simd_simt" or auto_mode not in ("auto", "report"):
+            return options
+        grid_hint = 1
+        for g in grid[:3]:
+            grid_hint *= int(g)
+        if grid_hint > 0:
+            options = dict(options)
+            options["logical_program_count_hint"] = grid_hint
+        return options
+
     def compile_mode_setup(self, options: NPUOptions) -> Any:
         # Backward compatibility: legacy force options override compile_mode.
         if options.force_simt_template:

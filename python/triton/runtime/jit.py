@@ -705,6 +705,14 @@ class JITFunction(JITCallable, KernelInterface[T]):
             hook(*args, **kwargs)
 
         kernel_cache, kernel_key_cache, target, backend, binder = self.device_caches[device]
+        # Backends may need launch-grid facts before parsing compile options.
+        # For Ascend's SIMD/SIMT cost model this is used to infer the logical
+        # program count from the actual launch grid when the wrapper does not
+        # pass logical_program_count_hint explicitly.
+        if (not warmup and grid is not None and not callable(grid)
+                and hasattr(backend, "prepare_options_for_grid")):
+            kwargs = backend.prepare_options_for_grid(grid, kwargs)
+
         # specialization is list[tuple[str, Any]], where first element of tuple is
         # the type and the second parameter is the 'specialization' value.
         bound_args, specialization, options = binder(*args, **kwargs)
