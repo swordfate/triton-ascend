@@ -194,6 +194,7 @@ class CompilerCostmodelContractTest(unittest.TestCase):
             "compile_mode": "simd_simt",
             "parallel_mode": "mix_simd_simt",
             "auto_blockify_v1_enabled": True,
+            "route_transform_v1_materializable": True,
         }
 
         cmplr._apply_cpp_simd_simt_decision(metadata, "all_simd", 1, "{}")
@@ -201,8 +202,8 @@ class CompilerCostmodelContractTest(unittest.TestCase):
         self.assertEqual(metadata["compile_mode"], "simd")
         self.assertEqual(metadata["parallel_mode"], "simd")
         self.assertEqual(metadata["auto_simt_effective_kind"], "all_simd")
-        self.assertFalse(metadata["auto_blockify_v1_enabled"])
-        self.assertFalse(metadata["auto_blockify_v1_runtime_cap"])
+        self.assertTrue(metadata["auto_blockify_v1_enabled"])
+        self.assertTrue(metadata["auto_blockify_v1_runtime_cap"])
         self.assertNotIn("auto_simt_requested_kind", metadata)
 
     def test_mixed_decision_preserves_route_request_and_factor(self):
