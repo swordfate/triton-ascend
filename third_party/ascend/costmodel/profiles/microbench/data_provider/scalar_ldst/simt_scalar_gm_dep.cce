@@ -1,0 +1,85 @@
+// SIMT uniform-scalar GM dependency probe with cheap-hash random addresses.
+//
+// mode 0: independent loads from cheap-hash 64B-spaced slots
+// mode 1: dependent pointer chase through a random 64B-spaced linked list
+#include "RegBase/VecUtils.h"
+#include "Vector/VecUtils.h"
+#include "Utils.h"
+
+using DT = float;
+
+namespace {
+
+constexpr unsigned kAddrStride = 16; // 16 ints = 64 bytes
+
+__simt_callee__ __aiv__ __attribute__((always_inline)) static unsigned
+random_slot(unsigned warp, unsigned iter, unsigned op) {
+  unsigned x = warp * 73856093u ^ iter * 19349663u ^ 0x9e3779b9u;
+  x ^= x >> 16;
+  x *= 0x7feb352du;
+  x ^= x >> 15;
+  x *= 0x846ca68bu;
+  x ^= x >> 16;
+  return (x & ((1u << 20) - 1u)) + op * 8u;
+}
+
+template <typename T, int OPS>
+__simt_vf__ LAUNCH_BOUND(1024) __aiv__ __attribute__((always_inline)) static void
+simt_dep_core(__gm__ T *gm,               __ubuf__ T *sink, int nlane, int nwarp,
+              int iters, int mode) {
+  int lane = threadIdx.x;
+  int warp = threadIdx.y;
+  if (lane >= nlane || warp >= nwarp)
+    return;
+
+  T acc = (T)(warp + 1);
+  for (int i = 0; i < iters; ++i) {
+    if (mode == 0) {
+      auto igm = reinterpret_cast<__gm__ int *>(gm);
+      for (int j = 0; j < OPS; ++j) {
+        unsigned slot = random_slot((unsigned)warp, (unsigned)i, (unsigned)j);
+        acc += (T)igm[slot * kAddrStride];
+      }
+    } else {
+      auto igm = reinterpret_cast<__gm__ int *>(gm);
+      unsigned start = random_slot((unsigned)warp, (unsigned)i, 0u);
+      int cur = (int)start;
+      for (int j = 0; j < OPS; ++j) {
+        cur = igm[cur * kAddrStride];
+        acc += (T)cur;
+      }
+    }
+  }
+  sink[warp * 32 + lane] = acc;
+}
+
+} // namespace
+
+extern "C" __global__ [aicore] void measure(__gm__ long long *out,
+                                             __gm__ DT *gm,
+                                             int K,
+                                             int nlane, int nwarp, int iters,
+                                             int mode, int ops) {
+  auto sink = reinterpret_cast<__ubuf__ DT *>(0);
+  pipe_barrier(PIPE_ALL);
+  long long t0 = get_sys_cnt();
+  for (int i = 0; i < K; ++i) {
+    if (ops == 1) {
+      cce::async_invoke<simt_dep_core<DT, 1>>(
+          cce::dim3{32, (unsigned)nwarp, 1}, gm, sink, nlane, nwarp, iters, mode);
+    } else if (ops == 2) {
+      cce::async_invoke<simt_dep_core<DT, 2>>(
+          cce::dim3{32, (unsigned)nwarp, 1}, gm, sink, nlane, nwarp, iters, mode);
+    } else if (ops == 4) {
+      cce::async_invoke<simt_dep_core<DT, 4>>(
+          cce::dim3{32, (unsigned)nwarp, 1}, gm, sink, nlane, nwarp, iters, mode);
+    } else {
+      cce::async_invoke<simt_dep_core<DT, 8>>(
+          cce::dim3{32, (unsigned)nwarp, 1}, gm, sink, nlane, nwarp, iters, mode);
+    }
+    pipe_barrier(PIPE_ALL);
+  }
+  long long t1 = get_sys_cnt();
+  pipe_barrier(PIPE_ALL);
+  out[0] = t1 - t0;
+}

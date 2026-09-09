@@ -1,0 +1,64 @@
+// SIMD/MainScalar scalar GM dependency probe with cheap-hash random addresses.
+//
+// mode 0: independent loads from cheap-hash 64B-spaced slots
+// mode 1: dependent pointer chase through a random 64B-spaced linked list
+#include "RegBase/VecUtils.h"
+#include "Vector/VecUtils.h"
+#include "Utils.h"
+
+using DT = float;
+
+namespace {
+
+constexpr unsigned kAddrStride = 16; // 16 ints = 64 bytes
+
+__aicore__ __attribute__((always_inline)) static unsigned
+random_slot(unsigned iter, unsigned op) {
+  unsigned x = iter * 19349663u ^ 0x9e3779b9u;
+  x ^= x >> 16;
+  x *= 0x7feb352du;
+  x ^= x >> 15;
+  x *= 0x846ca68bu;
+  x ^= x >> 16;
+  return (x & ((1u << 20) - 1u)) + op * 8u;
+}
+
+} // namespace
+
+extern "C" __global__ [aicore] void measure(__gm__ long long *out,
+                                             __gm__ DT *gm,
+                                             int K,
+                                             int iters, int mode, int ops) {
+  if (ops < 1)
+    ops = 1;
+  if (ops > 8)
+    ops = 8;
+
+  DT acc = (DT)1;
+  pipe_barrier(PIPE_ALL);
+  long long t0 = get_sys_cnt();
+  for (int k = 0; k < K; ++k) {
+    for (int i = 0; i < iters; ++i) {
+      if (mode == 0) {
+        auto igm = reinterpret_cast<__gm__ int *>(gm);
+        for (int j = 0; j < ops; ++j) {
+          unsigned slot = random_slot((unsigned)i, (unsigned)j);
+          acc += (DT)igm[slot * kAddrStride];
+        }
+      } else {
+        auto igm = reinterpret_cast<__gm__ int *>(gm);
+        unsigned start = random_slot((unsigned)i, 0u);
+        int cur = (int)start;
+        for (int j = 0; j < ops; ++j) {
+          cur = igm[cur * kAddrStride];
+          acc += (DT)cur;
+        }
+      }
+    }
+    pipe_barrier(PIPE_ALL);
+  }
+  long long t1 = get_sys_cnt();
+  pipe_barrier(PIPE_ALL);
+  out[0] = t1 - t0;
+  gm[0] = acc;
+}

@@ -75,6 +75,11 @@ HardwareProfile hardwareProfile(StageTransitionCost transition = {}) {
     mode.scalarOperationsPerCycle = 1.0;
     mode.issueOperationsPerCycle = 4.0;
     mode.spillTransactionsPerCycle = 1.0;
+    mode.scalarLoadInstructionsPerCycle = 1.0;
+    mode.scalarStoreInstructionsPerCycle = 1.0;
+    mode.scalarLoadLatencyCycles = 0.0;
+    mode.scalarStoreLatencyCycles = 0.0;
+    mode.scalarIndirectDependencyLatencyCycles = 0.0;
     mode.indirectLoadTransactionsPerCycle = 0.5;
     mode.indirectStoreTransactionsPerCycle = 0.5;
     mode.indirectDependencyLatencyCycles = 20.0;
@@ -599,6 +604,94 @@ TEST(SimdSimtCostModelTest, IndirectMemoryUsesDependencyProfile) {
   EXPECT_LT(costs[1].totalCycles, costs[0].totalCycles);
 }
 
+TEST(SimdSimtCostModelTest, ScalarMemoryUsesDedicatedResourceSlot) {
+  LogicalStage stage =
+      logicalStage("scalar_load", StageCostModelKind::ScalarLoad);
+  stage.features.hasScalarLoad = true;
+  stage.workload.scalarLoadCount = 2.0;
+  stage.workload.scalarStoreCount = 0.0;
+
+  HardwareProfile profile = hardwareProfile();
+  profile.simd.scalarLoadInstructionsPerCycle = 1.0;
+  profile.simd.scalarLoadLatencyCycles = 5.0;
+  profile.simd.scalarStoreInstructionsPerCycle = 0.0102;
+  profile.simd.scalarStoreLatencyCycles = 0.0;
+  profile.simt.scalarLoadInstructionsPerCycle = 1.0;
+  profile.simt.scalarLoadLatencyCycles = 5.0;
+
+  auto table = evaluateOneStage(stage, profile);
+  if (!table)
+    FAIL() << llvm::toString(table.takeError());
+  const auto &costs = table->stages.front().implementations;
+  ASSERT_EQ(costs.size(), 2u);
+  EXPECT_DOUBLE_EQ(costs[0].resources.scalarMemory, 7.0);
+  EXPECT_DOUBLE_EQ(costs[0].resources.load, 0.0);
+  EXPECT_DOUBLE_EQ(costs[0].resources.store, 0.0);
+  EXPECT_DOUBLE_EQ(costs[1].resources.scalarMemory, 7.0);
+  EXPECT_DOUBLE_EQ(costs[1].resources.load, 0.0);
+  EXPECT_DOUBLE_EQ(costs[1].resources.store, 0.0);
+}
+
+TEST(SimdSimtCostModelTest, ScalarIndirectMemoryUsesScalarDependencyLatency) {
+  LogicalStage stage =
+      logicalStage("scalar_indirect", StageCostModelKind::ScalarLoad,
+                   StageScheduleKind::PartiallyDependent);
+  stage.features.hasScalarLoad = true;
+  stage.features.hasScalarIndirectMemory = true;
+  stage.features.hasScalarIndirectLoad = true;
+  stage.workload.scalarLoadCount = 2.0;
+  stage.workload.indirectScalarLoadCount = 1.0;
+  stage.workload.scalarStoreCount = 0.0;
+
+  HardwareProfile profile = hardwareProfile();
+  profile.simd.scalarLoadInstructionsPerCycle = 1.0;
+  profile.simd.scalarLoadLatencyCycles = 5.0;
+  profile.simd.scalarIndirectDependencyLatencyCycles = 10.0;
+  profile.simt.scalarLoadInstructionsPerCycle = 1.0;
+  profile.simt.scalarLoadLatencyCycles = 5.0;
+  profile.simt.scalarIndirectDependencyLatencyCycles = 10.0;
+
+  auto table = evaluateOneStage(stage, profile);
+  if (!table)
+    FAIL() << llvm::toString(table.takeError());
+  const auto &costs = table->stages.front().implementations;
+  ASSERT_EQ(costs.size(), 2u);
+  EXPECT_DOUBLE_EQ(costs[0].resources.scalarMemory, 17.0);
+  EXPECT_DOUBLE_EQ(costs[0].resources.load, 0.0);
+  EXPECT_DOUBLE_EQ(costs[1].resources.scalarMemory, 17.0);
+  EXPECT_DOUBLE_EQ(costs[1].resources.load, 0.0);
+}
+
+TEST(SimdSimtCostModelTest, ScalarIndirectStoreUsesScalarDependencyLatency) {
+  LogicalStage stage =
+      logicalStage("scalar_indirect_store", StageCostModelKind::ScalarStore,
+                   StageScheduleKind::PartiallyDependent);
+  stage.features.hasScalarStore = true;
+  stage.features.hasScalarIndirectMemory = true;
+  stage.features.hasScalarIndirectStore = true;
+  stage.workload.scalarStoreCount = 1.0;
+  stage.workload.indirectScalarStoreCount = 1.0;
+
+  HardwareProfile profile = hardwareProfile();
+  profile.simd.scalarStoreInstructionsPerCycle = 1.0;
+  profile.simd.scalarStoreLatencyCycles = 0.0;
+  profile.simd.scalarIndirectDependencyLatencyCycles = 10.0;
+  profile.simt.scalarStoreInstructionsPerCycle = 1.0;
+  profile.simt.scalarStoreLatencyCycles = 0.0;
+  profile.simt.scalarIndirectDependencyLatencyCycles = 10.0;
+
+  auto table = evaluateOneStage(stage, profile);
+  if (!table)
+    FAIL() << llvm::toString(table.takeError());
+  const auto &costs = table->stages.front().implementations;
+  ASSERT_EQ(costs.size(), 2u);
+  EXPECT_DOUBLE_EQ(costs[0].resources.scalarMemory, 11.0);
+  EXPECT_DOUBLE_EQ(costs[0].resources.store, 0.0);
+  EXPECT_DOUBLE_EQ(costs[1].resources.scalarMemory, 11.0);
+  EXPECT_DOUBLE_EQ(costs[1].resources.store, 0.0);
+}
+
+
 TEST(SimdSimtCostModelTest, MixedRouteRejectsUnmaterializableSimtStage) {
   StageCostTable table;
   table.profileVersion = "unit-test-profile-v1";
@@ -997,7 +1090,7 @@ TEST(SimdSimtCostModelTest,
   ASSERT_EQ(result->stages.size(), 2u);
   EXPECT_EQ(result->stages.front().operations.size(), 3u);
   EXPECT_EQ(result->stages.front().costModelKind,
-            StageCostModelKind::ContinuousTileMemory);
+            StageCostModelKind::ScalarLoad);
   ASSERT_EQ(result->stages.back().operations.size(), 1u);
   EXPECT_EQ(result->stages.back().operations.front(), roots.back());
 }

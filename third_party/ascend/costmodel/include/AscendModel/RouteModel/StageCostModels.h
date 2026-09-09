@@ -28,6 +28,8 @@ enum class StageCostModelKind {
   ScalarIssue,
   ScalarControl,
   ScalarMath,
+  ScalarLoad,
+  ScalarStore,
   IndexGeneration,
   PredicateMask,
   LoopPredicate,
@@ -124,6 +126,24 @@ struct StageModeProfile {
   double scalarOperationsPerCycle = 0.0;
   double issueOperationsPerCycle = 0.0;
   double spillTransactionsPerCycle = 0.0;
+  /// Scalar pipe load/store throughput and latency.  Scalar loads/stores are
+  /// executed by the scalar unit (MainScalar/AuxScalar/SIMT scalar path), not
+  /// by the vector MTE pipes.
+  double scalarLoadInstructionsPerCycle = 0.0;
+  double scalarStoreInstructionsPerCycle = 0.0;
+  double scalarLoadLatencyCycles = 0.0;
+  double scalarStoreLatencyCycles = 0.0;
+  /// Extra uncovered dependency latency for scalar loads/stores whose address
+  /// is produced by another scalar load.  This is much smaller than the tensor
+  /// indirect gather dependency because it is one scalar load-to-load chain,
+  /// not a full gather transaction.
+  double scalarIndirectDependencyLatencyCycles = 0.0;
+  /// Optional analytical fits for scalar memory aggregate cycles:
+  /// `cycles = a + b*warps + c*ops + d*warps*ops`.
+  /// Throughput is then `warps*ops/cycles`.  Coefficients are stored as
+  /// `[a, b, c, d]`; an empty vector means no fit is available.
+  std::vector<double> scalarLoadCyclesFit;
+  std::vector<double> scalarStoreCyclesFit;
   /// Loaded-index memory cannot use the continuous MTE/LSU throughput model.
   /// These rates operate on logical warp/transaction counts and include one
   /// uncovered dependency latency per Stage iteration.

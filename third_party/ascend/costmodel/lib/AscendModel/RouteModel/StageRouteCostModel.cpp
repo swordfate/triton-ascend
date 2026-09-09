@@ -78,26 +78,6 @@ static double mixedBaseStageCost(const LogicalStageCost &stage,
   return cost.totalCycles * mixedExecutionMultiplicity(stage, cost, factor);
 }
 
-/// AutoBlockify V1 is a route-conditional execution schedule.  The analysis
-/// view contains its real dispatch/loop operations so pure-SIMT and Mixed can
-/// pay them, but an all-SIMD executable restores the original logical grid.
-/// Keep the Stage positions for report alignment and remove only their cost
-/// from the all-SIMD candidate.
-static void removeAutoBlockifyCostFromAllSIMD(StageRoutePlan &plan,
-                                              const StageCostTable &costTable) {
-  if (!plan.legal || plan.logicalStageCycles.size() != costTable.stages.size())
-    return;
-  for (size_t index = 0; index < costTable.stages.size(); ++index) {
-    const llvm::StringRef model = costTable.stages[index].model;
-    if (model != "auto_blockify_dispatch" && model != "auto_blockify_loop")
-      continue;
-    plan.totalCycles -= plan.logicalStageCycles[index];
-    plan.logicalStageCycles[index] = 0.0;
-    plan.entryTransitionCycles[index] = 0.0;
-  }
-  plan.totalCycles = std::max(0.0, plan.totalCycles);
-}
-
 } // namespace
 
 llvm::StringRef mlir::ascend::stringifyStageMode(StageMode mode) {
@@ -159,7 +139,7 @@ bool StageModelFeatures::permitsSimdRoofline() const {
 }
 
 bool StageWorkload::isFiniteAndNonNegative() const {
-  const std::array<double, 10> values = {scalarOperations,
+  const std::array<double, 15> values = {scalarOperations,
                                          loadBytes,
                                          storeBytes,
                                          loadWarpInstructions,
@@ -168,7 +148,12 @@ bool StageWorkload::isFiniteAndNonNegative() const {
                                          shuffleLaneSteps,
                                          dotFlops,
                                          issueElements,
-                                         estimatedSpillTransactions};
+                                         estimatedSpillTransactions,
+                                         scalarLoadCount,
+                                         directScalarLoadCount,
+                                         indirectScalarLoadCount,
+                                         scalarStoreCount,
+                                         indirectScalarStoreCount};
   if (!std::all_of(values.begin(), values.end(), [](double value) {
         return std::isfinite(value) && value >= 0.0;
       }))
@@ -195,6 +180,11 @@ llvm::json::Object StageWorkload::toJSON() const {
   result["issue_elements_per_iteration"] = issueElements;
   result["estimated_spill_transactions_per_iteration"] =
       estimatedSpillTransactions;
+  result["scalar_load_count_per_iteration"] = scalarLoadCount;
+  result["direct_scalar_load_count_per_iteration"] = directScalarLoadCount;
+  result["indirect_scalar_load_count_per_iteration"] = indirectScalarLoadCount;
+  result["scalar_store_count_per_iteration"] = scalarStoreCount;
+  result["indirect_scalar_store_count_per_iteration"] = indirectScalarStoreCount;
   result["pays_kernel_setup"] = paysKernelSetup;
   return result;
 }
@@ -206,6 +196,11 @@ llvm::json::Object StageModelFeatures::toJSON() const {
   result["has_pointer_induction"] = hasPointerInduction;
   result["has_contiguous_memory"] = hasContiguousMemory;
   result["has_indirect_memory"] = hasIndirectMemory;
+  result["has_scalar_load"] = hasScalarLoad;
+  result["has_scalar_store"] = hasScalarStore;
+  result["has_scalar_indirect_memory"] = hasScalarIndirectMemory;
+  result["has_scalar_indirect_load"] = hasScalarIndirectLoad;
+  result["has_scalar_indirect_store"] = hasScalarIndirectStore;
   result["has_reduction"] = hasReduction;
   result["has_dot"] = hasDot;
   result["has_conversion_pack"] = hasConversionPack;
@@ -221,10 +216,10 @@ llvm::json::Object StageModelFeatures::toJSON() const {
 }
 
 bool StageResourceCycles::isFiniteAndNonNegative() const {
-  const std::array<double, 15> values = {
-      setup,      scalar,          load,  store,       compute,
-      predicate,  shuffle,         dot,   loopControl, branchControl,
-      divergence, synchronization, spill, issue,       criticalPath};
+  const std::array<double, 16> values = {
+      setup,      scalar,          scalarMemory, load,  store, compute,
+      predicate,  shuffle,         dot,          loopControl, branchControl,
+      divergence, synchronization, spill,        issue, criticalPath};
   return std::all_of(values.begin(), values.end(), [](double value) {
     return std::isfinite(value) && value >= 0.0;
   });
@@ -234,6 +229,7 @@ llvm::json::Object StageResourceCycles::toJSON() const {
   llvm::json::Object result;
   result["setup"] = setup;
   result["scalar_per_iteration"] = scalar;
+  result["scalar_memory_per_iteration"] = scalarMemory;
   result["load_per_iteration"] = load;
   result["store_per_iteration"] = store;
   result["compute_per_iteration"] = compute;
@@ -370,6 +366,10 @@ llvm::json::Object StageCostModelSummary::toJSON() const {
   llvm::json::Object routes;
   routes["all_simd"] = allSimd.toJSON();
   routes["all_simt_only"] = allSimt.toJSON();
+  llvm::json::Array factorRoutes;
+  for (const StageRoutePlan &plan : allSimtByFactor)
+    factorRoutes.push_back(plan.toJSON());
+  routes["all_simt_only_by_factor"] = std::move(factorRoutes);
   routes["mixed_simd_simt"] = mixed.toJSON();
   result["routes"] = std::move(routes);
   return result;
@@ -602,8 +602,12 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
   result.transition = transition;
   result.allSimd = buildPlan(StageKernelRouteKind::AllSIMD, 1);
   result.allSimt = bestFactoredPlan(StageKernelRouteKind::AllSIMT);
+  for (int64_t factor : {1, 2, 4}) {
+    StageRoutePlan candidate = buildPlan(StageKernelRouteKind::AllSIMT, factor);
+    if (candidate.legal)
+      result.allSimtByFactor.push_back(std::move(candidate));
+  }
   result.mixed = bestFactoredPlan(StageKernelRouteKind::Mixed);
-  removeAutoBlockifyCostFromAllSIMD(result.allSimd, costTable);
   costModelLog() << "output: allSimd=" << result.allSimd.totalCycles << " legal=" << result.allSimd.legal << " | allSimt=" << result.allSimt.totalCycles << " legal=" << result.allSimt.legal << " F=" << result.allSimt.routeSuperblockFactor << " | mixed=" << result.mixed.totalCycles << " legal=" << result.mixed.legal << " F=" << result.mixed.routeSuperblockFactor << "\n";
 
   return result;

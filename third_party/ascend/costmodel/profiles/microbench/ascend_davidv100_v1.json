@@ -47,7 +47,7 @@
     },
     "simd.f32.add.throughput": {
       "description": "Effective source-level FP32 SIMD add throughput on one AIV for the tput.cce runtime-loop code shape. The numerator counts source vadd operations; loop/control/codegen overhead remains in elapsed cycles, so this is not a proven bare-ALU issue rate.",
-      "value": 3.30,
+      "value": 3.3,
       "unit": "vector_instruction/system_cycle",
       "cycle_domain": "SYS_CNT",
       "scope": "single_aiv_runtime_loop_ilp4_or_more_effective_source_vadd",
@@ -254,6 +254,66 @@
       "source_kind": "isolated_microbenchmark",
       "source": "data_provider/transition.cce; data_provider/transition_host.cpp; triton_cases/SIMT_Test/run_transition.remote.sh; data_provider/build_commands.md",
       "confidence": "low"
+    },
+    "simd.scalar_gm.load.throughput": {
+      "description": "Cheap-hash random-64B SIMD scalar load fit: load_cycles = 12.79 + 90.50*ops.",
+      "value": 0.01104935915300334,
+      "unit": "scalar_instruction/system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_main_scalar_gm_load_runtime_loop",
+      "source_kind": "isolated_microbenchmark",
+      "source": "data_provider/scalar_ldst/simd_scalar_gm_memory.cce; data_provider/scalar_ldst/simd_scalar_gm_memory_host.cpp",
+      "confidence": "medium"
+    },
+    "simd.scalar_gm.load.direct_latency": {
+      "description": "Cheap-hash random-64B SIMD scalar load fit intercept.",
+      "value": 12.790396391,
+      "unit": "system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_main_scalar_gm_load_runtime_loop",
+      "source_kind": "isolated_microbenchmark",
+      "source": "data_provider/scalar_ldst/simd_scalar_gm_memory.cce; data_provider/scalar_ldst/simd_scalar_gm_memory_host.cpp",
+      "confidence": "medium"
+    },
+    "simd.scalar_gm.store.throughput": {
+      "description": "Triton SIMD scalar-store calibration remains MTE3-based; not changed by CCE random-64B probe.",
+      "value": 0.0125,
+      "unit": "scalar_instruction/system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_main_scalar_gm_store_runtime_loop",
+      "source_kind": "isolated_microbenchmark",
+      "source": "data_provider/scalar_ldst/calibrate_triton_simd_scalar_store.py",
+      "confidence": "medium"
+    },
+    "simd.scalar_gm.store.direct_latency": {
+      "description": "SIMD scalar store CCE random-64B fit is not used for Triton store; kept 0 because Triton marginal calibration is authoritative.",
+      "value": 0.0,
+      "unit": "system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_main_scalar_gm_store_runtime_loop",
+      "source_kind": "isolated_microbenchmark",
+      "source": "data_provider/scalar_ldst/simd_scalar_gm_memory.cce; data_provider/scalar_ldst/simd_scalar_gm_memory_host.cpp",
+      "confidence": "medium"
+    },
+    "simt.scalar_gm.load.throughput": {
+      "description": "SIMT per-warp uniform cheap-hash random-64B scalar GM load probe. 32-warp one-op result is 0.13370 warp-instruction/system-cycle.",
+      "value": 0.1337,
+      "unit": "warp_instruction/system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_32_warps_uniform_same_address_gm_load_runtime_loop",
+      "source_kind": "isolated_microbenchmark",
+      "source": "data_provider/scalar_ldst/simt_scalar_gm_memory.cce; data_provider/scalar_ldst/simt_scalar_gm_memory_host.cpp",
+      "confidence": "medium"
+    },
+    "simt.scalar_gm.store.throughput": {
+      "description": "SIMT per-warp uniform cheap-hash random-64B scalar GM store probe. 32-warp one-op result is 0.16996 warp-instruction/system-cycle.",
+      "value": 0.16996,
+      "unit": "warp_instruction/system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_32_warps_uniform_same_address_gm_store_runtime_loop",
+      "source_kind": "isolated_microbenchmark",
+      "source": "data_provider/scalar_ldst/simt_scalar_gm_memory.cce; data_provider/scalar_ldst/simt_scalar_gm_memory_host.cpp",
+      "confidence": "medium"
     }
   }
 }
