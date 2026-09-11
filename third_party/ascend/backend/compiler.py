@@ -1232,10 +1232,10 @@ def linalg_to_bin_enable_npu_compile_910_95(linalg: str, metadata, opt):
         # Honor the linalg-level blacklist (e.g. hivm.sync_block_lock) as well:
         # the launcher disables the grid cap for blacklisted kernels, so
         # requesting the NPUIR persistent loop without that cap would deadlock.
-        npuir_v1_enabled = (metadata.get("auto_blockify_v1_enabled", False)
-                            and not metadata.get("ta_auto_blockify_v1_materialized", False)
-                            and not metadata.get("has_auto_blockify_blacklist_op", False))
-        if npuir_v1_enabled:
+        auto_blockify_npuir_v1_enabled = (metadata.get("auto_blockify_v1_enabled", False)
+                                          and not metadata.get("ta_auto_blockify_v1_materialized", False)
+                                          and not metadata.get("has_auto_blockify_blacklist_op", False))
+        if auto_blockify_npuir_v1_enabled:
             _compile_option_list += ["--enable-auto-blockify-loop"]
             # Only mixed/local-scope routes carry a SuperBlock factor; all-SIMD
             # and ordinary SIMD keep the historical F1 autoblockify behavior.
@@ -1515,10 +1515,10 @@ def linalg_to_bin_enable_npu_compile_A2_A3(linalg: str, metadata, opt):
         # Honor the linalg-level blacklist (e.g. hivm.sync_block_lock) as well:
         # the launcher disables the grid cap for blacklisted kernels, so
         # requesting the NPUIR persistent loop without that cap would deadlock.
-        npuir_v1_enabled = (metadata.get("auto_blockify_v1_enabled", False)
-                            and not metadata.get("ta_auto_blockify_v1_materialized", False)
-                            and not metadata.get("has_auto_blockify_blacklist_op", False))
-        if npuir_v1_enabled:
+        auto_blockify_npuir_v1_enabled = (metadata.get("auto_blockify_v1_enabled", False)
+                                          and not metadata.get("ta_auto_blockify_v1_materialized", False)
+                                          and not metadata.get("has_auto_blockify_blacklist_op", False))
+        if auto_blockify_npuir_v1_enabled:
             _compile_option_list += ["--enable-auto-blockify-loop"]
             # Only mixed/local-scope routes carry a SuperBlock factor; all-SIMD
             # and ordinary SIMD keep the historical F1 autoblockify behavior.
