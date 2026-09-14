@@ -1,0 +1,16 @@
+--- a/third_party/ascend/lib/TritonToUnstructure/UnstructureConversionPass.cpp
++++ b/third_party/ascend/lib/TritonToUnstructure/UnstructureConversionPass.cpp
+@@ -469,6 +469,13 @@
+       mlir::ascend::simt_selection::hasEnclosingVectorMode(op, "simd");
+   bool modelControlled = mlir::ascend::simt_selection::isModelControlled(op);
+ 
++  if (scopeForcesSimt) {
++    // Ablation: keep the original tt.load/tt.store for TritonToLinalg.
++    // Do not route scoped indirect accesses through the unstructured/
++    // hfusion path; this leaves the vector tile load/store untouched.
++    return failure();
++  }
++
+   if (!ptrType || op->hasAttr(ConverterUtils::discreteAttrName))
+     return failure();
+   if (!offsetMap.contains(ptr))

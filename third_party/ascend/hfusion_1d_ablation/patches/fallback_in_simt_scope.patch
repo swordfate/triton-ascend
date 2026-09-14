@@ -1,0 +1,10 @@
+--- a/third_party/ascend/lib/TritonToUnstructure/UnstructureConversionPass.cpp
++++ b/third_party/ascend/lib/TritonToUnstructure/UnstructureConversionPass.cpp
+@@ -575,6 +575,7 @@
+     // run of >= 64 bytes ("long axis") is cheaper as a plain structured
+     // access (parallel-loop copy) than as an indirect gather/scatter.
+     bool useUnstructuredOp =
++        !scopeForcesSimt && /* ablation fallback: disable hfusion only inside SIMT scopes */
+         compileOn91095Flag &&
+         ((unstructureCompileModeFlag == triton::ascend::CompileMode::SimdSimt &&
+           simtRouteRequested &&
