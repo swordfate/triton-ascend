@@ -53,14 +53,19 @@ def _load_route_report(path, expected):
     return report
 
 
-def _launch_options(report_path, logical_programs):
+def _load_simt_only_factor4_report(path):
+    report = _load_route_report(path, "all_simt_only")
+    assert report["selected_superblock_factor"] == 4
+    return report
+
+
+def _launch_options(report_path):
     options = {
         "num_warps": 1,
         "compile_mode": "simd_simt",
         "auto_simt_scope_mode": "auto",
         "auto_simt_scope_dump": str(report_path),
         "enable_auto_blockify": True,
-        "logical_program_count_hint": logical_programs,
         "physical_vector_core_count_hint": _vector_core_count(),
     }
     if os.getenv("TRITON_TEST_DISABLE_TTIR_LAYOUT_MERGE") == "1":
@@ -462,13 +467,13 @@ def test_costmodel_padded_copy_gather(tmp_path):
             BLOCK_X=_BLOCK_X,
             A_TO_B=True,
             SCALE=False,
-            **_launch_options(report_path, logical_programs),
+            **_launch_options(report_path),
         )
 
     launch()
     torch.npu.synchronize()
     torch.testing.assert_close(output.cpu().float(), expected.float(), rtol=1e-2, atol=1e-2)
-    _load_route_report(report_path, "all_simt_only")
+    _load_simt_only_factor4_report(report_path)
 
 
 @simd_simt_910_95_only
@@ -497,14 +502,14 @@ def test_costmodel_padded_copy_scatter(tmp_path):
             BLOCK_X=_BLOCK_X,
             A_TO_B=False,
             SCALE=True,
-            **_launch_options(report_path, logical_programs),
+            **_launch_options(report_path),
         )
 
     launch()
     torch.npu.synchronize()
     result = output.sum(dim=1)
     torch.testing.assert_close(result.cpu().float(), expected, rtol=1e-2, atol=1e-2)
-    _load_route_report(report_path, "all_simt_only")
+    _load_simt_only_factor4_report(report_path)
 
 
 @simd_simt_910_95_only
@@ -531,13 +536,13 @@ def test_costmodel_padded_copy_wgrad(tmp_path):
             NUM_COLUMNS=_HS,
             TOP_K=_TOP_K,
             BLOCK_X=_BLOCK_X,
-            **_launch_options(report_path, logical_programs),
+            **_launch_options(report_path),
         )
 
     launch()
     torch.npu.synchronize()
     torch.testing.assert_close(output.cpu().float(), expected, rtol=1e-2, atol=1e-2)
-    _load_route_report(report_path, "all_simt_only")
+    _load_simt_only_factor4_report(report_path)
 
 
 @simd_simt_910_95_only
@@ -549,7 +554,6 @@ def test_costmodel_binned_copy_gather(tmp_path):
     expected = _binned_gather_reference(x_cpu, indices_cpu, bins_cpu, _EXPERT_CAPACITY, _TOP_K)
     report_path = tmp_path / "binned_copy_gather_route.json"
     output = torch.zeros((_NE, _EXPERT_CAPACITY, x.shape[1]), dtype=x.dtype, device=x.device)
-    logical_programs = _NE * _EXPERT_CAPACITY
 
     def launch():
         _binned_copy_gather[(_NE, _EXPERT_CAPACITY)](
@@ -565,13 +569,13 @@ def test_costmodel_binned_copy_gather(tmp_path):
             BLOCK_X=_BLOCK_X,
             A_TO_B=True,
             SCALE=False,
-            **_launch_options(report_path, logical_programs),
+            **_launch_options(report_path),
         )
 
     launch()
     torch.npu.synchronize()
     torch.testing.assert_close(output.cpu().float(), expected.float(), rtol=1e-2, atol=1e-2)
-    _load_route_report(report_path, "all_simt_only")
+    _load_simt_only_factor4_report(report_path)
 
 
 @simd_simt_910_95_only
@@ -584,7 +588,6 @@ def test_costmodel_binned_copy_scatter(tmp_path):
     expected = _binned_scatter_reference(gathered_cpu, indices_cpu, weights_cpu, bins_cpu, _TOP_K)
     report_path = tmp_path / "binned_copy_scatter_route.json"
     output = torch.zeros((_SL, _TOP_K, _HS), dtype=gathered.dtype, device=gathered.device)
-    logical_programs = _NE * _EXPERT_CAPACITY
 
     def launch():
         _binned_copy_scatter[(_NE, _EXPERT_CAPACITY)](
@@ -600,14 +603,14 @@ def test_costmodel_binned_copy_scatter(tmp_path):
             BLOCK_X=_BLOCK_X,
             A_TO_B=False,
             SCALE=True,
-            **_launch_options(report_path, logical_programs),
+            **_launch_options(report_path),
         )
 
     launch()
     torch.npu.synchronize()
     result = output.sum(dim=1)
     torch.testing.assert_close(result.cpu().float(), expected, rtol=1e-2, atol=1e-2)
-    _load_route_report(report_path, "all_simt_only")
+    _load_simt_only_factor4_report(report_path)
 
 
 @simd_simt_910_95_only
@@ -620,7 +623,6 @@ def test_costmodel_binned_copy_wgrad(tmp_path):
     expected = _binned_wgrad_reference(gathered_cpu, grads_cpu, indices_cpu, bins_cpu, _TOP_K)
     report_path = tmp_path / "binned_copy_wgrad_route.json"
     output = torch.empty((indices.shape[0], ), dtype=gathered.dtype, device=gathered.device)
-    logical_programs = _NE * _EXPERT_CAPACITY
 
     def launch():
         _binned_copy_wgrad[(_NE, _EXPERT_CAPACITY)](
@@ -634,10 +636,10 @@ def test_costmodel_binned_copy_wgrad(tmp_path):
             NUM_COLUMNS=_HS,
             TOP_K=_TOP_K,
             BLOCK_X=_BLOCK_X,
-            **_launch_options(report_path, logical_programs),
+            **_launch_options(report_path),
         )
 
     launch()
     torch.npu.synchronize()
     torch.testing.assert_close(output.cpu().float(), expected, rtol=1e-2, atol=1e-2)
-    _load_route_report(report_path, "all_simt_only")
+    _load_simt_only_factor4_report(report_path)

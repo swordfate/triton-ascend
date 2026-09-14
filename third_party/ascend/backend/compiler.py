@@ -27,6 +27,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 import tempfile
 import warnings
 from dataclasses import dataclass
@@ -1603,6 +1604,39 @@ def _validate_compile_mode(compile_mode):
     return compile_mode
 
 
+def _infer_logical_program_count_from_run_stack():
+    """Best-effort grid hint extraction for the SIMD/SIMT cost model.
+
+    Community ``JITFunction.run`` receives ``grid`` as a keyword-only argument
+    and does not forward it to backend option parsing.  When triton-ascend
+    builds ``NPUOptions`` from inside that call chain, recover the already
+    known launch grid from the active frame instead of modifying the
+    community JIT source.  Only concrete, non-callable grids are accepted.
+    """
+    try:
+        from triton.runtime.jit import JITFunction
+    except Exception:
+        return 0
+    try:
+        frame = sys._getframe(1)
+    except ValueError:
+        return 0
+    while frame is not None:
+        if frame.f_code is JITFunction.run.__code__:
+            grid = frame.f_locals.get("grid")
+            if grid is None or callable(grid):
+                return 0
+            hint = 1
+            try:
+                for dim in grid[:3]:
+                    hint *= int(dim)
+            except (TypeError, ValueError):
+                return 0
+            return hint if hint > 0 else 0
+        frame = frame.f_back
+    return 0
+
+
 @dataclass(frozen=True)
 class NPUOptions:
     debug: bool = False
@@ -1787,6 +1821,15 @@ class NPUOptions:
             object.__setattr__(self, "compile_mode", "simd_simt_template")
 
         _apply_ascend_patch()
+
+        # Backend-only fallback for the SIMD/SIMT cost model: community
+        # JITFunction.run keeps ``grid`` local, so recover it from the current
+        # call stack when callers did not pass an explicit hint.
+        if (self.compile_mode == "simd_simt" and self.auto_simt_scope_mode in ("auto", "report")
+                and not self.logical_program_count_hint):
+            inferred = _infer_logical_program_count_from_run_stack()
+            if inferred > 0:
+                object.__setattr__(self, "logical_program_count_hint", inferred)
 
     def hash(self):
         key = "_".join([f"{name}-{val}" for name, val in self.__dict__.items()])
