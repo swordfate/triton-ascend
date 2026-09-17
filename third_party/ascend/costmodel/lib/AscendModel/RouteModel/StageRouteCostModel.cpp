@@ -428,6 +428,10 @@ llvm::json::Object StageCostModelSummary::toJSON() const {
   routes["all_simd"] = allSimd.toJSON();
   routes["all_simt_only"] = allSimt.toJSON();
   routes["mixed_simd_simt"] = mixed.toJSON();
+  llvm::json::Array allSimtFactorPlansJSON;
+  for (const StageRoutePlan &plan : allSimtFactorPlans)
+    allSimtFactorPlansJSON.push_back(plan.toJSON());
+  routes["all_simt_only_by_factor"] = std::move(allSimtFactorPlansJSON);
   result["routes"] = std::move(routes);
   return result;
 }
@@ -638,11 +642,14 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
     return plan;
   };
 
-  auto bestFactoredPlan = [&](StageKernelRouteKind kind) {
+  auto bestFactoredPlan = [&](StageKernelRouteKind kind,
+                              std::vector<StageRoutePlan> *allCandidates = nullptr) {
     StageRoutePlan best;
     best.candidate = kind;
     for (int64_t factor : kSupportedSuperBlockFactors) {
       StageRoutePlan candidate = buildPlan(kind, factor);
+      if (allCandidates)
+        allCandidates->push_back(candidate);
       if (candidate.legal &&
           (!best.legal || candidate.totalCycles < best.totalCycles))
         best = std::move(candidate);
@@ -658,7 +665,10 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
   result.stages = costTable.stages;
   result.transition = transition;
   result.allSimd = buildPlan(StageKernelRouteKind::AllSIMD, 1);
-  result.allSimt = bestFactoredPlan(StageKernelRouteKind::AllSIMT);
+  std::vector<StageRoutePlan> allSimtFactorPlans;
+  result.allSimt = bestFactoredPlan(StageKernelRouteKind::AllSIMT,
+                                    &allSimtFactorPlans);
+  result.allSimtFactorPlans = std::move(allSimtFactorPlans);
   result.mixed = bestFactoredPlan(StageKernelRouteKind::Mixed);
   removeAutoBlockifyCostFromAllSIMD(result.allSimd, costTable);
   costModelLog() << "output: allSimd=" << result.allSimd.totalCycles << " legal=" << result.allSimd.legal << " | allSimt=" << result.allSimt.totalCycles << " legal=" << result.allSimt.legal << " F=" << result.allSimt.routeSuperblockFactor << " | mixed=" << result.mixed.totalCycles << " legal=" << result.mixed.legal << " F=" << result.mixed.routeSuperblockFactor << "\n";

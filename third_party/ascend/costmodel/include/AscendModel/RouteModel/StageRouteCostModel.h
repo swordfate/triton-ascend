@@ -264,6 +264,10 @@ struct StageCostModelSummary {
   StageRoutePlan allSimd;
   StageRoutePlan allSimt;
   StageRoutePlan mixed;
+  /// Analysis aid: every whole-kernel all-SIMT candidate considered by the
+  /// solver, including the losing SuperBlock factors.  Serialized under
+  /// routes.all_simt_only_by_factor so the losing stage costs are inspectable.
+  std::vector<StageRoutePlan> allSimtFactorPlans;
 
   llvm::json::Object toJSON() const;
 };
