@@ -44,10 +44,6 @@ static double controlBody(const StageResourceCycles &resources) {
          resources.divergence + resources.synchronization;
 }
 
-/// Return a rate for `opCount` by linear interpolation over the measured
-/// `ops -> throughput` table.  If `opCount` is outside the table, clamp to the
-/// nearest end of the table.  If no table is available, return 0 so callers can
-/// fall back to the fixed profile rate.
 static double lookupThroughputByCyclesFit(const std::vector<double> &fit,
                                           double opCount,
                                           double warpCount) {
@@ -137,12 +133,6 @@ static StageResourceCycles mapWorkload(const LogicalStage &stage,
     resources.store =
         work.storeWarpInstructions / profile.storeWarpInstructionsPerCycle;
   }
-  // Scalar loads/stores execute on the scalar pipe, not on vector MTE.  They
-  // are counted as individual scalar instructions plus a load/store latency.
-  // For indirect scalar memory (address produced by a scalar load), add the
-  // extra dependency latency so scalar-load-to-scalar-load and
-  // scalar-load-to-scalar-store chains are not hidden behind ordinary
-  // scalar-issue throughput.
   if (work.scalarLoadCount > 0.0) {
     double loadThroughput = profile.scalarLoadInstructionsPerCycle;
     if (!simd) {
@@ -154,9 +144,6 @@ static StageResourceCycles mapWorkload(const LogicalStage &stage,
     resources.scalarMemory +=
         work.scalarLoadCount / loadThroughput +
         profile.scalarLoadLatencyCycles;
-    // Each dependent scalar-load edge exposes an additional serial
-    // load-to-use latency that cannot be hidden by independent-issue
-    // overlap. Charge it per dependent load, not once per stage.
     if (stage.features.hasScalarIndirectLoad)
       resources.scalarMemory +=
           work.indirectScalarLoadCount *
@@ -173,8 +160,6 @@ static StageResourceCycles mapWorkload(const LogicalStage &stage,
     resources.scalarMemory +=
         work.scalarStoreCount / storeThroughput +
         profile.scalarStoreLatencyCycles;
-    // A scalar store whose address depends on an earlier scalar load also
-    // exposes a serial load-to-address-use latency.
     if (stage.features.hasScalarIndirectStore)
       resources.scalarMemory +=
           work.indirectScalarStoreCount *

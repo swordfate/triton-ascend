@@ -202,8 +202,6 @@ static void accumulateOneOperation(Operation *operation, StageWorkload &work) {
   if ((name == "tt.load" || name == "tt.gather") &&
       operation->getNumResults() > 0) {
     Value result = operation->getResult(0);
-    // A scalar tt.load (non-shaped result) is executed by the scalar unit,
-    // not by the vector MTE pipes.  Keep it separate from tile loads.
     if (name == "tt.load" && !isa<ShapedType>(result.getType())) {
       work.scalarLoadCount += 1.0;
       if (isScalarIndirectLoadOperation(operation))
@@ -219,8 +217,6 @@ static void accumulateOneOperation(Operation *operation, StageWorkload &work) {
   if ((name == "tt.store" || name.starts_with("tt.atomic")) &&
       operation->getNumOperands() > 1) {
     Value value = operation->getOperand(1);
-    // A scalar tt.store (non-shaped stored value) is executed by the scalar
-    // unit and should not be counted as a vector tile store.
     if (name == "tt.store" && !isa<ShapedType>(value.getType())) {
       work.scalarStoreCount += 1.0;
       if (isScalarIndirectStoreOperation(operation))
@@ -672,9 +668,6 @@ static StageCostModelKind classifySemanticRoot(Operation *root) {
           root, {"tt.fp_to_fp", "arith.extf", "arith.truncf", "arith.fptosi",
                  "arith.fptoui", "arith.sitofp", "arith.uitofp"}))
     return StageCostModelKind::ConversionPack;
-  // Scalar indirect memory remains in the ScalarLoad/ScalarStore family for
-  // now.  hasScalarIndirectMemory is a feature modifier that adds dependency
-  // latency; IndirectScalarMemory is reserved for a future discrete-kind split.
   const bool hasScalarLoad = operationTreeHasScalarLoad(root);
   const bool hasScalarStore = operationTreeHasScalarStore(root);
   if (hasScalarStore && !hasScalarLoad)
@@ -1277,14 +1270,8 @@ llvm::Error StageFeatureAnalysis::analyze(StagePartition &partition) const {
           if (scalarStore)
             facts.hasScalarIndirectStore = true;
         }
-        // Scalar loads/stores are scalar-pipe operations, not vector tile
-        // memory.  Only non-scalar memory should mark hasContiguousMemory.
         if (!scalarLoad && !scalarStore)
           hasMemory = true;
-        // Scalar indirect memory is represented by hasScalarIndirectMemory,
-        // not by the tensor/vector hasIndirectMemory path.  This keeps it in
-        // the ScalarLoad/ScalarStore family until discrete indirect kinds are
-        // introduced.
         facts.hasIndirectMemory |= isLoadedIndexDependentMemoryOp(operation) ||
                                    name == "tt.gather" ||
                                    name.starts_with("tt.atomic");

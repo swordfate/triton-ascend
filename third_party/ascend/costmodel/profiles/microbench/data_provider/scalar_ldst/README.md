@@ -8,6 +8,27 @@
 4. 如何把数据填入 cost model profile；
 5. 如何用 demo 验证 SIMD/SIMT 预测。
 
+
+## 0. 改动规模统计（相对 `bc1722303`）
+
+| 类别 | 文件数 | 新增行 | 删除行 |
+|---|---:|---:|---:|
+| 标定 CCE 探针（`*.cce`） | 4 | 287 | 0 |
+| 标定 host（`*_host.cpp`） | 4 | 523 | 0 |
+| 标定/检查/拟合 Python（`*.py`） | 7 | 961 | 0 |
+| 本文档 `README.md`（不含本节统计段） | 1 | 485 | 0 |
+| costmodel C++ 代码（头文件 + 实现） | 6 | 352 | 51 |
+| profile / schema JSON | 3 | 152 | 0 |
+| UT（`SimdSimtCostModelTest.cpp`） | 0 | 0 | 0 |
+
+> 统计口径：标定程序为新增文件的总行数（`wc -l`）；costmodel C++ 为相对
+> `bc1722303` 的 `git diff --numstat`（新增/删除行）；JSON 为新增的
+> measurement / `scalar_memory` / schema 字段行数。README 全文 506 行（其中本节统计段 21 行）。
+>
+> 标定代码合计 15 个文件、1771 行（287 cce + 523 host + 961 python）；
+> costmodel 实际修改 6 个文件、+352/-51 行；profile/schema 新增 152 行。
+
+
 ---
 
 ## 1. 环境信息

@@ -114,9 +114,6 @@ struct StageWorkload {
 struct StageResourceCycles {
   double setup = 0.0;
   double scalar = 0.0;
-  /// Scalar-pipe load/store cycles.  Kept separate from vector tile
-  /// load/store so scalar memory is never hidden inside the vector MTE
-  /// roofline max, while still participating in memory latency hiding.
   double scalarMemory = 0.0;
   double load = 0.0;
   double store = 0.0;
@@ -232,8 +229,6 @@ struct StageCostModelSummary {
   StageTransitionCost transition;
   StageRoutePlan allSimd;
   StageRoutePlan allSimt;
-  /// All legal whole-kernel pure-SIMT routes (usually F1/F2/F4).  `allSimt`
-  /// remains the cheapest legal route for backward compatibility.
   std::vector<StageRoutePlan> allSimtByFactor;
   StageRoutePlan mixed;
 
