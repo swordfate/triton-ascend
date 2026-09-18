@@ -467,6 +467,124 @@
           "type": "number",
           "exclusiveMinimum": 0
         },
+        "scalar_memory": {
+          "type": "object",
+          "properties": {
+            "load_instructions_per_system_cycle": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "store_instructions_per_system_cycle": {
+              "type": "number",
+              "exclusiveMinimum": 0
+            },
+            "load_latency_system_cycles": {
+              "type": "number",
+              "minimum": 0
+            },
+            "store_latency_system_cycles": {
+              "type": "number",
+              "minimum": 0
+            },
+            "indirect_dependency_latency_system_cycles": {
+              "type": "number",
+              "minimum": 0
+            },
+            "main_load_prep_system_cycles": {
+              "type": "number",
+              "minimum": 0
+            },
+            "main_load_fill_system_cycles": {
+              "type": "number",
+              "minimum": 0
+            },
+            "main_load_hit_system_cycles": {
+              "type": "number",
+              "minimum": 0
+            },
+            "main_load_issue_system_cycles": {
+              "type": "number",
+              "minimum": 0
+            },
+            "uniform_load_prep_system_cycles": {
+              "type": "number",
+              "minimum": 0
+            },
+            "uniform_load_fill_system_cycles": {
+              "type": "number",
+              "minimum": 0
+            },
+            "uniform_load_same_line_serial_system_cycles": {
+              "type": "number",
+              "minimum": 0
+            },
+            "main_load_outstanding_line_count": {
+              "type": "number",
+              "minimum": 0
+            },
+            "main_load_extra_line_low_system_cycles": {
+              "type": "number",
+              "minimum": 0
+            },
+            "main_load_extra_line_high_system_cycles": {
+              "type": "number",
+              "minimum": 0
+            },
+            "main_load_extra_line_high_threshold": {
+              "type": "number",
+              "minimum": 0
+            },
+            "uniform_load_diff_line_issue_system_cycles": {
+              "type": "number",
+              "minimum": 0
+            },
+            "load_cycles_fit": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              }
+            },
+            "store_cycles_fit": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              }
+            },
+            "description": {
+              "type": "string",
+              "minLength": 1
+            },
+            "mte3_store_prep_system_cycles": {
+              "type": "number",
+              "minimum": 0
+            },
+            "mte3_store_fill_system_cycles": {
+              "type": "number",
+              "minimum": 0
+            },
+            "mte3_store_serial_system_cycles": {
+              "type": "number",
+              "minimum": 0
+            },
+            "uniform_store_same_line_base_system_cycles": {
+              "type": "number",
+              "minimum": 0
+            },
+            "uniform_store_same_line_serial_system_cycles": {
+              "type": "number",
+              "minimum": 0
+            },
+            "uniform_store_diff_line_base_system_cycles": {
+              "type": "number",
+              "minimum": 0
+            },
+            "uniform_store_diff_line_issue_system_cycles": {
+              "type": "number",
+              "minimum": 0
+            }
+          },
+          "additionalProperties": false
+        },
         "indirect_memory": {
           "type": "object",
           "required": [

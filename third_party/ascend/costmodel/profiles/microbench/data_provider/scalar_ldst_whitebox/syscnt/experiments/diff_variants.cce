@@ -1,0 +1,68 @@
+#include "RegBase/VecUtils.h"
+#include "Vector/VecUtils.h"
+#include "Utils.h"
+using DT = float;
+
+extern "C" __global__ [aicore] void
+diff_v0_orig(__gm__ long long* out, __gm__ DT* gm, int iters, int mode) {
+  (void)iters; (void)mode;
+  volatile __gm__ DT* p = gm;
+  DT a0 = p[0 * 16]; DT a1 = p[1 * 16]; DT a2 = p[2 * 16]; DT a3 = p[3 * 16];
+  out[0] = (long long)(a0 + a1 + a2 + a3);
+}
+
+extern "C" __global__ [aicore] void
+diff_v1_syscnt(__gm__ long long* out, __gm__ DT* gm, int iters, int mode) {
+  (void)iters; (void)mode;
+  volatile __gm__ DT* p = gm;
+  pipe_barrier(PIPE_ALL);
+  long long t0 = get_sys_cnt();
+  DT a0 = p[0 * 16]; DT a1 = p[1 * 16]; DT a2 = p[2 * 16]; DT a3 = p[3 * 16];
+  pipe_barrier(PIPE_ALL);
+  long long t1 = get_sys_cnt();
+  out[0] = t1 - t0; out[1] = (long long)(a0 + a1 + a2 + a3);
+}
+
+extern "C" __global__ [aicore] void
+diff_v2_nopre(__gm__ long long* out, __gm__ DT* gm, int iters, int mode) {
+  (void)iters; (void)mode;
+  volatile __gm__ DT* p = gm;
+  long long t0 = get_sys_cnt();
+  DT a0 = p[0 * 16]; DT a1 = p[1 * 16]; DT a2 = p[2 * 16]; DT a3 = p[3 * 16];
+  pipe_barrier(PIPE_ALL);
+  long long t1 = get_sys_cnt();
+  out[0] = t1 - t0; out[1] = (long long)(a0 + a1 + a2 + a3);
+}
+
+extern "C" __global__ [aicore] void
+diff_v3_nopost(__gm__ long long* out, __gm__ DT* gm, int iters, int mode) {
+  (void)iters; (void)mode;
+  volatile __gm__ DT* p = gm;
+  pipe_barrier(PIPE_ALL);
+  long long t0 = get_sys_cnt();
+  DT a0 = p[0 * 16]; DT a1 = p[1 * 16]; DT a2 = p[2 * 16]; DT a3 = p[3 * 16];
+  long long t1 = get_sys_cnt();
+  out[0] = t1 - t0; out[1] = (long long)(a0 + a1 + a2 + a3);
+}
+
+extern "C" __global__ [aicore] void
+diff_v4_nobar(__gm__ long long* out, __gm__ DT* gm, int iters, int mode) {
+  (void)iters; (void)mode;
+  volatile __gm__ DT* p = gm;
+  long long t0 = get_sys_cnt();
+  DT a0 = p[0 * 16]; DT a1 = p[1 * 16]; DT a2 = p[2 * 16]; DT a3 = p[3 * 16];
+  long long t1 = get_sys_cnt();
+  out[0] = t1 - t0; out[1] = (long long)(a0 + a1 + a2 + a3);
+}
+
+extern "C" __global__ [aicore] void
+diff_v5_asm(__gm__ long long* out, __gm__ DT* gm, int iters, int mode) {
+  (void)iters; (void)mode;
+  volatile __gm__ DT* p = gm;
+  asm volatile("" ::: "memory");
+  long long t0 = get_sys_cnt();
+  DT a0 = p[0 * 16]; DT a1 = p[1 * 16]; DT a2 = p[2 * 16]; DT a3 = p[3 * 16];
+  asm volatile("" ::: "memory");
+  long long t1 = get_sys_cnt();
+  out[0] = t1 - t0; out[1] = (long long)(a0 + a1 + a2 + a3);
+}

@@ -159,16 +159,26 @@ bool StageModelFeatures::permitsSimdRoofline() const {
 }
 
 bool StageWorkload::isFiniteAndNonNegative() const {
-  const std::array<double, 10> values = {scalarOperations,
-                                         loadBytes,
-                                         storeBytes,
-                                         loadWarpInstructions,
-                                         storeWarpInstructions,
-                                         predicateElements,
-                                         shuffleLaneSteps,
-                                         dotFlops,
-                                         issueElements,
-                                         estimatedSpillTransactions};
+  const std::array<double, 19> values = {
+      scalarOperations,
+      loadBytes,
+      storeBytes,
+      loadWarpInstructions,
+      storeWarpInstructions,
+      predicateElements,
+      shuffleLaneSteps,
+      dotFlops,
+      issueElements,
+      estimatedSpillTransactions,
+      scalarLoadCount,
+      directScalarLoadCount,
+      indirectScalarLoadCount,
+      indirectScalarLoadExposureCount,
+      scalarStoreCount,
+      indirectScalarStoreCount,
+      indirectScalarStoreExposureCount,
+      scalarLoadUniqueLines,
+      scalarStoreUniqueLines};
   if (!std::all_of(values.begin(), values.end(), [](double value) {
         return std::isfinite(value) && value >= 0.0;
       }))
@@ -195,6 +205,18 @@ llvm::json::Object StageWorkload::toJSON() const {
   result["issue_elements_per_iteration"] = issueElements;
   result["estimated_spill_transactions_per_iteration"] =
       estimatedSpillTransactions;
+  result["scalar_load_count_per_iteration"] = scalarLoadCount;
+  result["direct_scalar_load_count_per_iteration"] = directScalarLoadCount;
+  result["indirect_scalar_load_count_per_iteration"] = indirectScalarLoadCount;
+  result["indirect_scalar_load_exposure_count_per_iteration"] =
+      indirectScalarLoadExposureCount;
+  result["scalar_store_count_per_iteration"] = scalarStoreCount;
+  result["indirect_scalar_store_count_per_iteration"] =
+      indirectScalarStoreCount;
+  result["indirect_scalar_store_exposure_count_per_iteration"] =
+      indirectScalarStoreExposureCount;
+  result["scalar_load_unique_lines_per_iteration"] = scalarLoadUniqueLines;
+  result["scalar_store_unique_lines_per_iteration"] = scalarStoreUniqueLines;
   result["pays_kernel_setup"] = paysKernelSetup;
   return result;
 }
@@ -206,6 +228,13 @@ llvm::json::Object StageModelFeatures::toJSON() const {
   result["has_pointer_induction"] = hasPointerInduction;
   result["has_contiguous_memory"] = hasContiguousMemory;
   result["has_indirect_memory"] = hasIndirectMemory;
+  result["has_scalar_load"] = hasScalarLoad;
+  result["has_scalar_store"] = hasScalarStore;
+  result["has_scalar_indirect_memory"] = hasScalarIndirectMemory;
+  result["has_scalar_indirect_load"] = hasScalarIndirectLoad;
+  result["has_scalar_indirect_store"] = hasScalarIndirectStore;
+  result["scalar_loads_share_line"] = scalarLoadsShareLine;
+  result["scalar_stores_share_line"] = scalarStoresShareLine;
   result["has_reduction"] = hasReduction;
   result["has_dot"] = hasDot;
   result["has_conversion_pack"] = hasConversionPack;

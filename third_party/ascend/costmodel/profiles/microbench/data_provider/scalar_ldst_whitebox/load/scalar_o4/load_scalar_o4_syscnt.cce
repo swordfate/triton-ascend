@@ -1,0 +1,99 @@
+// scalar_ldst_whitebox/load/scalar_o4 — real-board SYS_CNT probes.
+// Same kernel bodies as load_scalar_o4.cce, wrapped with get_sys_cnt().
+// ABI: (out, gm, iters, mode); each kernel writes the measured ticks to out[0].
+#include "RegBase/VecUtils.h"
+#include "Vector/VecUtils.h"
+#include "Utils.h"
+
+using DT = float;
+
+extern "C" __global__ [aicore] void
+simd_nop_syscnt(__gm__ long long* out, __gm__ DT* gm, int iters, int mode) {
+  (void)gm; (void)iters; (void)mode;
+  pipe_barrier(PIPE_ALL);
+  long long t0 = get_sys_cnt();
+  pipe_barrier(PIPE_ALL);
+  long long t1 = get_sys_cnt();
+  out[0] = t1 - t0;
+}
+
+extern "C" __global__ [aicore] void
+simd_main_ld_same_o4_syscnt(__gm__ long long* out, __gm__ DT* gm, int iters, int mode) {
+  (void)iters; (void)mode;
+  volatile __gm__ DT* p = gm;
+  pipe_barrier(PIPE_ALL);
+  long long t0 = get_sys_cnt();
+  DT a0 = p[0]; DT a1 = p[1]; DT a2 = p[2]; DT a3 = p[3];
+  pipe_barrier(PIPE_ALL);
+  long long t1 = get_sys_cnt();
+  out[0] = t1 - t0;
+  out[1] = (long long)(a0 + a1 + a2 + a3);
+}
+
+extern "C" __global__ [aicore] void
+simd_main_ld_diff_o4_syscnt(__gm__ long long* out, __gm__ DT* gm, int iters, int mode) {
+  (void)iters; (void)mode;
+  volatile __gm__ DT* p = gm;
+  pipe_barrier(PIPE_ALL);
+  long long t0 = get_sys_cnt();
+  DT a0 = p[0 * 16]; DT a1 = p[1 * 16]; DT a2 = p[2 * 16]; DT a3 = p[3 * 16];
+  pipe_barrier(PIPE_ALL);
+  long long t1 = get_sys_cnt();
+  out[0] = t1 - t0;
+  out[1] = (long long)(a0 + a1 + a2 + a3);
+}
+
+__simt_vf__ LAUNCH_BOUND(32) __aiv__ __attribute__((always_inline)) static void
+simt_nop_core(__gm__ DT* gm, __ubuf__ DT* sink) {
+  (void)gm;
+  int lane = threadIdx.x;
+  sink[lane] = (DT)(lane + 100);
+}
+
+extern "C" __global__ [aicore] void
+simt_nop_syscnt(__gm__ long long* out, __gm__ DT* gm, int iters, int mode) {
+  (void)iters; (void)mode;
+  auto sink = reinterpret_cast<__ubuf__ DT*>(0);
+  pipe_barrier(PIPE_ALL);
+  long long t0 = get_sys_cnt();
+  cce::async_invoke<simt_nop_core>(cce::dim3{32, 1, 1}, gm, sink);
+  pipe_barrier(PIPE_ALL);
+  long long t1 = get_sys_cnt();
+  out[0] = t1 - t0;
+}
+
+__simt_vf__ LAUNCH_BOUND(32) __aiv__ __attribute__((always_inline)) static void
+simt_ld_uniform_same_o4_core(__gm__ DT* gm, __ubuf__ DT* sink) {
+  int lane = threadIdx.x;
+  DT a0 = gm[0]; DT a1 = gm[1]; DT a2 = gm[2]; DT a3 = gm[3];
+  sink[lane] = (DT)(a0 + a1 + a2 + a3);
+}
+extern "C" __global__ [aicore] void
+simt_ld_uniform_same_o4_syscnt(__gm__ long long* out, __gm__ DT* gm, int iters, int mode) {
+  (void)iters; (void)mode;
+  auto sink = reinterpret_cast<__ubuf__ DT*>(0);
+  pipe_barrier(PIPE_ALL);
+  long long t0 = get_sys_cnt();
+  cce::async_invoke<simt_ld_uniform_same_o4_core>(cce::dim3{32, 1, 1}, gm, sink);
+  pipe_barrier(PIPE_ALL);
+  long long t1 = get_sys_cnt();
+  out[0] = t1 - t0;
+}
+
+__simt_vf__ LAUNCH_BOUND(32) __aiv__ __attribute__((always_inline)) static void
+simt_ld_uniform_diff_o4_core(__gm__ DT* gm, __ubuf__ DT* sink) {
+  int lane = threadIdx.x;
+  DT a0 = gm[0 * 32]; DT a1 = gm[1 * 32]; DT a2 = gm[2 * 32]; DT a3 = gm[3 * 32];
+  sink[lane] = (DT)(a0 + a1 + a2 + a3);
+}
+extern "C" __global__ [aicore] void
+simt_ld_uniform_diff_o4_syscnt(__gm__ long long* out, __gm__ DT* gm, int iters, int mode) {
+  (void)iters; (void)mode;
+  auto sink = reinterpret_cast<__ubuf__ DT*>(0);
+  pipe_barrier(PIPE_ALL);
+  long long t0 = get_sys_cnt();
+  cce::async_invoke<simt_ld_uniform_diff_o4_core>(cce::dim3{32, 1, 1}, gm, sink);
+  pipe_barrier(PIPE_ALL);
+  long long t1 = get_sys_cnt();
+  out[0] = t1 - t0;
+}

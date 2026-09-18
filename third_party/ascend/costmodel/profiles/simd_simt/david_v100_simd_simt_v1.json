@@ -39,7 +39,7 @@
     "startup_system_cycles": {
       "description": "Legacy SIMD pipeline startup priors in SYS_CNT cycles. Only vector is currently consumed by Route Model scoring.",
       "vector": 21.212121,
-      "mte2": 30.303030,
+      "mte2": 30.30303,
       "mte3": 24.242424,
       "source": "Legacy selection-model seed inherited from device-cycle startup values",
       "confidence": "low",
@@ -156,6 +156,25 @@
       "scalar_operations_per_system_cycle": 1.0,
       "issue_instructions_per_system_cycle": 6.0,
       "spill_transactions_per_system_cycle": 1.0,
+      "scalar_memory": {
+        "load_instructions_per_system_cycle": 0.01104935915300334,
+        "store_instructions_per_system_cycle": 0.006858710562414266,
+        "load_latency_system_cycles": 12.790396391,
+        "store_latency_system_cycles": 0.0,
+        "indirect_dependency_latency_system_cycles": 1.95,
+        "main_load_prep_system_cycles": 7.0,
+        "main_load_fill_system_cycles": 440.0,
+        "main_load_hit_system_cycles": 12.333333333333334,
+        "main_load_issue_system_cycles": 3.0,
+        "main_load_outstanding_line_count": 2,
+        "main_load_extra_line_low_system_cycles": 250,
+        "main_load_extra_line_high_system_cycles": 350,
+        "main_load_extra_line_high_threshold": 4,
+        "description": "SIMD MainScalar scalar load memory. Same-line branch uses the CAModel 64B formula T = 7 + 440 + (K-1)*(12.333+3). Diff-line branch uses the structured model T = 7 + 440 + max(0, U-2)*perLine(U) + (K-U)*12.333 + (K-1)*3, U = distinct 64B lines. When the IR cannot prove same-line sharing, U defaults to K (conservative diff-line). Legacy scalar_ldst cheap-hash throughput/latency fields remain for warm/runtime-loop fallback profiles. Triton SIMD scalar store lowers to MTE3 (SCALAR ST -> UB staging -> MTE3 MOV UB->OUT), not MainScalar ST_XD_XN_IMM; the white-box MTE3 store model is T = mte3_store_prep + mte3_store_fill + (K-1)*mte3_store_serial.",
+        "mte3_store_prep_system_cycles": 20,
+        "mte3_store_fill_system_cycles": 450,
+        "mte3_store_serial_system_cycles": 480
+      },
       "indirect_memory": {
         "load_transactions_per_system_cycle": 0.125,
         "store_transactions_per_system_cycle": 0.125,
@@ -283,7 +302,7 @@
         "memory": 2.1411,
         "float_alu": 0.6429,
         "shuffle": 0.3763,
-        "predicate": 0.0380,
+        "predicate": 0.038,
         "control": 0.2431,
         "int_alu": 0.2325
       },
@@ -308,6 +327,34 @@
       "scalar_operations_per_system_cycle": 4.0,
       "issue_instructions_per_system_cycle": 4.0,
       "spill_transactions_per_system_cycle": 1.0,
+      "scalar_memory": {
+        "load_instructions_per_system_cycle": 4.0,
+        "store_instructions_per_system_cycle": 4.0,
+        "load_latency_system_cycles": 0.0,
+        "store_latency_system_cycles": 0.0,
+        "indirect_dependency_latency_system_cycles": 65.4,
+        "load_cycles_fit": [
+          65.523189,
+          2.048849,
+          7.893464,
+          0.374104
+        ],
+        "store_cycles_fit": [
+          24.769761,
+          -1.298297,
+          1.818695,
+          1.676496
+        ],
+        "uniform_load_prep_system_cycles": 6.0,
+        "uniform_load_fill_system_cycles": 524.0,
+        "uniform_load_same_line_serial_system_cycles": 464.3333333333333,
+        "uniform_load_diff_line_issue_system_cycles": 0.001,
+        "description": "SIMT warp-uniform scalar memory. Same-line branch uses the CAModel 128B formula T = 6 + 524 + (K-1)*464.333. Diff-line branch uses the structured model T = 6 + 524 + (K-1)*0.001 (0.001 keeps the structured branch; K<=4 predicts 526-530, matching README). When the IR cannot prove same-line sharing, the diff-line branch is used. Legacy scalar_ldst cheap-hash load/store cycles fits are retained as the fallback for profiles without the structured fields. The SIMT scalar store uses the white-box CAModel warp-uniform store window: same-line K>=2: 555+(K-1)*480; otherwise first-store/diff prep 450+(K-1)*20; a single scalar store uses the diff-line branch.",
+        "uniform_store_same_line_base_system_cycles": 555.0,
+        "uniform_store_same_line_serial_system_cycles": 480.0,
+        "uniform_store_diff_line_base_system_cycles": 450.0,
+        "uniform_store_diff_line_issue_system_cycles": 20.0
+      },
       "indirect_memory": {
         "load_transactions_per_system_cycle": 0.5,
         "store_transactions_per_system_cycle": 0.5,

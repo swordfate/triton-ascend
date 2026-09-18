@@ -1,0 +1,3 @@
+mode:    add  (v = pid.to(tl.float32) + 1.0; tl.store(out_ptr + pid, v), grid=4)
+OPPROF:  /home/c00946898/triton-ascend/third_party/ascend/costmodel/profiles/microbench/data_provider/scalar_ldst_whitebox/store/triton_scalar_store/OPPROF_20260918145642_VMUGVLSQPGNIROEN
+result:  scalar ST_XD_XN_IMM accessUb:1 accessDdr:0 -> UB; vector compute; MTE3 MOV_SRC_TO_DST_ALIGNv2 Src:UB Dst:OUT -> GM

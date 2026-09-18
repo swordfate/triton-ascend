@@ -1,0 +1,18 @@
+[info] [0000002487] [UBITF_RCEV_REQ] [DC_BHU_WR] req_id 1, addr 0x32000, size 128
+[info] [0000002496] [UBITF_RCEV_REQ] [DC_MROB_RD] SIMT_LDG req_id 2, addr0 0x32000, size 4, thread_count 32, isa_id 156, warp_last=true
+[info] [0000002496] [MROB_BUF_ALLOC] [DC_MROB_RD] mrob_buf_count 1, req_id 2
+[info] [0000002497] [OP_SPLIT] [DC_MROB_RD] req_id 2 dst_req_cnt 1
+[info] [0000002497] [GSU_ARB_GRANT] [DC_MROB_RD] req_id 3, isa_id 156, addr0 0x32000, split_size 4, thread_count 32, src_req_id 2
+[info] [0000002499] [GSU_CLC] [DC_MROB_RD] req_id 3 dst_req_cnt 1
+[info] [0000002499] [GSU_I2_OUT] [DC_MROB_RD] req_id 4, size 8, target_size 128, src_req_id 3
+[info] [0000002507] [UBITF_SEND_RSP] [DC_MROB_RD], req_id 2, isa_id 156, IDX 2, wait_dc_rsp_cnt 0
+[info] [0000002563] [BPSQ_ALLOC] [DC_BPSQ_WR] bpsq_count 1, req_id 6
+[info] [0000002563] [UBITF_RCEV_REQ] [DC_BPSQ_WR] SIMT_STG req_id 5, addr 0x32000, size 4, thread_count 32, isa_id 176, merge_req_id 6, thd_cnt: 32, warp_last=true, warp_last_merged=true, first_wr=false
+[info] [0000002564] [OP_SPLIT] [DC_BPSQ_WR] req_id 6 dst_req_cnt 1
+[info] [0000002564] [BPSQ_UOP_BUF] [DC_BPSQ_WR] req_id 7, isa_id 176, addr0 0x32000, split_size 4, thread_count 32, src_req_id 6
+[info] [0000002565] [GSU_ARB_GRANT] [DC_BPSQ_WR] req_id 7, isa_id 176
+[info] [0000002567] [GSU_CLC] [DC_BPSQ_WR] req_id 7 dst_req_cnt 1
+[info] [0000002567] [GSU_I2_OUT] [DC_BPSQ_WR] req_id 8, size 8, target_size 128, src_req_id 7
+[info] [0000002571] [UBITF_SEND_RSP] [DC_BPSQ_WR], req_id 5, isa_id 176, IDX 0, wait_dc_rsp_cnt 0
+[info] [0000002586] [UBITF_RCEV_REQ] [DC_BHU_RD] req_id 9, addr 0x32000, size 128
+[info] ++++++++++++++++++++++core: 0, subcore: 1, start: 281, tick: 4077, kernelId: 0, blkID: 0, blkDim: 1, rtsqId: 2, streamId: 0, taskId: 0, subtaskId: 0, threadId: 0, done++++++++++++++++++++++.

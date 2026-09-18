@@ -1,0 +1,91 @@
+[
+  {
+    "case": "simd",
+    "total_cycles": 447,
+    "events": {
+      "push": 1371,
+      "pc": "0x10d0e050",
+      "id": 20,
+      "retire": 1818,
+      "dc_calc": 1372,
+      "dc_miss": 1372,
+      "dc_mshr_push": 1374,
+      "dc_mshr_rd": 1374,
+      "dc_biu_send": 1375,
+      "dc_biu_recv": 1815,
+      "dc_refill": 1815,
+      "dc_mshr_retire": 1815,
+      "biu_send": 1383,
+      "gid": 1418,
+      "biu_recv": 1804
+    },
+    "stages": {
+      "issue_to_tag": 1,
+      "tag_to_biu_send": 3,
+      "biu_fill": 440,
+      "return_to_retire": 3
+    }
+  },
+  {
+    "case": "simt32",
+    "total_cycles": 530,
+    "events": {
+      "issue": 1942,
+      "id": 121,
+      "retire": 2472,
+      "tag": 1948,
+      "addr": "0x164b6da00",
+      "req_size": 4,
+      "tag_result": "INVALID",
+      "mrob_recv": 2458,
+      "request_size": 4,
+      "thread_count": 32,
+      "gsu_out": 2461,
+      "gsu_size": 8,
+      "target_size": 128,
+      "ubitf_rsp": 2469,
+      "biu_send": 1963,
+      "gid": 2052,
+      "biu_recv": 2440
+    },
+    "stages": {
+      "issue_to_tag": 6,
+      "tag_to_biu_send": 15,
+      "biu_fill": 477,
+      "biu_return_to_mrob": 18,
+      "mrob_to_ubitf_rsp": 11,
+      "ubitf_rsp_to_retire": 3
+    }
+  },
+  {
+    "case": "simt1",
+    "total_cycles": 483,
+    "events": {
+      "issue": 5883,
+      "id": 390,
+      "retire": 6366,
+      "tag": 5889,
+      "addr": "0x164b6da00",
+      "req_size": 4,
+      "tag_result": "INVALID",
+      "mrob_recv": 6352,
+      "request_size": 4,
+      "thread_count": 1,
+      "gsu_out": 6355,
+      "gsu_size": 8,
+      "target_size": 4,
+      "ubitf_rsp": 6363,
+      "biu_send": 5904,
+      "gid": 2703,
+      "biu_recv": 6334
+    },
+    "stages": {
+      "issue_to_tag": 6,
+      "tag_to_biu_send": 15,
+      "biu_fill": 430,
+      "biu_return_to_mrob": 18,
+      "mrob_to_ubitf_rsp": 11,
+      "ubitf_rsp_to_retire": 3
+    }
+  }
+]

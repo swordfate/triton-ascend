@@ -1,0 +1,27 @@
+mode,kernel,stage,kind,costmodel_total,costmodel_load,costmodel_store,camodel_window,err_total_pct,err_load_pct,err_store_pct,camodel_ids,note
+SIMT,padded_copy_gather,stage_4,direct,550.25,550,,517,6.4,6.4,,511,scalar load
+SIMT,padded_copy_gather,stage_5,direct,550.25,550,,516,6.6,6.6,,517,scalar load
+SIMT,padded_copy_gather,stage_7,pair,619.9,617.4,,473,31.1,30.5,,"596,599",scalar load
+SIMT,padded_copy_scatter,stage_4,direct,550.25,550,,476,15.6,15.5,,554,scalar load
+SIMT,padded_copy_scatter,stage_5,direct,550.25,550,,475,15.8,15.8,,558,scalar load
+SIMT,padded_copy_scatter,stage_7,pair,619.9,617.4,,417,48.7,48.1,,"613,616",scalar load
+SIMT,padded_copy_scatter,stage_11,indirect1,615.65,615.4,,438,40.6,40.5,,650,scalar load
+SIMT,padded_copy_wgrad,stage_4,direct,550.25,550,,559,-1.6,-1.6,,582,scalar load
+SIMT,padded_copy_wgrad,stage_5,direct,550.25,550,,558,-1.4,-1.4,,588,scalar load
+SIMT,padded_copy_wgrad,stage_7,pair,619.9,617.4,,548,13.1,12.7,,"651,654",scalar load
+SIMD,padded_copy_gather,stage_4,direct,481,480,,458,5.0,4.8,,554,scalar load
+SIMD,padded_copy_gather,stage_5,direct,481,480,,405,18.8,18.5,,357,scalar load
+SIMD,padded_copy_gather,stage_7,pair,489.95,482.95,,500,-2.0,-3.4,,"544,545",scalar load
+SIMD,padded_copy_scatter,stage_4,direct,481,480,,532,-9.6,-9.8,,561,scalar load
+SIMD,padded_copy_scatter,stage_5,direct,481,480,,489,-1.6,-1.8,,339,scalar load
+SIMD,padded_copy_scatter,stage_7,pair,489.95,482.95,,528,-7.2,-8.5,,"554,555",scalar load
+SIMD,padded_copy_scatter,stage_11,indirect1,482.95,481.95,,361,33.8,33.5,,574,scalar load
+SIMD,padded_copy_wgrad,stage_4,direct,481,480,,380,26.6,26.3,,512,scalar load
+SIMD,padded_copy_wgrad,stage_5,direct,481,480,,371,29.6,29.4,,414,scalar load
+SIMD,padded_copy_wgrad,stage_7,pair,489.95,482.95,,486,0.8,-0.6,,"493,494",scalar load
+SIMT,padded_copy_gather,stage_15,tile_store,104,,4,458,-99.1,,-99.1,660,SIMT_STG tile store (loop)
+SIMD,padded_copy_gather,stage_15,tile_store,216,,16,1171,-98.6,,-98.6,698,MTE3 UB->OUT tile store
+SIMT,padded_copy_scatter,stage_17,tile_store,104,,4,525,-99.2,,-99.2,716,SIMT_STG tile store (loop)
+SIMD,padded_copy_scatter,stage_17,tile_store,216,,16,1185,-98.6,,-98.6,927,MTE3 UB->OUT tile store
+SIMT,padded_copy_wgrad,stage_22,scalar_store,515.4,,515.4,420,22.7,,22.7,867,SIMT_STG scalar wgrad store
+SIMD,padded_copy_wgrad,stage_22,scalar_store,481.95,,481.95,436,10.5,,10.5,1258,MTE3 UB->OUT scalar store (core0)
