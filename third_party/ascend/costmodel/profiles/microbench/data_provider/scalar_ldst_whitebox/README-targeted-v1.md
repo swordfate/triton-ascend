@@ -122,7 +122,6 @@ PY
 **2.2.2 indirect：不需要额外的 dependency 验证**
 
 - 目标 6 个 kernel 的 indirect stage 全是 `exposure=1`，因此 `max(0, exposure-1)*L_dep = 0`；它本质就是一次 diff-line scalar load，line-fill 机制已被 §2.2.1 验证。
-- 目标 CAModel indirect window 406–515 core cycle，和 board diff-line baseline（289.0 ns ≈ 520 core cycle @1.8G）在同一量级：−22% ~ −1%。负尾来自目标地址/BIU 仲裁波动，不是 dependency 模型误差。
 - `L_dep` 只在未来出现 `exposure>1` 深依赖链时使用，本目标不需要对它做 CAModel-vs-board 对照。
 
 **2.2.3 store：CAModel window 对 board 单发即可**
@@ -130,8 +129,6 @@ PY
 - 目标只用 SIMT K=1 store（`SIMT_STG`）；用同指令、同 issue→ack/retire 窗口的 board 单发 SYS_CNT 对照：
   - CCE probe `simt_st_uniform_o1`：CAModel 491 core cycle = 272.8 ns vs board median 286 ns → **−4.6%**；
   - target padded/binned wgrad store stage：559 / 551 core cycle = 310.6 / 306.1 ns vs 286 ns → **+8.6% / +7.0%**。
-- 白盒 store 公式的 −19.5% ~ +13.8% 是 §3.3 的公式拟合误差，不是 CAModel 测量误差；store 不需要 board marginal。
-- SIMT K>1 / SIMD MTE3 store 当前 route 不选，不在本目标 claim 内。
 
 **2.2.4 小结**
 
