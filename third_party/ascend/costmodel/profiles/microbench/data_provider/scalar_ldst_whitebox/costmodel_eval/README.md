@@ -1,7 +1,7 @@
 # costmodel_eval — 白盒公式调整与 6-kernel 打分验证
 
 > 目标 6 个 scalar-dominated kernel 的针对性建模/公式/验证总表见 [`../README-targeted-v1.md`](../README-targeted-v1.md)。
-> 2026-09-19 更新：default profile 的 SIMT `uniform_load_fill_system_cycles` 由 524 联合重拟合为 **480**；下文旧表中出现 524/530 的 SIMT load 数值均为历史值，最新目标场景结果见 [`../README-targeted-v1.md`](../README-targeted-v1.md)。
+> 2026-09-19 更新：default profile 的 SIMT `uniform_load_fill_system_cycles` 由 524 联合重拟合为 raw **480**；随后又做单位修正——CAModel raw core cycle 按 `988.9/1800=0.5493889` 转成 SYS_CNT cycle（profile 值 263.7067，profile_version v20）。`summarize_all_scalar.py` 支持 `--sim-mhz/--sys-mhz`，输出 `costmodel_sys_cycles` 和转回 CAModel 域的 `costmodel_camodel_cycles`。下文旧表中 524/530 的 SIMT load 数值均为历史值。
 
 本目录是 `README.md` §11 的可复现脚本与结果。
 
@@ -19,10 +19,10 @@
 | `run_scalar_dominate_seeded.py` | 固定 `--seed` 的 runner：padded seed=12 走 indirect 分支，binned seed=0 走 `index_*` |
 | `run_camodel_seeded_one.sh` | 单 kernel / 单 mode 的 seeded CAModel |
 | `run_seeded_camodel.sh` | 6 kernel seeded CAModel 一键跑（seed 12 / 0，在 20260918 目录里另存为 20260918_seeded 结果） |
-| `summarize_all_scalar.py` | matched-only + per-stage-union 全量汇总；支持 `--mode auto/simd/simt`；SIMT 按 DC `size<128` 排除 vector tile load |
-| `results/all_scalar_eval.csv` / `.md` | 6-kernel SIMT 全量打分表（当前 profile `uniform_load_fill=480`，seeded CAModel） |
+| `summarize_all_scalar.py` | matched-only + per-stage-union 全量汇总；支持 `--mode auto/simd/simt` 和 `--sim-mhz/--sys-mhz` 单位换算；SIMT 按 DC `size<128` 排除 vector tile load |
+| `results/all_scalar_eval.csv` / `.md` | 6-kernel SIMT 全量打分表（SYS_CNT profile，含 CAModel-equiv 列；profile_version v20） |
 | `results/all_scalar_eval_fill524.csv` | 旧 `uniform_load_fill=524` 结果，供重拟合前后对照 |
-| `results/all_scalar_eval_simd.csv` / `.md` | 6-kernel forced-SIMD 全量打分表（同 profile/report，`--mode simd`） |
+| `results/all_scalar_eval_simd.csv` / `.md` | 6-kernel forced-SIMD 全量打分表（SYS_CNT profile，含 CAModel-equiv 列；`--mode simd`） |
 | `results/` | 验证结果 CSV |
 
 ## 运行环境
@@ -70,8 +70,8 @@ python3 summarize_all_scalar.py --base ~/scalar_dominate_eval_seeded \
 - SIMT 按 DC request `size<128` 过滤 scalar load，`size=128` 的 vector tile load 不计入 scalar；
 - matched 实测量按地址族匹配（padded: indices/bin_ids vs bins/padded_bins/weights，binned: bins vs indices）。
 
-结果 `results/all_scalar_eval.{csv,md}`（`uniform_load_fill=480`）：direct 最大 +10.0%/−12.8%，indirect +19.7%/−4.5%，
-store −18.3%/−19.5%。SIMT direct/indirect MAPE 由 524 版本的 10.2%/16.2% 降到 8.0%/8.1%，route 仍全为 `all_simt_only`；
-代价是 CCE probe 三点误差从 0% 变为 −8.3%/−2.3%/−7.6%。残余误差来自目标 kernel fill 的地址/BIU 仲裁波动（406–558 cycle）、
+结果 `results/all_scalar_eval.{csv,md}`（profile_version v20，SYS_CNT 域）：直接 `costmodel_sys_cycles` 和转回 CAModel 域的 `costmodel_camodel_cycles` 两列都保留；
+direct 最大 +10.0%/−12.8%，indirect +19.7%/−4.5%，store −18.3%/−19.5%。SIMT direct/indirect MAPE 由 524 版本的 10.2%/16.2% 降到 8.0%/8.1%，
+单位修正后 route 复跑仍全为 `all_simt_only`；代价是 CCE probe 三点误差从 0% 变为 −8.3%/−2.3%/−7.6%。残余误差来自目标 kernel fill 的地址/BIU 仲裁波动（406–558 core cycle）、
 `stage_5` 控制流未执行（matched 口径已排除）以及 CAModel 冷链路与公式拟合差；
 不再列 static worst-case。详细表和分析见 [`../README-targeted-v1.md`](../README-targeted-v1.md)。

@@ -2,7 +2,9 @@
 """Matched-only, per-stage-union comparison for the 6 scalar-dominated kernels.
 
 Costmodel side: only the stages that actually executed in the sampled CAModel
-program are summed (`matched`).
+program are summed (`matched`).  The costmodel profile stores SYS_CNT-domain
+cycles (988.9 MHz by default); pass --sim-mhz/--sys-mhz to convert them back to
+CAModel core cycles before comparing with the CAModel union window.
 CAModel side: every matched logical stage contributes the union window of its
 instructions (first issue -> last retire).  The category total is the sum over
 matched stages, so overlapping instructions inside one stage are counted once,
@@ -223,9 +225,14 @@ def main():
     ap.add_argument("--csv", default=None)
     ap.add_argument("--mode", default="auto", choices=["auto", "simd", "simt"],
                     help="force implementation mode; default follows decision_kind")
+    ap.add_argument("--sim-mhz", type=float, default=1800.0,
+                    help="CAModel/simulator core clock for converting profile SYS_CNT cycles back to CAModel cycles")
+    ap.add_argument("--sys-mhz", type=float, default=988.9,
+                    help="SYS_CNT clock of the costmodel profile")
     args = ap.parse_args()
     base = pathlib.Path(args.base).expanduser()
     report_dir = pathlib.Path(args.report_dir).expanduser() if args.report_dir else base / "out"
+    cycle_scale = args.sim_mhz / args.sys_mhz if args.sim_mhz > 0.0 and args.sys_mhz > 0.0 else 1.0
     rows = []
 
     for k in KERNELS:
@@ -289,12 +296,14 @@ def main():
                 cat_rows[key].append((st, srows))
 
         def add(cat, entries, total_stages, note=""):
-            pred = sum(st["cycles"] for st, _ in entries)
+            pred_sys = sum(st["cycles"] for st, _ in entries)
+            pred_cam = pred_sys * cycle_scale
             meas = sum(union(srows) for _, srows in entries)
-            err = round((pred - meas) / meas * 100.0, 1) if meas else ""
+            err = round((pred_cam - meas) / meas * 100.0, 1) if meas else ""
             rows.append({
                 "kernel": k, "mode": mode, "category": cat,
-                "costmodel_matched": round(pred, 2),
+                "costmodel_sys_cycles": round(pred_sys, 2),
+                "costmodel_camodel_cycles": round(pred_cam, 2),
                 "camodel_stage_union": round(meas, 2) if meas else "",
                 "error_pct": err,
                 "matched_stages": f"{len(entries)}/{total_stages}",

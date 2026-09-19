@@ -1,7 +1,7 @@
 # scalar load/store/compute 白盒对比总览
 
 > 目标 6 个 scalar-dominated kernel 的针对性建模与验证请看 [`README-targeted-v1.md`](README-targeted-v1.md)。
-> 2026-09-19 更新：default profile 的 SIMT `uniform_load_fill_system_cycles` 由 524 联合重拟合为 **480**；下文旧表中出现 524/530 的 SIMT load 数值均为历史值，最新目标场景结果见 [`README-targeted-v1.md`](README-targeted-v1.md)。
+> 2026-09-19 更新：default profile 的 SIMT `uniform_load_fill_system_cycles` 由 524 联合重拟合为 raw **480**；随后所有 CAModel 派生结构化字段按 `988.9/1800=0.5493889` 从 1.8GHz core cycle 转成 SYS_CNT cycle（profile_version v20）。单位修正后 6 kernel route 复跑仍全为 `all_simt_only`。下文旧表中 524/530 的 SIMT load 数值均为历史值，最新目标场景结果见 [`README-targeted-v1.md`](README-targeted-v1.md)。
 
 > **目的**：把 SIMD MainScalar 与 SIMT warp 在 scalar **load / store / compute / load+vec compute** 的各种 case 下
 > 放到同一口径比较，回答“谁快、快多少”。
