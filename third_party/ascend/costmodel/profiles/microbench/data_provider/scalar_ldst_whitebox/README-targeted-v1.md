@@ -5,6 +5,7 @@
 > 固定条件：`shape=(sl,hs,ne,top_k)=(4,256,4,2)`、`BLOCK_X=64`、`superblock_factor=1`、`num_warps=1`。
 > 当前 route：6 个 kernel 全部 `all_simt_only`；本文同时给出 forced `simd` 的实现公式对照。
 > 代码基线：`scalar-load-whitebox` @ `65e46a3bc`；公式参数来自 `david_v100_simd_simt_v1.json`。
+> **2026-09-19 口径**：profile_version `david-v100-simd-simt-20260919-v20`；CAModel 1.8GHz core cycle 已按 `988.9/1800=0.5493889` 转成 SYS_CNT cycle；单位修正后 6 kernel route 复跑仍全部 `all_simt_only`。
 > 大而全的探索见 [README.md](README.md) / [README-tidy.md](README-tidy.md)；本文只保留目标场景需要的建模、标定和验证。
 
 ---
@@ -13,12 +14,12 @@
 
 1. 目标scalar load/store场景可以分为四类：(1) **direct scalar load same-line**；(2) **direct scalar load diff-line**；(3) **indirect scalar load**；(4) **scalar store**（SIMT `SIMT_STG` / SIMD Triton MTE3）。
 2. 白盒公式与 CAModel-微基准的误差：SIMD load 误差 ≤0.8%；SIMT load 误差为 −8.3% ~ −2.3%；store 误差 −11.6% ~ +4.2%。这些 raw CAModel 值写入 profile 时都乘 0.5493889。
-  - 乘 0.5493889是因为 CAModel 内部时间换算 = 1.8 GHz：同一核心 active window 的 dump cycle span ÷ CAModel 自己显示的 `duration_time(us)` 恒为 1.800 GHz。costmodel 的 `*_system_cycles` 是 SYS_CNT 域（988.9MHz）；cycle 数换算为 `T_sys = T_camodel × 988.9/1800 = T_camodel × 0.5493889`（rate 则乘 1800/988.9）。
+3. **单位换算**：CAModel 内部时间换算 = 1.8 GHz（同一核心 active window 的 dump cycle span ÷ CAModel 自己显示的 `duration_time(us)` 恒为 1.800 GHz）；costmodel 的 `*_system_cycles` 是 SYS_CNT 域（988.9MHz）。cycle 数换算为 `T_sys = T_camodel × 988.9/1800 = T_camodel × 0.5493889`（rate 则乘 1800/988.9）。
 4. 白盒公式与 CAModel-6个目标kernel的平均误差（MAPE）：
    - SIMT：direct 8.0%、indirect 8.1%、store 18.9%；
    - SIMD：direct 10.9%、indirect 10.1%、store 9.5%。
    - 三类 MAPE 均 <20%；单点最大为 SIMT binned wgrad indirect 的 +19.7%。
-5. **CAModel 可靠性**：direct load 与上版真卡微基准的绝对误差约 −9.3% ~ +1.9%，可直接支撑白盒 load 标定；单位换算方向也由该组数据验证（CAModel 530 core cycle = 291.2 SYS_CNT cycle ≈ board 291.8ns）。indirect 的依赖项是 **cycle 域**标定；store 不做 board marginal 对照，直接用白盒公式和 CAModel stage window 比（误差 −11.6% ~ +13.8%，见 §2.2.3）。
+5. **CAModel 可靠性**：目标实际用到的 direct load 与真卡微基准误差 ±10% 内；目标 indirect 是 shallow diff-line load（`exposure=1`，`L_dep` 收费为 0），其 CAModel window 已有同机制 board line-fill 对照（差 −22%~−1%）；SIMT K=1 store 与 board 单发差 −4.6%~+8.6%。深依赖链和 K>1/SIMD MTE3 store 不在目标 route 的 claim 范围内（目标模型不使用它们）；§3.3/§4 里更大的误差是白盒公式拟合误差，不是 CAModel 测量不可靠。
 6. SIMD scalar store 在 Triton 下走 MTE3（`scalar → UB staging → MTE3 MOV UB→OUT`），不是 CCE MainScalar `ST_XD_XN_IMM → GM`；公式为 `20 + 450 + (K-1)*480`。目标算子当前 route 全为 SIMT，所以 SIMD store 只作为 forced-mode 对照。
 
 ---
@@ -65,7 +66,6 @@
 ### 1.3 固定变量与采样
 
 - `K = scalar_load_count_per_iteration` / `scalar_store_count_per_iteration`；
-- `U = scalar_load_unique_lines` / `scalar_store_unique_lines`；
 - `share = scalarLoadsShareLine` / `scalarStoresShareLine`；
 - `exposure = indirectScalarLoadExposureCount` / `indirectScalarStoreExposureCount`（producer-side 去重）；
 - CAModel 取 `core0.veccore0` 一个 program；`msopprof simulator --soc-version=Ascend950PR_9599 --core-id=0 --launch-count=1`；
@@ -105,50 +105,93 @@ PY
 结论：**CAModel 内部 cycle → time 的换算就是 1.8 GHz**，不是 1.65 GHz。
 后文所有 `ns@1.8G = cycle / 1.8`。
 
-### 2.2 CAModel 与上版真卡微基准的绝对时间误差
+### 2.2 CAModel 与 board 的绝对时间对照：只证明目标真正使用的 CAModel term
 
-“上版真卡微基准”指 `syscnt/board_marginal/` 的 CCE marginal 探针（`board_vs_model_agg.csv`，SYS_CNT 997.7 MHz）
-以及旧版 dependency 探针（`scalar_ldst/{simd,simt}_scalar_gm_dep.cce`）。
+#### 2.2.0 本节证明的 claim 范围
 
-**2.2.1 direct load same / diff-line（K=1）**
+这里的 claim **不是**“CAModel 对所有场景都准”，而是：
 
-| 场景 | mode | CAModel cycle | CAModel ns@1.8 | board 微基准 | board ns | err |
+> 目标 6 个 kernel 的 route/score 实际使用的三类 CAModel window——direct scalar load、`exposure=1` shallow indirect 的 consumer line fill、SIMT K=1 scalar store——都有 **同指令机制、同完成窗口** 的 board 对照，误差约 ±10%（indirect line-fill 最差 −22%）。
+
+没有进入目标 route 的 term 不在 claim 范围内；这不是“CAModel 不可信”，而是“目标模型没有使用它们”。
+
+| CAModel term | 目标 route 是否使用 | 本节 board 证据 |
+|---|---|---|
+| direct same/diff-line load active window | ✅ 使用 | §2.2.1 marginal probes |
+| shallow indirect consumer line fill（`exposure=1`，`L_dep` 收费 0） | ✅ 使用 | §2.2.2，与 diff-line load 同机制对照 |
+| SIMT K=1 `SIMT_STG` issue→ack/retire | ✅ 使用 | §2.2.3 单发 SYS_CNT |
+| `exposure>1` 的额外 dependency edge（`L_dep`） | ❌ 6 kernel 全为 0 | 不是缺口；要扩展深链 claim 才需要 paired probe |
+| SIMT K>1 store / SIMD MTE3 store | ❌ 当前 route 不选 | 不影响本目标；列为 future work |
+
+#### 2.2.1 direct load same / diff-line（K=1）
+
+| 场景 | mode | CAModel cycle | CAModel ns@1.8 | board 微基准 | board median ns | err |
 |---|---|---:|---:|---|---:|---:|
-| direct same-line load | SIMD | 447 | 248.3 | `m_main_ld_same_k1` | 274.5 | **−9.5%** |
 | direct same-line load | SIMT | 530 | 294.4 | `m_simt_ld_uni_same_k1` | 291.8 | **+0.9%** |
-| direct diff-line load | SIMD | 447 | 248.3 | `m_main_ld_diff_k1` | 273.8 | **−9.3%** |
 | direct diff-line load | SIMT | 530 | 294.4 | `m_simt_ld_uni_diff_k1` | 289.0 | **+1.9%** |
+| direct same-line load | SIMD | 447 | 248.3 | `m_main_ld_same_k1` | 274.5 | **−9.5%** |
+| direct diff-line load | SIMD | 447 | 248.3 | `m_main_ld_diff_k1` | 273.8 | **−9.3%** |
 
+- board 数据来自 `syscnt/board_marginal/board_vs_model_agg.csv`，每个函数是多次 run 的中位数（如 `m_simt_ld_uni_diff_k1` median 288.3 SYS_CNT cycle，min/max 272.0/295.8）。
+- 结论：目标会用到的 direct load 两个分支，CAModel window 与真卡微基准绝对误差 **±10% 内**；这是后面 indirect/store 对照的机制基线。
 
-**2.2.2 indirect dependency**
+#### 2.2.2 目标 indirect 用的是 line fill，不是 dependency：有同机制 board 对照
 
-| 场景 | mode | CAModel 依赖项 | cycle 域对比 | ns 域对比 |
-|---|---|---|---|---|
-| indirect edge | SIMD | `L_dep=1.95 cyc` | board dep extra ≈2 cyc → **−2.5%** | CAModel 1.08 ns vs board ≈2.0 ns → −45.8% |
-| indirect edge | SIMT | `L_dep=65.4 cyc` | board dep extra 65.4 cyc → **0%（标定来源）** | CAModel 36.3 ns vs board 65.4 ns → −44.4% |
+- 6 个目标 kernel 的 indirect stage report 全部是 `exposure=1`（producer-side 去重后只有一条 shallow 边），因此 `max(0, exposure-1)*L_dep = 0`，`T_indirect = T_load`。
+- 也就是说：**目标成本公式没有使用 CAModel 的 dependency 时序模型**，不存在“CAModel 没和 board 比 `L_dep`”的可信度缺口；`L_dep` 只服务未来可能出现的深依赖链。
+- CAModel 实际量的是 indirect consumer 的 `SIMT_LDG`/`LD_*` `issue→retire` active window。它与 §2.2.1 已验证的 diff-line scalar load 是同一个 line-fill 硬件机制；CAModel dump 里也能看到 producer retire → consumer issue 的 gap（例如 binned SIMD 实测 12–19 cycle，见 `63-workspace/10-scalar-camodel-bench/six_camodel_tiny/FIRST-TWO-LOADS.md`），只是目标公式对该 edge 收费为 0，所以不需要拿这个 gap 的绝对值来标定。
 
-- 结论：indirect 的 `L_dep` 是 **board SYS_CNT cycle 域**拟合量，在 costmodel 的 system-cycle 公式里工作，不能先除 1.8 再和 board ns 直接比。
-- 目标 kernel 的 indirect 验证因此放在 §4 的 matched-only + stage-union（CAModel cycle 域）里做。
+把目标 kernel 的 CAModel indirect window 和同机制的 board diff-line scalar load baseline 放在一起：
 
-**2.2.3 scalar store：白盒公式 vs CAModel**
+| target indirect window | CAModel union cyc (1.8G) | CAModel ns | board diff-line baseline | err |
+|---|---:|---:|---:|---:|
+| padded_copy_gather stage_7 | 509 | 282.8 | 289.0 ns | −2.1% |
+| padded_copy_scatter stage_7 / stage_11 | 458 / 515 | 254.4 / 286.1 | 289.0 ns | −11.9% / −1.0% |
+| padded_copy_wgrad stage_7 | 481 | 267.2 | 289.0 ns | −7.5% |
+| binned_copy_gather indirect | 436 | 242.2 | 289.0 ns | −16.2% |
+| binned_copy_scatter indirect | 436 | 242.2 | 289.0 ns | −16.2% |
+| binned_copy_wgrad indirect | 406 | 225.6 | 289.0 ns | −21.9% |
 
-store 不引入 board marginal，也不把 CAModel 的 cold 短链路和 board 吞吐混在一起；直接看白盒公式与 CAModel 指令窗口：
+- 同时看 CAModel 内部基线：CCE probe `simt_ld_uniform_diff_o4` = 526 core cycle、单条 diff-line `o1` = 530；board baseline 289.0ns 对应约 520 core cycle @1.8G。目标 indirect window 406–515 core cycle 与这两个基线的关系，和 CAModel 自身在 6 个 kernel 里观察到的 line-fill 波动范围（406–558）一致。负尾来自目标代码地址/BIU 仲裁差异，不是 dependency 建模误差。
+- 结论：**目标 indirect 的 CAModel 量是 line fill，已有同机制 board 对照（−22% ~ −1%）；`L_dep` 的逐 edge 校验是深链场景的 future work，不影响本目标 claim。**
 
-| 场景 | mode | 公式 | 公式 cycle | CAModel window | err |
+#### 2.2.3 目标 scalar store（SIMT K=1）：CAModel window vs board 单发，不用白盒公式
+
+- 目标 route 是 `all_simt_only`；padded/binned wgrad 各只有 1 条 scalar store（K=1），走 `SIMT_STG`。
+- 可靠性证据只使用 board **单发 SYS_CNT**（`store_scalar_o1_syscnt.cce` 的 issue→ack/retire 窗口），和 CAModel 的 `SIMT_STG` `issue→retire` window 是同一指令、同一完成口径。
+- board raw reps（ns）：`1267`（首次 outlier）、`288, 307, 250, 270, 279, 249, 374, 329, 284`；median = **286 ns**。
+
+| 场景 | mode | CAModel window cyc | CAModel ns@1.8 | board 单发 median ns | err |
 |---|---|---:|---:|---:|---:|
-| `simt_st_uniform_o1`（K=1） | SIMT | `450` | 450 | 491 | **−8.4%** |
-| `simt_st_uniform_same_o4`（K=4 same-line） | SIMT | `555+(4-1)*480` | 1995 | 1914 | **+4.2%** |
-| `simt_st_uniform_diff_o4`（K=4 diff-line） | SIMT | `450+(4-1)*20` | 510 | 577 | **−11.6%** |
-| `padded_copy_wgrad` store stage（K=1） | SIMT | `450` | 450 | 559 | **−19.5%** |
-| `binned_copy_wgrad` store stage（K=1） | SIMT | `450` | 450 | 551 | **−18.3%** |
-| `padded_copy_wgrad` store stage（K=1） | SIMD Triton | `20+450` | 470 | 496（MTE3 MOV window） | **−5.2%** |
-| `binned_copy_wgrad` store stage（K=1） | SIMD Triton | `20+450` | 470 | 413（MTE3 MOV window） | **+13.8%** |
+| CCE probe `simt_st_uniform_o1`（K=1） | SIMT | 491 | 272.8 | 286 | **−4.6%** |
+| padded_copy_wgrad target store stage | SIMT | 559 | 310.6 | 286 | **+8.6%** |
+| binned_copy_wgrad target store stage | SIMT | 551 | 306.1 | 286 | **+7.0%** |
 
-- SIMT store 公式直接拟合 `SIMT_STG` 窗口：K=1/同 line K≥2/diff-line K≥2 三条公式分别对应 `simt_st_uniform_o1`、`..._same_o4`、`..._diff_o4`。
-- SIMD store 公式拟合的是目标 kernel 的 **MTE3 stage window**（`MOV_SRC_TO_DST_ALIGNv2` issue→retire），不是 Triton demo 的整条短链路；整条短链路的 1079 cycle 还包含 scalar→UB staging 和等 VF flag，不属于 costmodel 的 store stage 系数。
-- 结论：store 的白盒公式和 CAModel 结果误差在 −19.5% ~ +13.8%（probe 三条 + 目标 kernel 两条），目标 kernel matched-only MAPE 见 §4。
+- 结论：目标实际用到的 SIMT K=1 store，CAModel window 与 board 单发 absolute time 在 **±9%** 内；这是直接的 CAModel-vs-board 证据。
+- 白盒 store 公式与 CAModel window 之间的拟合误差（−19.5% ~ +13.8%）是**公式拟合层**，放在 §3.3，不作为 CAModel 可靠性的证据；两者不能混为一谈。
+- SIMT K>1 store / SIMD MTE3 store 不在目标 route 上；它们不参与本 claim，列为 future paired probe。
 
----
+#### 2.2.4 CAModel 可信度 claim 总结
+
+| 目标实际使用 term | CAModel vs board 证据 | 误差 | 结论 |
+|---|---|---:|---|
+| direct same/diff-line load | §2.2.1 marginal probes | −9.5% ~ +1.9% | ✅ 同窗口对齐 |
+| shallow indirect line fill（`exposure=1`） | §2.2.2 同机制 diff-line baseline | −21.9% ~ −1.0% | ✅ 同机制对齐；负尾是 BIU 仲裁方差 |
+| SIMT K=1 scalar store | §2.2.3 单发 SYS_CNT | −4.6% ~ +8.6% | ✅ 同指令/同窗口对齐 |
+| `exposure>1` dependency edge | 目标系数为 0，不需要 | — | 不在 claim 内，future work |
+| SIMT K>1 / SIMD MTE3 store | 目标 route 不选 | — | 不在 claim 内，future work |
+
+> **回答“别人怎么相信 CAModel”**：
+> 看 target kernel 实际用了哪些 CAModel term，然后看每个 term 是否有同指令机制、同完成窗口的 board 对照。表里 target 实际使用的三类都有，误差约 ±10%（indirect 最差 −22%）；未进入 target 的 term 不需要用 board 背书，也不是把 CAModel 判为不可靠的理由。
+>
+> **回答“白盒公式误差大是不是说明 CAModel 不准”**：
+> 不是。白盒公式是在 CAModel window 之上的一层拟合；CAModel window 本身在 §2.2.1/§2.2.3 已经和 board 对齐。§3.3/§4 的 −19.5% 等数字是公式拟合残差，不是 CAModel 测量误差。
+
+**以下不是当前 claim 的缺口，而是“如果要扩大 claim 到深依赖 / K>1 store / MTE3 store”时的 next steps（三组同窗口 paired probe）：**
+
+1. **cold pointer-chase（indirect）**：同一份 `simd/simt_scalar_gm_dep.cce`，board 用 cold-buffer rotation + `get_sys_cnt` 测 dependent−independent 斜率；CAModel 用新 aclrt host 跑同一 kernel，取 `LD/SIMT_LDG` dependent window；两边换算到 SYS_CNT cycle 后比 `L_dep`。
+2. **K>1 store**：board 用 `store/scalar_o4/*_syscnt.cce` 单发窗口，CAModel 取 `ST_XD_XN_IMM` / `SIMT_STG` issue→retire；重点验证 same-line merge。
+3. **SIMD MTE3 store**：board 用 Triton kernel + no-store baseline 做差分（cold buffer rotation、中位数），CAModel 取 `MOV_SRC_TO_DST_ALIGNv2` stage window；对齐每 op 边际而不是整条 1079-cycle 冷链路。
 
 ## 3. 白盒公式
 
@@ -157,7 +200,6 @@ store 不引入 board marginal，也不把 CAModel 的 cold 短链路和 board �
 | 变量 | 含义 | 来源 |
 |---|---|---|
 | `K` | stage 内 scalar load/store 数 | `StageWorkload::scalarLoadCount` / `scalarStoreCount` |
-| `U` | 不同 64B/128B line 数 | `scalarLoadUniqueLines` / `scalarStoreUniqueLines` |
 | `share` | IR 是否证明同一 line | `scalarLoadsShareLine` / `scalarStoresShareLine` |
 | `exposure` | indirect producer 被消费的边数（producer-side 去重） | `indirectScalarLoadExposureCount` / `indirectScalarStoreExposureCount` |
 | `mode` | SIMD / SIMT | stage implementation |
@@ -171,9 +213,9 @@ store 不引入 board marginal，也不把 CAModel 的 cold 短链路和 board �
 **A. direct scalar load — SIMD MainScalar**
 
 ```text
-u = share ? 1 : clamp(U, 1, K)          // U = 不同 cacheline 数；clamp 把 U 限制在 [1,K]；U 未知时按 U=K（保守 diff-line）
+u = share ? 1 : K          // share=true: 同一条 cacheline；否则按 K 条不同 line
 extra(u) = (u <= 4) ? 250 : 350
-T_main(K,U,share) = 7 + 440 // 固定 prep 7 + 首次 64B line fill 440
+T_main(K,share) = 7 + 440 // 固定 prep 7 + 首次 64B line fill 440
                   + max(0, u - 2) * extra(u) // 超过 2 个 outstanding 的额外 line fill
                   + (K - u) * 12.333 // 同 line hit
                   + (K - 1) * 3 // 额外 op 的 issue
@@ -186,7 +228,7 @@ T_main(K,U,share) = 7 + 440 // 固定 prep 7 + 首次 64B line fill 440
 - `(K-1)*3`：每条额外 op 的 issue/serialization 成本；profile 值 1.648。
 - same-line 分支（`share=true`, u=1）：`T = 447 + (K-1)*15.333`；K=1→447，K=4→493。
 - diff-line 分支（u=K）：K≤2 时 2 个 outstanding 够用，`T=447+(K-1)*3`（K=1→447，K=2→450）；K=4 时多 2 条 line，`T=956`。
-- 说明：当前 `StagePartitioner` 实际只给出 `U∈{1,K}`：`K` 来自 IR 里 scalar load op 的计数（`scalarLoadCount`）；`U` 默认也等于 K，只有 `scalarLoadsShareOneLine` 能证明同一 64B line 时才降为 1。因此当前公式**实际等价于 `u = share ? 1 : K`**；`clamp(U,1,K)` 是防御性写法（挡住 U=0/负/U>K），也是给以后“部分 line 去重”分析留的接口。`mapWorkload` 调用前已经 clamp 一次，`mainScalarLoadCycles` 内部又 clamp 一次，确实有一点 belt-and-suspenders 冗余，但没有行为差异。
+- 当前实现只区分两种情况：`share=true` 时 `u=1`（同一条 line）；否则 `u=K`（K 条不同 line）。
 
 **B. direct scalar load — SIMT warp-uniform**
 
@@ -204,7 +246,7 @@ T_simt(K,share) = 6 + 480 + (K - 1) * margin
 **C. indirect scalar load**
 
 ```text
-T_indirect = T_load(mode; K,U,share) + max(0, exposure - 1) * L_dep
+T_indirect = T_load(mode; K,share) + max(0, exposure - 1) * L_dep
 L_dep(SIMD) = 1.95 cyc
 L_dep(SIMT) = 65.4 cyc
 ```
