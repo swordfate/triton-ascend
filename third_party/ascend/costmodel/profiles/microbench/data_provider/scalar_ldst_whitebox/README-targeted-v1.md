@@ -186,6 +186,7 @@ T_main(K,U,share) = 7 + 440 // 固定 prep 7 + 首次 64B line fill 440
 - `(K-1)*3`：每条额外 op 的 issue/serialization 成本；profile 值 1.648。
 - same-line 分支（`share=true`, u=1）：`T = 447 + (K-1)*15.333`；K=1→447，K=4→493。
 - diff-line 分支（u=K）：K≤2 时 2 个 outstanding 够用，`T=447+(K-1)*3`（K=1→447，K=2→450）；K=4 时多 2 条 line，`T=956`。
+- 说明：当前 `StagePartitioner` 实际只给出 `U∈{1,K}`：`K` 来自 IR 里 scalar load op 的计数（`scalarLoadCount`）；`U` 默认也等于 K，只有 `scalarLoadsShareOneLine` 能证明同一 64B line 时才降为 1。因此当前公式**实际等价于 `u = share ? 1 : K`**；`clamp(U,1,K)` 是防御性写法（挡住 U=0/负/U>K），也是给以后“部分 line 去重”分析留的接口。`mapWorkload` 调用前已经 clamp 一次，`mainScalarLoadCycles` 内部又 clamp 一次，确实有一点 belt-and-suspenders 冗余，但没有行为差异。
 
 **B. direct scalar load — SIMT warp-uniform**
 
