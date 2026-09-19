@@ -40,7 +40,11 @@ simd["main_load_prep_system_cycles"] = 7.0 * SIM_TO_SYS
 simd["main_load_fill_system_cycles"] = 440.0 * SIM_TO_SYS
 simd["main_load_hit_system_cycles"] = (37.0 / 3.0) * SIM_TO_SYS
 simd["main_load_issue_system_cycles"] = 3.0 * SIM_TO_SYS
-# outstanding=2, threshold=4 are counts, not cycles; extra-line cycles are in the installed profile.
+# MSHR depth / threshold are counts; extra-line costs are CAModel cycles too.
+simd["main_load_outstanding_line_count"] = 2
+simd["main_load_extra_line_low_system_cycles"] = 250.0 * SIM_TO_SYS
+simd["main_load_extra_line_high_system_cycles"] = 350.0 * SIM_TO_SYS
+simd["main_load_extra_line_high_threshold"] = 4
 
 # SIMT load: joint refit of CCE probes and the six scalar-dominated target
 # kernels.  fill=480 -> base 486; same-line serial=(1923-530)/3 unchanged;
