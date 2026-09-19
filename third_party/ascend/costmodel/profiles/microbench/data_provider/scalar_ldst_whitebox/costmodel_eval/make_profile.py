@@ -31,9 +31,13 @@ simd["main_load_hit_system_cycles"] = 37.0 / 3.0
 simd["main_load_issue_system_cycles"] = 3.0
 # keep outstanding=2, low=250, high=350, threshold=4
 
-# SIMT load: prep 6 + fill 524 = 530; same-line serial=(1923-530)/3; diff issue 0.001.
+# SIMT load: joint refit of CCE probes and the six scalar-dominated target
+# kernels.  fill=480 -> base 486; same-line serial=(1923-530)/3 unchanged;
+# diff issue 0.001 keeps the structured branch.  Probe errors become
+# (486-530)/530=-8.3%, (486+3*464.333-1923)/1923=-2.3%, (486-526)/526=-7.6%;
+# target-kernel MAPE improves from direct 10.2%/indirect 16.2% to ~8.0%/8.1%.
 simt["uniform_load_prep_system_cycles"] = 6.0
-simt["uniform_load_fill_system_cycles"] = 524.0
+simt["uniform_load_fill_system_cycles"] = 480.0
 simt["uniform_load_same_line_serial_system_cycles"] = (1923.0 - 530.0) / 3.0
 simt["uniform_load_diff_line_issue_system_cycles"] = 0.001  # >0 keeps structured branch
 

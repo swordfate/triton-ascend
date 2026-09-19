@@ -221,6 +221,8 @@ def main():
     ap.add_argument("--report-dir", default=None,
                     help="dir containing costmodel_<kernel>.json (default: <base>/out)")
     ap.add_argument("--csv", default=None)
+    ap.add_argument("--mode", default="auto", choices=["auto", "simd", "simt"],
+                    help="force implementation mode; default follows decision_kind")
     args = ap.parse_args()
     base = pathlib.Path(args.base).expanduser()
     report_dir = pathlib.Path(args.report_dir).expanduser() if args.report_dir else base / "out"
@@ -232,8 +234,9 @@ def main():
             print("missing report", rp, file=sys.stderr)
             continue
         direct_stages, indirect_stages, store_stages, decision = report_stages(rp, None)
-        # Determine mode from decision, then refill cycles for that mode.
-        mode = "simd" if decision.startswith("all_simd") else "simt"
+        # Determine mode from decision unless explicitly forced.
+        mode = args.mode if args.mode != "auto" else (
+            "simd" if decision.startswith("all_simd") else "simt")
         direct_stages, indirect_stages, store_stages, decision = report_stages(rp, mode)
         camodel_mode = "simd" if mode == "simd" else "simt_only"
         dump = find_dump(base, k, camodel_mode)

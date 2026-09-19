@@ -1,5 +1,8 @@
 # scalar load/store 白盒报告
 
+> 目标 6 个 scalar-dominated kernel 的针对性建模与验证请看 [`README-targeted-v1.md`](README-targeted-v1.md)。
+> 2026-09-19 更新：default profile 的 SIMT `uniform_load_fill_system_cycles` 由 524 联合重拟合为 **480**；下文旧表中出现 524/530 的 SIMT load 数值均为历史值，最新目标场景结果见 [`README-targeted-v1.md`](README-targeted-v1.md)。
+
 > **汇总版（先看这个）：[README-tidy.md](README-tidy.md)**
 
 > 范围：目前包含 **单 scalar load op**（SIMD MainScalar / SIMT 32T / SIMT 1T）、**4-op scalar load**（same-line / diff-line，SIMD / SIMT 32T）、
@@ -1278,10 +1281,10 @@ load 以 §1–§6 的 CAModel 测试结果为准；store 以 §5.4 的 MTE3 实
 | `main_load_fill_system_cycles` | 450 | **440** | 白盒 BIU fill |
 | `main_load_hit_system_cycles` | 4 | **37/3 = 12.333** | 与 issue=3 一起拟合 o4 same 493 |
 | `main_load_issue_system_cycles` | 1 | **3** | o4 diff 956 的 fit |
-| `uniform_load_prep_system_cycles` | 50 | **6** | 6 + 524 = 530 = o1 window |
-| `uniform_load_fill_system_cycles` | 500 | **524** | 同上 |
+| `uniform_load_prep_system_cycles` | 50 | **6** | issue→DC tag；2026-09-19 后与 fill 一起使用 |
+| `uniform_load_fill_system_cycles` | 500 | **480（2026-09-19 joint refit）** | probe-only 原为 524（6+524=530 = o1 window）；为覆盖目标 kernel 406–558 fill，联合拟合为 480（base 486），见 [`README-targeted-v1.md`](README-targeted-v1.md) §3.2 B |
 | `uniform_load_same_line_serial_system_cycles` | 450 | **(1923-530)/3 = 464.333** | o4 same 1923 |
-| `uniform_load_diff_line_issue_system_cycles` | 2 | **0.001** | diff o4 = 530（实测 526，+0.8%）；必须 >0 才走 structured 分支 |
+| `uniform_load_diff_line_issue_system_cycles` | 2 | **0.001** | diff o4 = 486（实测 526，−7.6%）；必须 >0 才走 structured 分支 |
 | `uniform_store_same_line_base_system_cycles` | 555 | **297** | §5.4 发现 Triton SIMD store 走 MTE3；SIMT store 改用真卡 marginal ns ×1.8 |
 | `uniform_store_same_line_serial_system_cycles` | 480 | **(320-297)/3 = 7.667** | board o4 same 177.8 ns → 320 cyc |
 | `uniform_store_diff_line_base_system_cycles` | 450 | **297** | board o1 165.0 ns → 297 cyc |
@@ -1303,9 +1306,9 @@ load 以 §1–§6 的 CAModel 测试结果为准；store 以 §5.4 的 MTE3 实
 | SIMD MainScalar load o1 | 447 | 447 | 0% |
 | SIMD MainScalar o4 same | 493 | 493 | 0% |
 | SIMD MainScalar o4 diff | 956 | 956 | 0% |
-| SIMT warp-uniform load o1 | 530 | 530 | 0% |
-| SIMT warp-uniform o4 same | 1923 | 1923 | 0% |
-| SIMT warp-uniform o4 diff | 530 | 526 | +0.8% |
+| SIMT warp-uniform load o1 | 486 | 530 | −8.3% |
+| SIMT warp-uniform o4 same | 1879 | 1923 | −2.3% |
+| SIMT warp-uniform o4 diff | 486 | 526 | −7.6% |
 | SIMD MTE3 scalar store | 145.8 cyc = 81 ns | board marginal 81.0 ns | 0% |
 | SIMT warp-uniform store o1 | 297 cyc = 165.0 ns | board 165.0 ns | 0% |
 | SIMT warp-uniform store o4 same | 320 cyc = 177.8 ns | board 177.8 ns | 0% |
@@ -1313,6 +1316,9 @@ load 以 §1–§6 的 CAModel 测试结果为准；store 以 §5.4 的 MTE3 实
 
 > SIMD MainScalar store o1/o4 的 CAModel cycle（478/531/557）现在只作为
 > CCE 直写路径的参考，不再作为 Triton costmodel 的 store 系数。
+>
+> SIMT load 的 524→480 是 2026-09-19 joint refit：probe 三条从 0% 变成 −8.3%/−2.3%/−7.6%，
+> 目标 6 kernel direct/indirect MAPE 从 10.2%/16.2% 降到 8.0%/8.1%，route 仍 all_simt_only。
 >
 > §11.3 的 6-kernel load 打分只依赖上面的 load 参数；store 参数是在同一轮里按
 > §5.4/§1.2 另行改的，不影响 load 的预测值。

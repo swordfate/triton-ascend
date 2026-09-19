@@ -346,10 +346,10 @@
           1.676496
         ],
         "uniform_load_prep_system_cycles": 6.0,
-        "uniform_load_fill_system_cycles": 524.0,
+        "uniform_load_fill_system_cycles": 480.0,
         "uniform_load_same_line_serial_system_cycles": 464.3333333333333,
         "uniform_load_diff_line_issue_system_cycles": 0.001,
-        "description": "SIMT warp-uniform scalar memory. Same-line branch uses the CAModel 128B formula T = 6 + 524 + (K-1)*464.333. Diff-line branch uses the structured model T = 6 + 524 + (K-1)*0.001 (0.001 keeps the structured branch; K<=4 predicts 526-530, matching README). When the IR cannot prove same-line sharing, the diff-line branch is used. Legacy scalar_ldst cheap-hash load/store cycles fits are retained as the fallback for profiles without the structured fields. The SIMT scalar store uses the white-box CAModel warp-uniform store window: same-line K>=2: 555+(K-1)*480; otherwise first-store/diff prep 450+(K-1)*20; a single scalar store uses the diff-line branch.",
+        "description": "SIMT warp-uniform scalar memory. Same-line branch uses the CAModel 128B formula T = 6 + 480 + (K-1)*464.333. Diff-line branch uses the structured model T = 6 + 480 + (K-1)*0.001; K<=4 diff-line predicts 486, chosen by a joint refit of the CCE probe windows (o1 530, o4-same 1923, o4-diff 526) and the six scalar-dominated target kernels (target direct/indirect MAPE ~8%, CCE probe K=1 error -8.3%). The earlier probe-only value was 524. When the IR cannot prove same-line sharing, the diff-line branch is used. Legacy scalar_ldst cheap-hash load/store cycles fits are retained as the fallback for profiles without the structured fields. The SIMT scalar store uses the white-box CAModel warp-uniform store window: same-line K>=2: 555+(K-1)*480; otherwise first-store/diff prep 450+(K-1)*20; a single scalar store uses the diff-line branch.",
         "uniform_store_same_line_base_system_cycles": 555.0,
         "uniform_store_same_line_serial_system_cycles": 480.0,
         "uniform_store_diff_line_base_system_cycles": 450.0,

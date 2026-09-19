@@ -1,5 +1,8 @@
 # scalar load/store/compute 白盒对比总览
 
+> 目标 6 个 scalar-dominated kernel 的针对性建模与验证请看 [`README-targeted-v1.md`](README-targeted-v1.md)。
+> 2026-09-19 更新：default profile 的 SIMT `uniform_load_fill_system_cycles` 由 524 联合重拟合为 **480**；下文旧表中出现 524/530 的 SIMT load 数值均为历史值，最新目标场景结果见 [`README-targeted-v1.md`](README-targeted-v1.md)。
+
 > **目的**：把 SIMD MainScalar 与 SIMT warp 在 scalar **load / store / compute / load+vec compute** 的各种 case 下
 > 放到同一口径比较，回答“谁快、快多少”。
 >
@@ -208,14 +211,17 @@ store 类（model = §1.1/1.8；实测 = 单发 median ns）：
 ```text
 SIMD MainScalar load : prep=7, fill=440, hit=37/3, issue=3
                        -> o1 447, o4-same 493, o4-diff 956
-SIMT warp-uniform    : prep=6, fill=524, same_serial=464.333, diff_issue=0.001
-                       -> o1 530, o4-same 1923, o4-diff 530 (实测 526)
+SIMT warp-uniform    : prep=6, fill=480 (2026-09-19 joint refit), same_serial=464.333, diff_issue=0.001
+                       -> o1 486, o4-same 1879, o4-diff 486 (probe CAModel 530/1923/526)
 SIMT store           : 改用真卡 marginal（ns×1.8）：base=297, same_serial=7.667,
                        diff_issue=35.833 -> o1 165.0 ns, o4-same 177.8 ns,
                        o4-diff 224.7 ns
 SIMD Triton store    : MTE3 white-box T = 20 + 450 + (K-1)*480
                        (单条约 470 cyc；不再用 board marginal throughput)
 ```
+
+> SIMT load 的 fill 在 2026-09-19 从 probe-only 524 联合重拟合为 480：probe 误差 −8.3%/−2.3%/−7.6%，
+> 目标 6 kernel direct/indirect MAPE 从 10.2%/16.2% 降到 8.0%/8.1%，route 不变。
 
 6 个 scalar-dominated kernel 在 `(sl,hs,ne,top_k)=(4,256,4,2)`、
 `BLOCK_X=64 / superblock_factor=1 / num_warps=1` 下的历史 direct-only 口径：
