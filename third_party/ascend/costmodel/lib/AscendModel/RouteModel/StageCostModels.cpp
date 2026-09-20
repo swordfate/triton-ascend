@@ -218,8 +218,22 @@ static double applySuperBlock(const LogicalStage &stage,
     return stageCycles;
 
   const double factor = static_cast<double>(implementation.superblockFactor);
-  const double effectiveFactor = std::min(
-      factor, static_cast<double>(profile.superblockUsefulFactorLimit));
+  // Whole-kernel AutoBlockify V1 and scope-local SuperBlock have different
+  // materialization limits.  A scope-local SIMT implementation stays capped by
+  // the measured scope useful-factor limit (NPUIR scope SuperBlock currently
+  // materializes F1/F2/F4).  The whole-kernel all-SIMT route is only bounded
+  // by the hardware legality `num_warps * factor <= 64`, so the scope limit
+  // must not suppress its latency-hiding benefit.
+  const int64_t numWarps =
+      std::max<int64_t>(1, profile.logicalWarpGroupCount);
+  const int64_t wholeKernelUsefulFactorLimit =
+      std::max<int64_t>(1, 64 / numWarps);
+  const int64_t usefulFactorLimit =
+      implementation.localScope
+          ? profile.superblockUsefulFactorLimit
+          : wholeKernelUsefulFactorLimit;
+  const double effectiveFactor =
+      std::min(factor, static_cast<double>(usefulFactorLimit));
   const double latencySensitivePerIteration =
       resources.load + resources.store + resources.atomic + resources.shuffle +
       resources.divergence;
@@ -254,8 +268,9 @@ static double applySuperBlock(const LogicalStage &stage,
   // Normalize the critical-path portion per logical program, but retain the
   // aggregate issue floor: a larger factor cannot create additional issue
   // bandwidth.
-  // This applies equally to whole-kernel and scope-local SuperBlock because
-  // both materializers batch complete logical programs around the Stage.
+  // The same aggregate issue floor applies to both materializations; only the
+  // latency-hiding factor cap above differs (scope ABI F4 vs whole-kernel
+  // legality limit).
   if (stage.costModelKind == StageCostModelKind::LoopCarriedRecurrence) {
     const double recurrenceBody = std::max(0.0, stageCycles - fixed);
     return std::max(issueFloor, fixed + recurrenceBody + pressure) +
