@@ -147,37 +147,10 @@ struct SelectSimdSimtCostModelPass
     clearPreviousSelection(module);
     const bool autoMode = mode.getValue() == "auto";
 
-    // Optional TTIR snapshots used for costmodel IR dumps.  The C++ pass sees
-    // the route-neutral module after layout merge; earlier snapshots are fed
-    // from Python so the log can show pre-layout, post-layout, and
-    // post-AutoBlockify states.
-    OwningOpRef<ModuleOp> parsedPreLayoutModule;
-    if (!preLayoutModulePath.getValue().empty()) {
-      parsedPreLayoutModule = parseSourceFile<ModuleOp>(
-          preLayoutModulePath.getValue(), module.getContext());
-      if (!parsedPreLayoutModule) {
-        module.emitError("failed to parse pre-layout TTIR: ")
-            << preLayoutModulePath.getValue();
-        signalPassFailure();
-        return;
-      }
-      costModelDumpIR("pre-layout TTIR", *parsedPreLayoutModule);
-    }
-
-    OwningOpRef<ModuleOp> parsedPostLayoutModule;
-    if (!postLayoutModulePath.getValue().empty()) {
-      parsedPostLayoutModule = parseSourceFile<ModuleOp>(
-          postLayoutModulePath.getValue(), module.getContext());
-      if (!parsedPostLayoutModule) {
-        module.emitError("failed to parse post-layout TTIR: ")
-            << postLayoutModulePath.getValue();
-        signalPassFailure();
-        return;
-      }
-      costModelDumpIR("post-layout TTIR", *parsedPostLayoutModule);
-    } else {
-      costModelDumpIR("post-layout TTIR (costmodel input module)", module);
-    }
+    // Latest feature-branch C++ pass sees the route-neutral module after
+    // layout merge; keep the IR dump hook without the older pre/post-layout
+    // pass options that this branch no longer carries.
+    costModelDumpIR("post-layout TTIR (costmodel input module)", module);
 
     // Selection may inspect a transformed analysis view while materializing
     // the chosen route on the route-neutral module owned by this pass.  This
