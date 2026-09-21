@@ -152,9 +152,11 @@ struct StageModeProfile {
   double simtUniformLoadPrepCycles = 0.0;
   double simtUniformLoadFillCycles = 0.0;
   double simtUniformLoadDiffLineIssueCycles = 0.0;
-  double mte3StorePrepCycles = 0.0;
-  double mte3StoreFillCycles = 0.0;
+  double scalarMte3StorePrepCycles = 0.0;
+  double scalarMte3StoreFillCycles = 0.0;
+  double scalarMte3StoreSerialCycles = 0.0;
   double simtUniformStoreBaseCycles = 0.0;
+  double simtUniformStoreDiffLineIssueCycles = 0.0;
   /// Loaded-index memory cannot use the continuous MTE/LSU throughput model.
   /// These rates operate on logical warp/transaction counts and include one
   /// uncovered dependency latency per Stage iteration.

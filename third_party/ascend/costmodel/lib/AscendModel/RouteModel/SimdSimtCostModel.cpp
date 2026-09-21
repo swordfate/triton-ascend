@@ -280,13 +280,20 @@ static void readStageResources(ProfileJSONReader &reader,
     profile.simtUniformLoadDiffLineIssueCycles = reader.optionalNumber(
         *scalar, "uniform_load_diff_line_issue_system_cycles",
         profile.simtUniformLoadDiffLineIssueCycles);
-    profile.mte3StorePrepCycles = reader.optionalNumber(
-        *scalar, "mte3_store_prep_system_cycles", profile.mte3StorePrepCycles);
-    profile.mte3StoreFillCycles = reader.optionalNumber(
-        *scalar, "mte3_store_fill_system_cycles", profile.mte3StoreFillCycles);
+    profile.scalarMte3StorePrepCycles = reader.optionalNumber(
+        *scalar, "mte3_scalar_store_prep_system_cycles", profile.scalarMte3StorePrepCycles);
+    profile.scalarMte3StoreFillCycles = reader.optionalNumber(
+        *scalar, "mte3_scalar_store_fill_system_cycles", profile.scalarMte3StoreFillCycles);
+    profile.scalarMte3StoreSerialCycles = reader.optionalNumber(
+        *scalar, "mte3_scalar_store_serial_system_cycles",
+        profile.scalarMte3StoreSerialCycles);
     profile.simtUniformStoreBaseCycles =
         reader.optionalNumber(*scalar, "uniform_store_base_system_cycles",
                               profile.simtUniformStoreBaseCycles);
+    profile.simtUniformStoreDiffLineIssueCycles =
+        reader.optionalNumber(*scalar,
+                              "uniform_store_diff_line_issue_system_cycles",
+                              profile.simtUniformStoreDiffLineIssueCycles);
   }
   if (const auto *indirect =
           reader.object(*resources, "indirect_memory", prefix)) {

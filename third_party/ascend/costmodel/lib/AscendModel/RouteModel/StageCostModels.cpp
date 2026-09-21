@@ -77,12 +77,16 @@ static double simtUniformLoadCycles(double count,
              profile.simtUniformLoadDiffLineIssueCycles;
 }
 
-static double mte3StoreCycles(const StageModeProfile &profile) {
-  return profile.mte3StorePrepCycles + profile.mte3StoreFillCycles;
+static double scalarMte3StoreCycles(double count, const StageModeProfile &profile) {
+  return profile.scalarMte3StorePrepCycles + profile.scalarMte3StoreFillCycles +
+         (std::max(1.0, count) - 1.0) * profile.scalarMte3StoreSerialCycles;
 }
 
-static double simtUniformStoreCycles(const StageModeProfile &profile) {
-  return profile.simtUniformStoreBaseCycles;
+static double simtUniformStoreCycles(double count,
+                                     const StageModeProfile &profile) {
+  return profile.simtUniformStoreBaseCycles +
+         (std::max(1.0, count) - 1.0) *
+             profile.simtUniformStoreDiffLineIssueCycles;
 }
 
 static StageResourceCycles
@@ -175,7 +179,8 @@ static StageResourceCycles mapWorkload(const LogicalStage &stage,
   }
   if (work.scalarStoreCount > 0.0) {
     resources.store +=
-        simd ? mte3StoreCycles(profile) : simtUniformStoreCycles(profile);
+        simd ? scalarMte3StoreCycles(work.scalarStoreCount, profile)
+             : simtUniformStoreCycles(work.scalarStoreCount, profile);
   }
   resources.predicate =
       (simd ? std::ceil(work.predicateElements /
