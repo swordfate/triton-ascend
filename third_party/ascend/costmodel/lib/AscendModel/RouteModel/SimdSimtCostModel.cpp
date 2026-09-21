@@ -591,8 +591,10 @@ static llvm::Expected<StageCostModelSummary> evaluateStageModel(
     bool scopeSuperblockMaterializable,
     int64_t maximumWholeKernelSuperblockFactor,
     int64_t maximumScopeSuperblockFactor, int64_t logicalProgramCountHint,
-    int64_t physicalCoreCountHint, ModuleOp module,
-    const SimtAnchorPlan *anchorPlan) {
+    int64_t physicalCoreCountHint,
+    const std::map<int64_t, double>
+        &empiricalWholeKernelSpillPenaltyByFactor,
+    ModuleOp module, const SimtAnchorPlan *anchorPlan) {
   COSTMODEL_TRACE("evaluateStageModel");
   costModelLog() << "numWarps=" << numWarps << " logicalProgramCountHint="
                  << logicalProgramCountHint << "\n";
@@ -633,6 +635,8 @@ static llvm::Expected<StageCostModelSummary> evaluateStageModel(
     return costTable.takeError();
   costTable->logicalProgramCountHint = logicalProgramCountHint;
   costTable->physicalCoreCountHint = physicalCoreCountHint;
+  costTable->empiricalWholeKernelSpillPenaltyByFactor =
+      empiricalWholeKernelSpillPenaltyByFactor;
   auto routes = solveStageRoutes(*costTable, hardwareProfile.transition);
   if (!routes)
     return routes.takeError();
@@ -863,7 +867,8 @@ estimateSimdSimtCandidatesImpl(const SimdSimtFeatureSummary &features,
       options.scopeSuperblockMaterializable,
       options.maximumWholeKernelSuperblockFactor,
       options.maximumScopeSuperblockFactor, options.logicalProgramCountHint,
-      options.physicalVectorCoreCountHint, module, anchorPlan);
+      options.physicalVectorCoreCountHint,
+      options.empiricalWholeKernelSpillPenaltyByFactor, module, anchorPlan);
   if (!stageModel)
     return stageModel.takeError();
   report.stageModel = std::move(*stageModel);

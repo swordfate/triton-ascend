@@ -630,6 +630,20 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
         return invalid;
       }
     }
+    // Empirical whole-kernel SuperBlock spill penalty.  It is a
+    // per-physical-program cost, so it must be added before the wave
+    // multiplier below.  Scope-local SuperBlock factors belong to the mixed
+    // route and are deliberately not covered by this table.
+    if (kind == StageKernelRouteKind::AllSIMT && factor > 1) {
+      auto penalty =
+          costTable.empiricalWholeKernelSpillPenaltyByFactor.find(factor);
+      if (penalty !=
+          costTable.empiricalWholeKernelSpillPenaltyByFactor.end()) {
+        costModelLog() << "  empirical whole-kernel spill penalty F=" << factor
+                       << " cycles=" << penalty->second << "\n";
+        plan.totalCycles += penalty->second;
+      }
+    }
     if (costTable.logicalProgramCountHint > 0) {
       plan.runtimePhysicalProgramCount =
           (costTable.logicalProgramCountHint + factor - 1) / factor;

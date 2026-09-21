@@ -16,6 +16,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -90,6 +91,10 @@ struct SimdSimtCostModelOptions {
   /// logical-program group.
   int64_t logicalProgramCountHint = 0;
   int64_t physicalVectorCoreCountHint = 0;
+  /// Empirical whole-kernel SuperBlock spill penalties, in system cycles per
+  /// physical program.  Parsed from the Python capability JSON and forwarded
+  /// unchanged to the route solver; an empty map preserves native behavior.
+  std::map<int64_t, double> empiricalWholeKernelSpillPenaltyByFactor;
 };
 
 struct SimdSimtCostReport {

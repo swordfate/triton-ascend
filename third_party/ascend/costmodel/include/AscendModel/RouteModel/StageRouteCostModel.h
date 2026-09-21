@@ -15,6 +15,7 @@
 #include "llvm/Support/JSON.h"
 
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -223,6 +224,11 @@ struct StageCostTable {
   std::string profileVersion;
   int64_t logicalProgramCountHint = 0;
   int64_t physicalCoreCountHint = 0;
+  /// Empirical spill penalty in system cycles per physical program, keyed by
+  /// the whole-kernel SuperBlock factor.  The route solver adds one entry to
+  /// the all-SIMT plan before wave expansion; scope-local SIMT factors are
+  /// deliberately not affected by this table.
+  std::map<int64_t, double> empiricalWholeKernelSpillPenaltyByFactor;
   std::vector<LogicalStageCost> stages;
 };
 

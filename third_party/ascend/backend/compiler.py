@@ -66,6 +66,10 @@ from triton.backends.ascend.utils import (
     is_compile_on_910_95,
 )
 from triton.backends.ascend.driver import (NPUUtils)
+from triton.backends.ascend.empirical_superblock import (
+    is_empirical_spill_penalty_enabled,
+    penalty_by_factor,
+)
 from triton.backends.compiler import (
     BaseBackend,
     GPUTarget,
@@ -258,7 +262,7 @@ def _can_materialize_scope_superblock(metadata, opt, whole_kernel_materializable
                 and int(getattr(opt, "num_warps", 0) or 0) > 0)
 
 
-def _publish_route_transform_capability(metadata, opt) -> str:
+def _publish_route_transform_capability(metadata, opt, module=None) -> str:
     """Publish the single capability fact consumed by scoring and lowering.
 
     Layout transforms and the V1 policy have already run when this function is
@@ -266,6 +270,15 @@ def _publish_route_transform_capability(metadata, opt) -> str:
     the report, candidate legality, and backend materialization describe the
     same transformed TTIR.
     """
+    # NPUOptions.kernel_name defaults to "triton_" and ttir_to_linalg runs
+    # before the linalg/ttir metadata parsers, so recover the real kernel name
+    # here for the empirical penalty table.
+    if module is not None:
+        current_name = str(metadata.get("kernel_name", "") or "")
+        if not current_name or current_name == "triton_":
+            match = re.search(r"tt\.func\s+public\s+@(\w+)", str(module))
+            if match:
+                metadata["kernel_name"] = match.group(1)
     target_supported = bool(getattr(opt, "compile_on_910_95", False))
     num_warps = max(1, int(getattr(opt, "num_warps", 1) or 1))
     v1_enabled = bool(metadata.get("auto_blockify_v1_enabled", False))
@@ -301,6 +314,13 @@ def _publish_route_transform_capability(metadata, opt) -> str:
     source_logical_program_count = max(0, int(getattr(opt, "logical_program_count_hint", 0) or 0))
     transformed_logical_program_count = ((source_logical_program_count + coalesce_factor - 1) //
                                          coalesce_factor if source_logical_program_count else 0)
+    empirical_spill_penalty = {}
+    if is_empirical_spill_penalty_enabled():
+        empirical_spill_penalty = penalty_by_factor(
+            metadata.get("kernel_name", ""),
+            transformed_logical_program_count,
+            num_warps,
+        )
     capability = {
         "schema_version": 1,
         "layout_merge_applied": bool(metadata.get("ttir_layout_merge_applied", False)),
@@ -316,6 +336,10 @@ def _publish_route_transform_capability(metadata, opt) -> str:
         "source_logical_program_count_hint": source_logical_program_count,
         "logical_program_count_hint": transformed_logical_program_count,
         "physical_vector_core_count_hint": physical_vector_cores,
+        "empirical_whole_kernel_spill_penalty": {
+            str(factor): float(penalty)
+            for factor, penalty in sorted(empirical_spill_penalty.items())
+        },
     }
     logical_program_count = capability["logical_program_count_hint"]
     if logical_program_count:
@@ -346,7 +370,7 @@ def _run_cpp_simd_simt_costmodel(mod, metadata, opt, analysis_ttir_code: str = "
     pm.enable_debug()
     capability_json = metadata.get("route_transform_capability")
     if not capability_json:
-        capability_json = _publish_route_transform_capability(metadata, opt)
+        capability_json = _publish_route_transform_capability(metadata, opt, mod)
     capability = json.loads(capability_json)
     whole_kernel_factors = capability.get("whole_kernel_superblock_factors", [1])
     scope_factors = capability.get("scope_superblock_factors", [1])
@@ -550,7 +574,7 @@ def ttir_to_linalg(mod, metadata, opt, *, named_ops=False):
             metadata["ttir_layout_coalesce_axis"] = -1
             metadata["ttir_layout_coalesce_grid_ceil_div"] = False
         _resolve_auto_blockify_v1_policy(str(mod), metadata, opt)
-        _publish_route_transform_capability(metadata, opt)
+        _publish_route_transform_capability(metadata, opt, mod)
         analysis_ttir_code = _build_costmodel_analysis_ttir(mod, metadata, opt)
     cpp_decision = _run_cpp_simd_simt_costmodel(mod, metadata, opt, analysis_ttir_code)
     cpp_all_simt = cpp_decision == "all_simt_only"

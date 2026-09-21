@@ -218,3 +218,42 @@ def test_costmodel_analysis_view_materializes_v1_only_on_clone():
     assert metadata["auto_simt_costmodel_analysis_v1_materialized"]
     assert metadata["auto_simt_costmodel_analysis_ir"] == "post_auto_blockify_v1_f1_ttir"
     assert result == str(analysis)
+
+
+def test_route_transform_capability_publishes_empirical_spill_penalty(monkeypatch):
+    monkeypatch.delenv("TRITON_ASCEND_EMPIRICAL_SPILL_PENALTY", raising=False)
+    monkeypatch.delenv("TRITON_ASCEND_EMPIRICAL_SUPERBLOCK", raising=False)
+    metadata = {
+        "auto_blockify_v1_enabled": True,
+        "auto_blockify_v1_disable_reasons": [],
+        "kernel_name": "padded_copy_gather",
+    }
+    opt = SimpleNamespace(
+        compile_on_910_95=True,
+        num_warps=2,
+        logical_program_count_hint=4100,
+        physical_vector_core_count_hint=56,
+    )
+    capability = __import__("json").loads(
+        _publish_route_transform_capability(metadata, opt))
+    assert capability["empirical_whole_kernel_spill_penalty"] == {
+        "32": 1200.0,
+    }
+
+
+def test_route_transform_capability_can_disable_empirical_spill_penalty(monkeypatch):
+    monkeypatch.setenv("TRITON_ASCEND_EMPIRICAL_SPILL_PENALTY", "0")
+    metadata = {
+        "auto_blockify_v1_enabled": True,
+        "auto_blockify_v1_disable_reasons": [],
+        "kernel_name": "padded_copy_gather",
+    }
+    opt = SimpleNamespace(
+        compile_on_910_95=True,
+        num_warps=2,
+        logical_program_count_hint=4100,
+        physical_vector_core_count_hint=56,
+    )
+    capability = __import__("json").loads(
+        _publish_route_transform_capability(metadata, opt))
+    assert capability["empirical_whole_kernel_spill_penalty"] == {}

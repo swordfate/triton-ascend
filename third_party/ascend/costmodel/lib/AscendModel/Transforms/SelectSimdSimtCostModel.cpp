@@ -28,7 +28,10 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
+#include <map>
+#include <optional>
 #include <string>
 #include <system_error>
 
@@ -190,10 +193,26 @@ struct SelectSimdSimtCostModelPass
     options.logicalProgramCountHint =
         std::max<int64_t>(0, logicalProgramCountHint.getValue());
     if (auto capability =
-            llvm::json::parse(routeTransformCapabilityJSON.getValue()))
-      if (auto *object = capability->getAsObject())
+            llvm::json::parse(routeTransformCapabilityJSON.getValue())) {
+      if (auto *object = capability->getAsObject()) {
         if (auto count = object->getInteger("physical_vector_core_count_hint"))
           options.physicalVectorCoreCountHint = std::max<int64_t>(0, *count);
+        if (const auto *penalties = object->getObject(
+                "empirical_whole_kernel_spill_penalty")) {
+          for (const auto &entry : *penalties) {
+            int64_t factor = 0;
+            llvm::StringRef factorKey = entry.first;
+            if (factorKey.getAsInteger(10, factor) || factor <= 1)
+              continue;
+            std::optional<double> penalty = entry.second.getAsNumber();
+            if (!penalty || !std::isfinite(*penalty) || *penalty < 0.0)
+              continue;
+            options.empiricalWholeKernelSpillPenaltyByFactor[factor] =
+                *penalty;
+          }
+        }
+      }
+    }
 
     SimtAnchorPlan anchorPlan =
         buildMixedSimtAnchorPlan(module, options.compileOn91095);
