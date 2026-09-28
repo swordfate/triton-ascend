@@ -194,16 +194,17 @@
       },
       "source": "Ascend950 microarchitecture issue limits plus provisional conservative dependency rates; replace numeric seeds only through versioned CaModel/microbenchmark evidence.",
       "scalar_memory": {
-        "description": "SIMD scalar white-box: MainScalar load T=prep+fill+max(0,K-outstanding)*extra_line+(K-1)*issue; Triton scalar store lowers to MTE3 T=prep+fill for the K=1 stages used by the target kernels. Values are CAModel core cycles converted by 988.9/1800.",
-        "main_load_prep_system_cycles": 3.8457222222222223,
-        "main_load_fill_system_cycles": 241.73111111111112,
-        "main_load_issue_system_cycles": 1.6481666666666668,
-        "main_load_outstanding_line_count": 2,
-        "main_load_extra_line_low_system_cycles": 137.34722222222223,
-        "main_load_extra_line_high_system_cycles": 192.28611111111113,
+        "description": "SIMD scalar white-box coefficients derived by `triton_probe/profiler_pair_probe.py` (diff-line load K-sweep) and `triton_probe/store_probe_variants.py` (MTE3 store): load T=prep+fill+max(0,K-outstanding)*extra+(K-1)*issue (prep=7, fill=263.9, outstanding=1, extra=278.74, issue=1); MTE3 store uses the aiv_mte3_time board window as resource occupancy (not store completion/visibility): K=1 T=fill (11.7), K>=2 adds activation serial=95.4 then subsequent=4.5 per extra store. Values are raw cycles x 988.9/1800 = SYS_CNT cycles.",
+        "main_load_prep_system_cycles": 3.8457,
+        "main_load_fill_system_cycles": 144.9837,
+        "main_load_issue_system_cycles": 0.5494,
+        "main_load_outstanding_line_count": 1,
+        "main_load_extra_line_low_system_cycles": 153.1382,
+        "main_load_extra_line_high_system_cycles": 153.1382,
         "main_load_extra_line_high_threshold": 4,
-        "mte3_store_prep_system_cycles": 10.98777777777778,
-        "mte3_store_fill_system_cycles": 247.22500000000002
+        "mte3_scalar_store_fill_system_cycles": 6.4279,
+        "mte3_scalar_store_serial_system_cycles": 52.4117,
+        "mte3_scalar_store_subsequent_system_cycles": 2.4723
       }
     }
   },
@@ -397,11 +398,14 @@
       },
       "source": "Ascend950 SIMT issue limits plus provisional conservative dependency/reconvergence, SuperBlock state-pressure, and scope hand-off rates; replace numeric seeds only through versioned CaModel/microbenchmark evidence.",
       "scalar_memory": {
-        "description": "SIMT warp-uniform scalar white-box: diff-line load T=prep+fill+(K-1)*issue (fill=480 joint refit); first scalar store T=base. Values are CAModel core cycles converted by 988.9/1800.",
-        "uniform_load_prep_system_cycles": 3.2963333333333336,
-        "uniform_load_fill_system_cycles": 263.7066666666667,
-        "uniform_load_diff_line_issue_system_cycles": 0.5493888888888889,
-        "uniform_store_base_system_cycles": 247.22500000000002
+        "description": "SIMT scalar white-box coefficients derived by `triton_probe/profiler_pair_probe.py` (diff-line load K-sweep) and `triton_probe/store_probe_variants.py` (matched-sink SIMT_STG store): load T=prep+fill+max(0,K-2)*extra+(K-1)*issue (prep=6, fill=306.75, threshold=2, extra=74.775, issue=1); store T=base+(K-1)*subsequent fitted to cross-run matched-sink Duration medians as the direct SIMT_STG resource window (base=30.4, subsequent=12.348; readback/visibility latency is not charged here). Fresh rechecks are used instead of the non-reproducible original K=8 run. Values are raw cycles x 988.9/1800 = SYS_CNT cycles.",
+        "uniform_load_prep_system_cycles": 3.2963,
+        "uniform_load_fill_system_cycles": 168.525,
+        "uniform_load_diff_line_threshold": 2,
+        "uniform_load_diff_line_extra_system_cycles": 41.0806,
+        "uniform_load_issue_system_cycles": 0.5494,
+        "uniform_store_base_system_cycles": 16.7014,
+        "uniform_store_subsequent_system_cycles": 6.7839
       }
     },
     "mixed_setup_fallback": {

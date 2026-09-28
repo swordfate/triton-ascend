@@ -72,17 +72,30 @@ static double mainScalarLoadCycles(double count,
 
 static double simtUniformLoadCycles(double count,
                                     const StageModeProfile &profile) {
+  const double k = std::max(1.0, count);
   return profile.simtUniformLoadPrepCycles + profile.simtUniformLoadFillCycles +
+         std::max(0.0,
+                  k - profile.simtUniformLoadDiffLineThreshold) *
+             profile.simtUniformLoadDiffLineExtraCycles +
+         (k - 1.0) * profile.simtUniformLoadIssueCycles;
+}
+
+// SIMD scalar store occupancy on the MTE3 pipe.  Completion/visibility latency
+// (e.g. a readback consumer) is intentionally not charged to this resource.
+static double scalarMte3StoreCycles(double count, const StageModeProfile &profile) {
+  const double k = std::max(1.0, count);
+  double cycles = profile.scalarMte3StoreFillCycles;
+  if (k > 1.0)
+    cycles += profile.scalarMte3StoreSerialCycles +
+              (k - 2.0) * profile.scalarMte3StoreSubsequentCycles;
+  return cycles;
+}
+
+static double simtUniformStoreCycles(double count,
+                                     const StageModeProfile &profile) {
+  return profile.simtUniformStoreBaseCycles +
          (std::max(1.0, count) - 1.0) *
-             profile.simtUniformLoadDiffLineIssueCycles;
-}
-
-static double mte3StoreCycles(const StageModeProfile &profile) {
-  return profile.mte3StorePrepCycles + profile.mte3StoreFillCycles;
-}
-
-static double simtUniformStoreCycles(const StageModeProfile &profile) {
-  return profile.simtUniformStoreBaseCycles;
+             profile.simtUniformStoreSubsequentCycles;
 }
 
 static StageResourceCycles
@@ -175,7 +188,8 @@ static StageResourceCycles mapWorkload(const LogicalStage &stage,
   }
   if (work.scalarStoreCount > 0.0) {
     resources.store +=
-        simd ? mte3StoreCycles(profile) : simtUniformStoreCycles(profile);
+        simd ? scalarMte3StoreCycles(work.scalarStoreCount, profile)
+             : simtUniformStoreCycles(work.scalarStoreCount, profile);
   }
   resources.predicate =
       (simd ? std::ceil(work.predicateElements /

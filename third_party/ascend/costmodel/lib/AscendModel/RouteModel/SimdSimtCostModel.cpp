@@ -277,16 +277,29 @@ static void readStageResources(ProfileJSONReader &reader,
     profile.simtUniformLoadFillCycles =
         reader.optionalNumber(*scalar, "uniform_load_fill_system_cycles",
                               profile.simtUniformLoadFillCycles);
-    profile.simtUniformLoadDiffLineIssueCycles = reader.optionalNumber(
-        *scalar, "uniform_load_diff_line_issue_system_cycles",
-        profile.simtUniformLoadDiffLineIssueCycles);
-    profile.mte3StorePrepCycles = reader.optionalNumber(
-        *scalar, "mte3_store_prep_system_cycles", profile.mte3StorePrepCycles);
-    profile.mte3StoreFillCycles = reader.optionalNumber(
-        *scalar, "mte3_store_fill_system_cycles", profile.mte3StoreFillCycles);
+    profile.simtUniformLoadDiffLineThreshold = reader.optionalNumber(
+        *scalar, "uniform_load_diff_line_threshold",
+        profile.simtUniformLoadDiffLineThreshold);
+    profile.simtUniformLoadDiffLineExtraCycles = reader.optionalNumber(
+        *scalar, "uniform_load_diff_line_extra_system_cycles",
+        profile.simtUniformLoadDiffLineExtraCycles);
+    profile.simtUniformLoadIssueCycles = reader.optionalNumber(
+        *scalar, "uniform_load_issue_system_cycles",
+        profile.simtUniformLoadIssueCycles);
+    profile.scalarMte3StoreFillCycles = reader.optionalNumber(
+        *scalar, "mte3_scalar_store_fill_system_cycles", profile.scalarMte3StoreFillCycles);
+    profile.scalarMte3StoreSerialCycles = reader.optionalNumber(
+        *scalar, "mte3_scalar_store_serial_system_cycles",
+        profile.scalarMte3StoreSerialCycles);
+    profile.scalarMte3StoreSubsequentCycles = reader.optionalNumber(
+        *scalar, "mte3_scalar_store_subsequent_system_cycles",
+        profile.scalarMte3StoreSubsequentCycles);
     profile.simtUniformStoreBaseCycles =
         reader.optionalNumber(*scalar, "uniform_store_base_system_cycles",
                               profile.simtUniformStoreBaseCycles);
+    profile.simtUniformStoreSubsequentCycles = reader.optionalNumber(
+        *scalar, "uniform_store_subsequent_system_cycles",
+        profile.simtUniformStoreSubsequentCycles);
   }
   if (const auto *indirect =
           reader.object(*resources, "indirect_memory", prefix)) {
