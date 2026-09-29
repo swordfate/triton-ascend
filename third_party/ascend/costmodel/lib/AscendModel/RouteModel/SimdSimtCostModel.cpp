@@ -45,7 +45,7 @@ namespace {
 constexpr llvm::StringLiteral kAllSimd = "all_simd";
 constexpr llvm::StringLiteral kAllSimtOnly = "all_simt_only";
 constexpr llvm::StringLiteral kMixedSimdSimt = "mixed_simd_simt";
-constexpr int64_t kSupportedProfileSchemaVersion = 12;
+constexpr int64_t kSupportedProfileSchemaVersion = 13;
 
 struct StructuralProfile {
   int64_t tinyDotFlopsMax = 0;
@@ -287,6 +287,65 @@ static void readStageResources(ProfileJSONReader &reader,
     profile.simtUniformStoreBaseCycles =
         reader.optionalNumber(*scalar, "uniform_store_base_system_cycles",
                               profile.simtUniformStoreBaseCycles);
+  }
+  if (const auto *strided =
+          reader.object(*resources, "strided_memory", prefix)) {
+    const std::string path = prefix + ".strided_memory";
+    StridedMemoryProfile &stridedProfile = profile.stridedMemory;
+    stridedProfile.enabled = true;
+    stridedProfile.nanosecondsToSystemCycles =
+        reader.number(*strided, "nanoseconds_to_system_cycles", path);
+    if (context == "simd") {
+      stridedProfile.simdLoadWideInterceptNs =
+          reader.number(*strided, "simd_load_wide_intercept_ns", path);
+      stridedProfile.simdLoadWideStrideMinusOneNs =
+          reader.number(*strided, "simd_load_wide_stride_minus_one_ns", path);
+      stridedProfile.simdLoadWideLargeTileNs =
+          reader.number(*strided, "simd_load_wide_large_tile_ns", path);
+      stridedProfile.simdLoadWideTailElementNs =
+          reader.number(*strided, "simd_load_wide_tail_element_ns", path);
+      stridedProfile.simdLoadGatherInterceptNs =
+          reader.number(*strided, "simd_load_gather_intercept_ns", path);
+      stridedProfile.simdLoadGatherElementNs =
+          reader.number(*strided, "simd_load_gather_element_ns", path);
+      stridedProfile.simdLoadGatherBankPairNs =
+          reader.number(*strided, "simd_load_gather_bank_pair_ns", path);
+      stridedProfile.simdLoadGatherBankWorstNs =
+          reader.number(*strided, "simd_load_gather_bank_worst_ns", path);
+      stridedProfile.simdLoadGatherPageCrossNs =
+          reader.number(*strided, "simd_load_gather_page_cross_ns", path);
+      stridedProfile.simdStoreWideInterceptNs =
+          reader.number(*strided, "simd_store_wide_intercept_ns", path);
+      stridedProfile.simdStoreWideElementNs =
+          reader.number(*strided, "simd_store_wide_element_ns", path);
+      stridedProfile.simdStoreGatherInterceptNs =
+          reader.number(*strided, "simd_store_gather_intercept_ns", path);
+      stridedProfile.simdStoreGatherLineRequestSizeNs = reader.number(
+          *strided, "simd_store_gather_line_request_size_ns", path);
+      stridedProfile.simdStoreGatherBankPairNs =
+          reader.number(*strided, "simd_store_gather_bank_pair_ns", path);
+      stridedProfile.simdStoreGatherWorstG32768Ns = reader.number(
+          *strided, "simd_store_gather_worst_g32768_ns", path);
+    } else {
+      stridedProfile.simtLoadInterceptNs =
+          reader.number(*strided, "simt_load_intercept_ns", path);
+      stridedProfile.simtLoadDupLineNs =
+          reader.number(*strided, "simt_load_dup_line_ns", path);
+      stridedProfile.simtLoadLineNs =
+          reader.number(*strided, "simt_load_line_ns", path);
+      stridedProfile.simtLoadWarpLineOverflowNs =
+          reader.number(*strided, "simt_load_warp_line_overflow_ns", path);
+      stridedProfile.simtLoadDupCrossNs =
+          reader.number(*strided, "simt_load_dup_cross_ns", path);
+      stridedProfile.simtStoreInterceptNs =
+          reader.number(*strided, "simt_store_intercept_ns", path);
+      stridedProfile.simtStoreWarpInstructionNs =
+          reader.number(*strided, "simt_store_warp_instruction_ns", path);
+      stridedProfile.simtStoreLineNs =
+          reader.number(*strided, "simt_store_line_ns", path);
+      stridedProfile.simtStoreLineRequestSizeNs =
+          reader.number(*strided, "simt_store_line_request_size_ns", path);
+    }
   }
   if (const auto *indirect =
           reader.object(*resources, "indirect_memory", prefix)) {

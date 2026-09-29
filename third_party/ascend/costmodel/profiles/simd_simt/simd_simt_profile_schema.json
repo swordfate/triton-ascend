@@ -23,8 +23,8 @@
       "description": "Relative path to this JSON Schema; used by editors and offline validators, not by Route Model scoring."
     },
     "schema_version": {
-      "const": 12,
-      "description": "Machine-readable Stage Route Model hardware-profile layout. Version 11 adds independent atomic-RMW rates and an explicit unknown-contention policy. Version 12 retains the legacy SIMT logical-tensor capacity field and represents local scope fixed overhead as one measured SIMD-to-SIMT-to-SIMD pair instead of two synthetic directional values."
+      "const": 13,
+      "description": "Machine-readable Stage Route Model hardware-profile layout. Version 11 adds independent atomic-RMW rates and an explicit unknown-contention policy. Version 12 retains the legacy SIMT logical-tensor capacity field and represents local scope fixed overhead as one measured SIMD-to-SIMT-to-SIMD pair instead of two synthetic directional values. Version 13 adds the board-Event strided load/store calibration object."
     },
     "profile_version": {
       "type": "string",
@@ -760,6 +760,129 @@
             }
           },
           "additionalProperties": false
+        },
+        "strided_memory": {
+          "$ref": "#/definitions/strided_memory"
+        }
+      },
+      "additionalProperties": false
+    },
+    "strided_memory": {
+      "type": "object",
+      "description": "Board-Event strided load/store calibration. Coefficients are raw ns per dynamic 1-D constant-stride access; the loader reads only the fields relevant to the enclosing mode and StageCostModels converts the summed ns with nanoseconds_to_system_cycles.",
+      "required": [
+        "description",
+        "source",
+        "nanoseconds_to_system_cycles"
+      ],
+      "properties": {
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "nanoseconds_to_system_cycles": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "simd_load_wide_intercept_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_load_wide_stride_minus_one_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_load_wide_large_tile_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_load_wide_tail_element_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_load_gather_intercept_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_load_gather_element_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_load_gather_bank_pair_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_load_gather_bank_worst_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_load_gather_page_cross_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_store_wide_intercept_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_store_wide_element_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_store_gather_intercept_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_store_gather_line_request_size_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_store_gather_bank_pair_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_store_gather_worst_g32768_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simt_load_intercept_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simt_load_dup_line_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simt_load_line_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simt_load_warp_line_overflow_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simt_load_dup_cross_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simt_store_intercept_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simt_store_warp_instruction_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simt_store_line_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simt_store_line_request_size_ns": {
+          "type": "number",
+          "minimum": 0
         }
       },
       "additionalProperties": false

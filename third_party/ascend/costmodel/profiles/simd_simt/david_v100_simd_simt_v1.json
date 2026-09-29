@@ -1,7 +1,7 @@
 {
   "$schema": "./simd_simt_profile_schema.json",
-  "schema_version": 12,
-  "profile_version": "david-v100-simd-simt-20260918-v27-segmented-issue-fixed-transition",
+  "schema_version": 13,
+  "profile_version": "david-v100-simd-simt-20260924-v28-strided-memory",
   "target": "Ascend950PR/dav-c310",
   "description": "Stage Route Model hardware profile. Stage partitions and workloads are generated online from transformed TTIR; this file contains no workload-specific Stage template or route multiplier.",
   "microbenchmark_profile": "../microbench/ascend_davidv100_v1.json",
@@ -204,6 +204,26 @@
         "main_load_extra_line_high_threshold": 4,
         "mte3_store_prep_system_cycles": 10.98777777777778,
         "mte3_store_fill_system_cycles": 247.22500000000002
+      },
+      "strided_memory": {
+        "description": "Board-Event calibrated shaped strided tl.load/tl.store model. Coefficients are raw ns per dynamic access; nanoseconds_to_system_cycles converts to this profile's SYS_CNT selection-score domain. The load model is data_provider/strided_ldst/pre-explore/results/model_v7_simple/model_v7_simple.json and the store model is results/model_store_v1/model_store_v1.json.",
+        "source": "data_provider/strided_ldst/pre-explore (board Event, aligned f32 only)",
+        "nanoseconds_to_system_cycles": 0.9889,
+        "simd_load_wide_intercept_ns": 271.3729778488225,
+        "simd_load_wide_stride_minus_one_ns": 40.79872660134627,
+        "simd_load_wide_large_tile_ns": 84.42962073076762,
+        "simd_load_wide_tail_element_ns": 0.07051640637348908,
+        "simd_load_gather_intercept_ns": 373.29800954524603,
+        "simd_load_gather_element_ns": 0.8912079754039262,
+        "simd_load_gather_bank_pair_ns": 0.014066276535967145,
+        "simd_load_gather_bank_worst_ns": 1.3008673227158143,
+        "simd_load_gather_page_cross_ns": 0.8766837199902078,
+        "simd_store_wide_intercept_ns": 83.62537807473618,
+        "simd_store_wide_element_ns": 0.02730131919756032,
+        "simd_store_gather_intercept_ns": 4.943185514808522,
+        "simd_store_gather_line_request_size_ns": 27.019501937434047,
+        "simd_store_gather_bank_pair_ns": 0.04555529468293926,
+        "simd_store_gather_worst_g32768_ns": 0.45431488913039236
       }
     }
   },
@@ -402,6 +422,20 @@
         "uniform_load_fill_system_cycles": 263.7066666666667,
         "uniform_load_diff_line_issue_system_cycles": 0.5493888888888889,
         "uniform_store_base_system_cycles": 247.22500000000002
+      },
+      "strided_memory": {
+        "description": "Board-Event calibrated shaped strided tl.load/tl.store model. Coefficients are raw ns per dynamic access; nanoseconds_to_system_cycles converts to this profile's SYS_CNT selection-score domain. The load model is data_provider/strided_ldst/pre-explore/results/model_v7_simple/model_v7_simple.json and the store model is results/model_store_v1/model_store_v1.json.",
+        "source": "data_provider/strided_ldst/pre-explore (board Event, aligned f32 only)",
+        "nanoseconds_to_system_cycles": 0.9889,
+        "simt_load_intercept_ns": 112.71812243624099,
+        "simt_load_dup_line_ns": 0.20565136569474102,
+        "simt_load_line_ns": 6.0747935132103885,
+        "simt_load_warp_line_overflow_ns": 0.11574972982832027,
+        "simt_load_dup_cross_ns": 14.625488248994145,
+        "simt_store_intercept_ns": 12.6818070592419,
+        "simt_store_warp_instruction_ns": 0.6508156379586657,
+        "simt_store_line_ns": 1.2342412476531825,
+        "simt_store_line_request_size_ns": 0.1518112854753173
       }
     },
     "mixed_setup_fallback": {
