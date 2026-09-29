@@ -1,0 +1,127 @@
+// scalar_ldst_whitebox/compute/scalar_add — real-board SYS_CNT probes.
+// Only the ILP16 kernels are instrumented; the loop is timed as a whole and
+// the caller compares two `iters` values to get cycles per iteration.
+// ABI: (out, K, nlane, nwarp, iters, mode); out[0] = ticks, out[1] = result.
+#include "RegBase/VecUtils.h"
+#include "Vector/VecUtils.h"
+#include "Utils.h"
+
+using DT = float;
+
+extern "C" __global__ [aicore] void
+simd_add_nop_loop_syscnt(__gm__ long long* out, int K, int nlane, int nwarp,
+                         int iters, int mode) {
+  (void)K; (void)nlane; (void)nwarp; (void)mode;
+  DT s = (DT)iters;
+  pipe_barrier(PIPE_ALL);
+  long long t0 = get_sys_cnt();
+  for (int i = 0; i < iters; ++i) {
+    s = s + (DT)1.0f;
+  }
+  pipe_barrier(PIPE_ALL);
+  long long t1 = get_sys_cnt();
+  out[0] = t1 - t0;
+  out[1] = (long long)s;
+}
+
+extern "C" __global__ [aicore] void
+simd_add_ilp16_syscnt(__gm__ long long* out, int K, int nlane, int nwarp,
+                      int iters, int mode) {
+  (void)K; (void)nlane; (void)nwarp;
+  DT k = (DT)mode + 1.0000001f;
+  DT a[16];
+#pragma unroll
+  for (int j = 0; j < 16; ++j) a[j] = (DT)(iters + j);
+  pipe_barrier(PIPE_ALL);
+  long long t0 = get_sys_cnt();
+  for (int i = 0; i < iters; ++i) {
+#pragma unroll
+    for (int j = 0; j < 16; ++j) a[j] = a[j] + k;
+  }
+  pipe_barrier(PIPE_ALL);
+  long long t1 = get_sys_cnt();
+  DT s = 0.0f;
+#pragma unroll
+  for (int j = 0; j < 16; ++j) s = s + a[j];
+  out[0] = t1 - t0;
+  out[1] = (long long)s;
+}
+
+__simt_vf__ LAUNCH_BOUND(32) __aiv__ __attribute__((always_inline)) static void
+simt_add_nop_loop_core(__ubuf__ DT* sink, DT k, int iters) {
+  int lane = threadIdx.x;
+  DT a0 = (DT)(lane + 1);
+  for (int i = 0; i < iters; ++i) a0 = a0 + k;
+  sink[lane] = a0;
+}
+extern "C" __global__ [aicore] void
+simt_add_nop_loop_syscnt(__gm__ long long* out, int K, int nlane, int nwarp,
+                         int iters, int mode) {
+  (void)K; (void)nlane; (void)nwarp;
+  auto sink = reinterpret_cast<__ubuf__ DT*>(0);
+  pipe_barrier(PIPE_ALL);
+  long long t0 = get_sys_cnt();
+  cce::async_invoke<simt_add_nop_loop_core>(cce::dim3{32, 1, 1}, sink,
+                                            (DT)mode + 1.0000001f, iters);
+  pipe_barrier(PIPE_ALL);
+  long long t1 = get_sys_cnt();
+  out[0] = t1 - t0;
+}
+
+__simt_vf__ LAUNCH_BOUND(32) __aiv__ __attribute__((always_inline)) static void
+simt_add_ilp16_syscnt_core(__ubuf__ DT* sink, DT k, int iters) {
+  int lane = threadIdx.x;
+  DT a[16];
+#pragma unroll
+  for (int j = 0; j < 16; ++j) a[j] = (DT)(lane + j);
+  for (int i = 0; i < iters; ++i) {
+#pragma unroll
+    for (int j = 0; j < 16; ++j) a[j] = a[j] + k;
+  }
+  DT s = 0.0f;
+#pragma unroll
+  for (int j = 0; j < 16; ++j) s = s + a[j];
+  sink[lane] = s;
+}
+extern "C" __global__ [aicore] void
+simt_add_ilp16_syscnt(__gm__ long long* out, int K, int nlane, int nwarp,
+                      int iters, int mode) {
+  (void)K; (void)nlane; (void)nwarp;
+  auto sink = reinterpret_cast<__ubuf__ DT*>(0);
+  pipe_barrier(PIPE_ALL);
+  long long t0 = get_sys_cnt();
+  cce::async_invoke<simt_add_ilp16_syscnt_core>(cce::dim3{32, 1, 1}, sink,
+                                                (DT)mode + 1.0000001f, iters);
+  pipe_barrier(PIPE_ALL);
+  long long t1 = get_sys_cnt();
+  out[0] = t1 - t0;
+}
+
+__simt_vf__ LAUNCH_BOUND(32) __aiv__ __attribute__((always_inline)) static void
+simt_add_uniform_ilp16_syscnt_core(__ubuf__ DT* sink, DT k, int iters) {
+  int lane = threadIdx.x;
+  DT a[16];
+#pragma unroll
+  for (int j = 0; j < 16; ++j) a[j] = (DT)7;
+  for (int i = 0; i < iters; ++i) {
+#pragma unroll
+    for (int j = 0; j < 16; ++j) a[j] = a[j] + k;
+  }
+  DT s = 0.0f;
+#pragma unroll
+  for (int j = 0; j < 16; ++j) s = s + a[j];
+  sink[lane] = s;
+}
+extern "C" __global__ [aicore] void
+simt_add_uniform_ilp16_syscnt(__gm__ long long* out, int K, int nlane,
+                              int nwarp, int iters, int mode) {
+  (void)K; (void)nlane; (void)nwarp;
+  auto sink = reinterpret_cast<__ubuf__ DT*>(0);
+  pipe_barrier(PIPE_ALL);
+  long long t0 = get_sys_cnt();
+  cce::async_invoke<simt_add_uniform_ilp16_syscnt_core>(
+      cce::dim3{32, 1, 1}, sink, (DT)mode + 1.0000001f, iters);
+  pipe_barrier(PIPE_ALL);
+  long long t1 = get_sys_cnt();
+  out[0] = t1 - t0;
+}

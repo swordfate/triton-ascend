@@ -1,0 +1,223 @@
+// scalar add whitebox probes (CAModel).
+// SIMD: MainScalar scalar FADD (ADD dtype:F32); SIMT: 32-thread SIMT_FADD.
+//
+// ABI shared with scalar_add_host.cpp:
+//   (out, K, nlane, nwarp, iters, mode)
+//
+// ilp1..16: loop with 1..16 independent accumulators (throughput sweep)
+#include "RegBase/VecUtils.h"
+#include "Vector/VecUtils.h"
+#include "Utils.h"
+
+using DT = float;
+
+// ------------------------------------------------------- SIMD ILP 1/2/4/8
+extern "C" __global__ [aicore] void
+simd_add_ilp1(__gm__ long long *out, int K, int nlane, int nwarp, int iters, int mode) {
+  (void)K; (void)nlane; (void)nwarp;
+  DT k = (DT)mode + 1.0000001f;
+  DT a0 = (DT)iters;
+  for (int i = 0; i < iters; i++) { a0 = a0 + k; }
+  out[0] = (long long)a0;
+}
+
+extern "C" __global__ [aicore] void
+simd_add_ilp2(__gm__ long long *out, int K, int nlane, int nwarp, int iters, int mode) {
+  (void)K; (void)nlane; (void)nwarp;
+  DT k = (DT)mode + 1.0000001f;
+  DT a0 = (DT)iters, a1 = (DT)iters + 1;
+  for (int i = 0; i < iters; i++) { a0 = a0 + k; a1 = a1 + k; }
+  out[0] = (long long)(a0 + a1);
+}
+
+extern "C" __global__ [aicore] void
+simd_add_ilp4(__gm__ long long *out, int K, int nlane, int nwarp, int iters, int mode) {
+  (void)K; (void)nlane; (void)nwarp;
+  DT k = (DT)mode + 1.0000001f;
+  DT a0 = (DT)iters, a1 = (DT)iters + 1, a2 = (DT)iters + 2, a3 = (DT)iters + 3;
+  for (int i = 0; i < iters; i++) {
+    a0 = a0 + k; a1 = a1 + k; a2 = a2 + k; a3 = a3 + k;
+  }
+  out[0] = (long long)((a0 + a1) + (a2 + a3));
+}
+
+extern "C" __global__ [aicore] void
+simd_add_ilp8(__gm__ long long *out, int K, int nlane, int nwarp, int iters, int mode) {
+  (void)K; (void)nlane; (void)nwarp;
+  DT k = (DT)mode + 1.0000001f;
+  DT a0 = (DT)iters, a1 = (DT)iters + 1, a2 = (DT)iters + 2, a3 = (DT)iters + 3;
+  DT a4 = (DT)iters + 4, a5 = (DT)iters + 5, a6 = (DT)iters + 6, a7 = (DT)iters + 7;
+  for (int i = 0; i < iters; i++) {
+    a0 = a0 + k; a1 = a1 + k; a2 = a2 + k; a3 = a3 + k;
+    a4 = a4 + k; a5 = a5 + k; a6 = a6 + k; a7 = a7 + k;
+  }
+  out[0] = (long long)(((a0 + a1) + (a2 + a3)) + ((a4 + a5) + (a6 + a7)));
+}
+
+// ------------------------------------------------------------ SIMD ILP16
+extern "C" __global__ [aicore] void
+simd_add_ilp16(__gm__ long long *out, int K, int nlane, int nwarp, int iters, int mode) {
+  (void)K; (void)nlane; (void)nwarp;
+  DT k = (DT)mode + 1.0000001f;
+  DT a[16];
+#pragma unroll
+  for (int j = 0; j < 16; j++) a[j] = (DT)(iters + j);
+  for (int i = 0; i < iters; i++) {
+#pragma unroll
+    for (int j = 0; j < 16; j++) a[j] = a[j] + k;
+  }
+  DT s = 0.0f;
+#pragma unroll
+  for (int j = 0; j < 16; j++) s = s + a[j];
+  out[0] = (long long)s;
+}
+
+// ------------------------------------------------------- SIMT ILP 1/2/4/8
+__simt_vf__ LAUNCH_BOUND(32) __aiv__ __attribute__((always_inline)) static void
+simt_add_ilp1_core(__ubuf__ DT *sink, DT k, int iters) {
+  int lane = threadIdx.x;
+  DT a0 = (DT)(lane + 1);
+  for (int i = 0; i < iters; i++) { a0 = a0 + k; }
+  sink[lane] = a0;
+}
+extern "C" __global__ [aicore] void
+simt_add_ilp1(__gm__ long long *out, int K, int nlane, int nwarp, int iters, int mode) {
+  (void)K; (void)nlane; (void)nwarp;
+  auto sink = reinterpret_cast<__ubuf__ DT *>(0);
+  cce::async_invoke<simt_add_ilp1_core>(cce::dim3{32, 1, 1}, sink,
+                                        (DT)mode + 1.0000001f, iters);
+  out[0] = 0;
+}
+
+__simt_vf__ LAUNCH_BOUND(32) __aiv__ __attribute__((always_inline)) static void
+simt_add_ilp2_core(__ubuf__ DT *sink, DT k, int iters) {
+  int lane = threadIdx.x;
+  DT a0 = (DT)(lane + 1), a1 = (DT)(lane + 2);
+  for (int i = 0; i < iters; i++) { a0 = a0 + k; a1 = a1 + k; }
+  sink[lane] = a0 + a1;
+}
+extern "C" __global__ [aicore] void
+simt_add_ilp2(__gm__ long long *out, int K, int nlane, int nwarp, int iters, int mode) {
+  (void)K; (void)nlane; (void)nwarp;
+  auto sink = reinterpret_cast<__ubuf__ DT *>(0);
+  cce::async_invoke<simt_add_ilp2_core>(cce::dim3{32, 1, 1}, sink,
+                                        (DT)mode + 1.0000001f, iters);
+  out[0] = 0;
+}
+
+__simt_vf__ LAUNCH_BOUND(32) __aiv__ __attribute__((always_inline)) static void
+simt_add_ilp4_core(__ubuf__ DT *sink, DT k, int iters) {
+  int lane = threadIdx.x;
+  DT a0 = (DT)(lane + 1), a1 = (DT)(lane + 2), a2 = (DT)(lane + 3), a3 = (DT)(lane + 4);
+  for (int i = 0; i < iters; i++) {
+    a0 = a0 + k; a1 = a1 + k; a2 = a2 + k; a3 = a3 + k;
+  }
+  sink[lane] = (a0 + a1) + (a2 + a3);
+}
+extern "C" __global__ [aicore] void
+simt_add_ilp4(__gm__ long long *out, int K, int nlane, int nwarp, int iters, int mode) {
+  (void)K; (void)nlane; (void)nwarp;
+  auto sink = reinterpret_cast<__ubuf__ DT *>(0);
+  cce::async_invoke<simt_add_ilp4_core>(cce::dim3{32, 1, 1}, sink,
+                                        (DT)mode + 1.0000001f, iters);
+  out[0] = 0;
+}
+
+__simt_vf__ LAUNCH_BOUND(32) __aiv__ __attribute__((always_inline)) static void
+simt_add_ilp8_core(__ubuf__ DT *sink, DT k, int iters) {
+  int lane = threadIdx.x;
+  DT a0 = (DT)(lane + 1), a1 = (DT)(lane + 2), a2 = (DT)(lane + 3), a3 = (DT)(lane + 4);
+  DT a4 = (DT)(lane + 5), a5 = (DT)(lane + 6), a6 = (DT)(lane + 7), a7 = (DT)(lane + 8);
+  for (int i = 0; i < iters; i++) {
+    a0 = a0 + k; a1 = a1 + k; a2 = a2 + k; a3 = a3 + k;
+    a4 = a4 + k; a5 = a5 + k; a6 = a6 + k; a7 = a7 + k;
+  }
+  sink[lane] = ((a0 + a1) + (a2 + a3)) + ((a4 + a5) + (a6 + a7));
+}
+extern "C" __global__ [aicore] void
+simt_add_ilp8(__gm__ long long *out, int K, int nlane, int nwarp, int iters, int mode) {
+  (void)K; (void)nlane; (void)nwarp;
+  auto sink = reinterpret_cast<__ubuf__ DT *>(0);
+  cce::async_invoke<simt_add_ilp8_core>(cce::dim3{32, 1, 1}, sink,
+                                        (DT)mode + 1.0000001f, iters);
+  out[0] = 0;
+}
+
+// ------------------------------------------------------------ SIMT ILP16
+__simt_vf__ LAUNCH_BOUND(32) __aiv__ __attribute__((always_inline)) static void
+simt_add_ilp16_core(__ubuf__ DT *sink, DT k, int iters) {
+  int lane = threadIdx.x;
+  DT a[16];
+#pragma unroll
+  for (int j = 0; j < 16; j++) a[j] = (DT)(lane + j);
+  for (int i = 0; i < iters; i++) {
+#pragma unroll
+    for (int j = 0; j < 16; j++) a[j] = a[j] + k;
+  }
+  DT s = 0.0f;
+#pragma unroll
+  for (int j = 0; j < 16; j++) s = s + a[j];
+  sink[lane] = s;
+}
+extern "C" __global__ [aicore] void
+simt_add_ilp16(__gm__ long long *out, int K, int nlane, int nwarp, int iters, int mode) {
+  (void)K; (void)nlane; (void)nwarp;
+  auto sink = reinterpret_cast<__ubuf__ DT *>(0);
+  cce::async_invoke<simt_add_ilp16_core>(cce::dim3{32, 1, 1}, sink,
+                                         (DT)mode + 1.0000001f, iters);
+  out[0] = 0;
+}
+
+// -------------------------------------------------- SIMT uniform ILP16
+// Same 16 independent FADD chains as simt_add_ilp16, but every lane uses the
+// same uniform initial values and the same addend. This is the throughput
+// comparison against simd_add_ilp16 and simt_add_ilp16.
+__simt_vf__ LAUNCH_BOUND(32) __aiv__ __attribute__((always_inline)) static void
+simt_add_uniform_ilp16_core(__ubuf__ DT *sink, DT k, int iters) {
+  int lane = threadIdx.x;
+  DT a[16];
+#pragma unroll
+  for (int j = 0; j < 16; j++) a[j] = (DT)7;
+  for (int i = 0; i < iters; i++) {
+#pragma unroll
+    for (int j = 0; j < 16; j++) a[j] = a[j] + k;
+  }
+  DT s = 0.0f;
+#pragma unroll
+  for (int j = 0; j < 16; j++) s = s + a[j];
+  sink[lane] = s;
+}
+extern "C" __global__ [aicore] void
+simt_add_uniform_ilp16(__gm__ long long *out, int K, int nlane, int nwarp,
+                       int iters, int mode) {
+  (void)K; (void)nlane; (void)nwarp;
+  auto sink = reinterpret_cast<__ubuf__ DT *>(0);
+  cce::async_invoke<simt_add_uniform_ilp16_core>(
+      cce::dim3{32, 1, 1}, sink, (DT)mode + 1.0000001f, iters);
+  out[0] = 0;
+}
+
+// ------------------------------------------------ SIMT uniform same address
+// All 32 lanes load/add/store the same GM scalar address. The host's out[0]
+// checks whether the result is base + iters*k (one lane wins) or
+// base + 32*iters*k (true serialisation / atomic accumulate).
+__simt_vf__ LAUNCH_BOUND(32) __aiv__ __attribute__((always_inline)) static void
+simt_add_uniform_same_addr_core(__gm__ DT *p, DT k, int iters) {
+  int lane = threadIdx.x;
+  (void)lane;
+  DT a0 = p[0];
+  for (int i = 0; i < iters; i++) a0 = a0 + k;
+  p[0] = a0;
+}
+extern "C" __global__ [aicore] void
+simt_add_uniform_same_addr(__gm__ long long *out, int K, int nlane, int nwarp,
+                           int iters, int mode) {
+  (void)K; (void)nlane; (void)nwarp;
+  auto p = reinterpret_cast<__gm__ DT *>(out);
+  DT k = (DT)(mode + 1);
+  p[0] = 0.0f;
+  pipe_barrier(PIPE_ALL);
+  cce::async_invoke<simt_add_uniform_same_addr_core>(cce::dim3{32, 1, 1}, p, k, iters);
+  pipe_barrier(PIPE_ALL);
+  out[0] = (long long)(p[0]);
+}

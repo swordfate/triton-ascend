@@ -1,0 +1,77 @@
+[
+  {
+    "case": "simd",
+    "total_cycles": 478,
+    "execTime": 478,
+    "events": {
+      "issue": 1225,
+      "retire": 1703,
+      "dc_calc": 1226,
+      "dc_miss": 1226,
+      "stb_push": 1228,
+      "stb_create_rd": 1260,
+      "dc_biu_req": 1261,
+      "read_id": 1455,
+      "dc_biu_rsp": 1701,
+      "stb_retire": 1701,
+      "biu_send_rd_cmd": 1269,
+      "biu_recv_biu_data": 1690,
+      "create_wr_ddr": 1704,
+      "dc_wr_req": 1706,
+      "wr_id": 1462,
+      "dc_wr_data": 1711,
+      "wr_recv_su_wr_cmd": 1707,
+      "wr_send_aw_cmd": 1708,
+      "wr_send_wr_cmd_rsp": 1709,
+      "wr_recv_wr_data": 1712,
+      "wr_recv_wack": 2187,
+      "wr_send_wr_data": 2192,
+      "wr_recv_brsp": 2219,
+      "wr_send_data_rsp": 2234
+    },
+    "stages": {
+      "issue_to_tag": 1,
+      "tag_to_stb_push": 2,
+      "stb_push_to_read_req": 32,
+      "read_req_to_biu_req": 1,
+      "biu_req_to_dc_rsp": 440,
+      "dc_rsp_to_retire": 2
+    }
+  },
+  {
+    "case": "simt32",
+    "total_cycles": 491,
+    "thread_count": 32,
+    "target_size": 128,
+    "events": {
+      "recv": 1712,
+      "issue": 1713,
+      "retire": 2204,
+      "tag": 1719,
+      "addr": "0x164b6da00",
+      "ub_recv": 1719,
+      "thread_count": 32,
+      "gsu_out": 1723,
+      "target_size": 128,
+      "ubitf_rsp": 1727,
+      "biu_recv_cmd": 1736,
+      "biu_send_aw_cmd": 1737,
+      "biu_send_wr_cmd_rsp": 1738,
+      "biu_recv_wr_data": 1749,
+      "biu_write_store_buf": 1750,
+      "biu_recv_wack": 2144,
+      "biu_send_wr_data": 2149,
+      "biu_recv_brsp": 2186,
+      "biu_send_data_rsp": 2201
+    },
+    "stages": {
+      "issue_to_tag": 6,
+      "tag_to_ubitf_rsp": 8,
+      "ubitf_rsp_to_biu_cmd": 9,
+      "biu_cmd_to_data_buf": 14,
+      "data_buf_to_wack": 394,
+      "wack_to_data_rsp": 57,
+      "data_rsp_to_retire": 3
+    }
+  }
+]

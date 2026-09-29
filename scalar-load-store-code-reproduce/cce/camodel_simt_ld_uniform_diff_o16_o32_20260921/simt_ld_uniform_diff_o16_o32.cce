@@ -1,0 +1,55 @@
+// SIMT uniform diff-line scalar load: o4 / o16 / o32 variants.
+// Each op i uses p[i * 32] (128B apart across lanes), so every op hits a distinct 128B line.
+#include "RegBase/VecUtils.h"
+#include "Vector/VecUtils.h"
+#include "Utils.h"
+using DT = float;
+
+__simt_vf__ LAUNCH_BOUND(32) __aiv__ __attribute__((always_inline)) static void
+simt_ld_uniform_diff_o4_core(__gm__ DT* gm, __ubuf__ DT* sink) {
+  int lane = threadIdx.x;
+  volatile __gm__ DT* p = gm;
+  DT a0 = p[0 * 32]; DT a1 = p[1 * 32]; DT a2 = p[2 * 32]; DT a3 = p[3 * 32];
+  sink[lane] = (DT)(a0 + a1 + a2 + a3);
+}
+
+extern "C" __global__ [aicore] void
+simt_ld_uniform_diff_o4(__gm__ long long* out, __gm__ DT* gm, int iters, int mode) {
+  (void)iters; (void)mode;
+  auto sink = reinterpret_cast<__ubuf__ DT*>(0);
+  cce::async_invoke<simt_ld_uniform_diff_o4_core>(cce::dim3{32, 1, 1}, gm, sink);
+  out[0] = 0;
+}
+
+__simt_vf__ LAUNCH_BOUND(32) __aiv__ __attribute__((always_inline)) static void
+simt_ld_uniform_diff_o16_core(__gm__ DT* gm, __ubuf__ DT* sink) {
+  int lane = threadIdx.x;
+  volatile __gm__ DT* p = gm;
+  DT a0 = p[0 * 32]; DT a1 = p[1 * 32]; DT a2 = p[2 * 32]; DT a3 = p[3 * 32]; DT a4 = p[4 * 32]; DT a5 = p[5 * 32]; DT a6 = p[6 * 32]; DT a7 = p[7 * 32]; DT a8 = p[8 * 32]; DT a9 = p[9 * 32]; DT a10 = p[10 * 32]; DT a11 = p[11 * 32]; DT a12 = p[12 * 32]; DT a13 = p[13 * 32]; DT a14 = p[14 * 32]; DT a15 = p[15 * 32];
+  sink[lane] = (DT)(a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14 + a15);
+}
+
+extern "C" __global__ [aicore] void
+simt_ld_uniform_diff_o16(__gm__ long long* out, __gm__ DT* gm, int iters, int mode) {
+  (void)iters; (void)mode;
+  auto sink = reinterpret_cast<__ubuf__ DT*>(0);
+  cce::async_invoke<simt_ld_uniform_diff_o16_core>(cce::dim3{32, 1, 1}, gm, sink);
+  out[0] = 0;
+}
+
+__simt_vf__ LAUNCH_BOUND(32) __aiv__ __attribute__((always_inline)) static void
+simt_ld_uniform_diff_o32_core(__gm__ DT* gm, __ubuf__ DT* sink) {
+  int lane = threadIdx.x;
+  volatile __gm__ DT* p = gm;
+  DT a0 = p[0 * 32]; DT a1 = p[1 * 32]; DT a2 = p[2 * 32]; DT a3 = p[3 * 32]; DT a4 = p[4 * 32]; DT a5 = p[5 * 32]; DT a6 = p[6 * 32]; DT a7 = p[7 * 32]; DT a8 = p[8 * 32]; DT a9 = p[9 * 32]; DT a10 = p[10 * 32]; DT a11 = p[11 * 32]; DT a12 = p[12 * 32]; DT a13 = p[13 * 32]; DT a14 = p[14 * 32]; DT a15 = p[15 * 32]; DT a16 = p[16 * 32]; DT a17 = p[17 * 32]; DT a18 = p[18 * 32]; DT a19 = p[19 * 32]; DT a20 = p[20 * 32]; DT a21 = p[21 * 32]; DT a22 = p[22 * 32]; DT a23 = p[23 * 32]; DT a24 = p[24 * 32]; DT a25 = p[25 * 32]; DT a26 = p[26 * 32]; DT a27 = p[27 * 32]; DT a28 = p[28 * 32]; DT a29 = p[29 * 32]; DT a30 = p[30 * 32]; DT a31 = p[31 * 32];
+  sink[lane] = (DT)(a0 + a1 + a2 + a3 + a4 + a5 + a6 + a7 + a8 + a9 + a10 + a11 + a12 + a13 + a14 + a15 + a16 + a17 + a18 + a19 + a20 + a21 + a22 + a23 + a24 + a25 + a26 + a27 + a28 + a29 + a30 + a31);
+}
+
+extern "C" __global__ [aicore] void
+simt_ld_uniform_diff_o32(__gm__ long long* out, __gm__ DT* gm, int iters, int mode) {
+  (void)iters; (void)mode;
+  auto sink = reinterpret_cast<__ubuf__ DT*>(0);
+  cce::async_invoke<simt_ld_uniform_diff_o32_core>(cce::dim3{32, 1, 1}, gm, sink);
+  out[0] = 0;
+}
+

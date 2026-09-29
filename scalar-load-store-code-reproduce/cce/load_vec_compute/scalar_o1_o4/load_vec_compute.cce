@@ -1,0 +1,143 @@
+// scratch: scalar load -> SIMD vector compute / SIMT register compute
+// 1 op / 4 op (same-line / diff-line); 32-lane vector tile.
+#include "RegBase/VecUtils.h"
+#include "Vector/VecUtils.h"
+#include "Utils.h"
+
+using DT = float;
+
+// ---------------- SIMD MainScalar + SIMD VF compute ----------------
+
+extern "C" __global__ [aicore] void
+simd_lc_o1(__gm__ long long* out, __gm__ DT* gm, int iters, int mode) {
+  (void)iters; (void)mode;
+  volatile __gm__ DT* p = gm;
+  DT s0 = p[0];
+  auto ub_in = reinterpret_cast<__ubuf__ DT*>(0);
+  auto ub_out = reinterpret_cast<__ubuf__ DT*>(4096);
+
+  pipe_barrier(PIPE_ALL);
+  __VEC_SCOPE__ {
+    vector_bool m;
+    uint32_t cnt = 32;
+    CREATE_MASK_BY_SIZE(m, DT, cnt);
+    VectorReg<DT> x, v0;
+    vlds(x, ub_in, 0, NORM);
+    vbr(v0, s0);
+    vadd(x, x, v0, m, MODE_ZEROING);
+    vsts(x, ub_out, 0, NORM_B32, m);
+  }
+  pipe_barrier(PIPE_ALL);
+  out[0] = (long long)(s0);
+}
+
+extern "C" __global__ [aicore] void
+simd_lc_o4_same(__gm__ long long* out, __gm__ DT* gm, int iters, int mode) {
+  (void)iters; (void)mode;
+  volatile __gm__ DT* p = gm;
+  DT s0 = p[0]; DT s1 = p[1]; DT s2 = p[2]; DT s3 = p[3];
+  auto ub_in = reinterpret_cast<__ubuf__ DT*>(0);
+  auto ub_out = reinterpret_cast<__ubuf__ DT*>(4096);
+
+  pipe_barrier(PIPE_ALL);
+  __VEC_SCOPE__ {
+    vector_bool m;
+    uint32_t cnt = 32;
+    CREATE_MASK_BY_SIZE(m, DT, cnt);
+    VectorReg<DT> x, v0, v1, v2, v3;
+    vlds(x, ub_in, 0, NORM);
+    vbr(v0, s0); vbr(v1, s1); vbr(v2, s2); vbr(v3, s3);
+    vadd(x, x, v0, m, MODE_ZEROING);
+    vadd(x, x, v1, m, MODE_ZEROING);
+    vadd(x, x, v2, m, MODE_ZEROING);
+    vadd(x, x, v3, m, MODE_ZEROING);
+    vsts(x, ub_out, 0, NORM_B32, m);
+  }
+  pipe_barrier(PIPE_ALL);
+  out[0] = (long long)(s0 + s1 + s2 + s3);
+}
+
+extern "C" __global__ [aicore] void
+simd_lc_o4_diff(__gm__ long long* out, __gm__ DT* gm, int iters, int mode) {
+  (void)iters; (void)mode;
+  volatile __gm__ DT* p = gm;
+  DT s0 = p[0]; DT s1 = p[16]; DT s2 = p[32]; DT s3 = p[48];
+  auto ub_in = reinterpret_cast<__ubuf__ DT*>(0);
+  auto ub_out = reinterpret_cast<__ubuf__ DT*>(4096);
+
+  pipe_barrier(PIPE_ALL);
+  __VEC_SCOPE__ {
+    vector_bool m;
+    uint32_t cnt = 32;
+    CREATE_MASK_BY_SIZE(m, DT, cnt);
+    VectorReg<DT> x, v0, v1, v2, v3;
+    vlds(x, ub_in, 0, NORM);
+    vbr(v0, s0); vbr(v1, s1); vbr(v2, s2); vbr(v3, s3);
+    vadd(x, x, v0, m, MODE_ZEROING);
+    vadd(x, x, v1, m, MODE_ZEROING);
+    vadd(x, x, v2, m, MODE_ZEROING);
+    vadd(x, x, v3, m, MODE_ZEROING);
+    vsts(x, ub_out, 0, NORM_B32, m);
+  }
+  pipe_barrier(PIPE_ALL);
+  out[0] = (long long)(s0 + s1 + s2 + s3);
+}
+
+// ---------------- SIMT uniform scalar load + SIMT register compute ----------------
+
+__simt_vf__ LAUNCH_BOUND(32) __aiv__ __attribute__((always_inline)) static void
+simt_lc_o1_core(__gm__ DT* gm, __ubuf__ DT* ub_in, __ubuf__ DT* ub_out) {
+  int lane = threadIdx.x;
+  volatile __gm__ DT* p = gm;
+  DT x = ub_in[lane];
+  DT s0 = p[0];
+  x = x + s0;
+  ub_out[lane] = x;
+}
+
+extern "C" __global__ [aicore] void
+simt_lc_o1(__gm__ long long* out, __gm__ DT* gm, int iters, int mode) {
+  (void)iters; (void)mode;
+  auto ub_in = reinterpret_cast<__ubuf__ DT*>(0);
+  auto ub_out = reinterpret_cast<__ubuf__ DT*>(4096);
+  cce::async_invoke<simt_lc_o1_core>(cce::dim3{32, 1, 1}, gm, ub_in, ub_out);
+  out[0] = 0;
+}
+
+__simt_vf__ LAUNCH_BOUND(32) __aiv__ __attribute__((always_inline)) static void
+simt_lc_o4_same_core(__gm__ DT* gm, __ubuf__ DT* ub_in, __ubuf__ DT* ub_out) {
+  int lane = threadIdx.x;
+  volatile __gm__ DT* p = gm;
+  DT x = ub_in[lane];
+  DT s0 = p[0]; DT s1 = p[1]; DT s2 = p[2]; DT s3 = p[3];
+  x = x + s0; x = x + s1; x = x + s2; x = x + s3;
+  ub_out[lane] = x;
+}
+
+extern "C" __global__ [aicore] void
+simt_lc_o4_same(__gm__ long long* out, __gm__ DT* gm, int iters, int mode) {
+  (void)iters; (void)mode;
+  auto ub_in = reinterpret_cast<__ubuf__ DT*>(0);
+  auto ub_out = reinterpret_cast<__ubuf__ DT*>(4096);
+  cce::async_invoke<simt_lc_o4_same_core>(cce::dim3{32, 1, 1}, gm, ub_in, ub_out);
+  out[0] = 0;
+}
+
+__simt_vf__ LAUNCH_BOUND(32) __aiv__ __attribute__((always_inline)) static void
+simt_lc_o4_diff_core(__gm__ DT* gm, __ubuf__ DT* ub_in, __ubuf__ DT* ub_out) {
+  int lane = threadIdx.x;
+  volatile __gm__ DT* p = gm;
+  DT x = ub_in[lane];
+  DT s0 = p[0]; DT s1 = p[32]; DT s2 = p[64]; DT s3 = p[96];
+  x = x + s0; x = x + s1; x = x + s2; x = x + s3;
+  ub_out[lane] = x;
+}
+
+extern "C" __global__ [aicore] void
+simt_lc_o4_diff(__gm__ long long* out, __gm__ DT* gm, int iters, int mode) {
+  (void)iters; (void)mode;
+  auto ub_in = reinterpret_cast<__ubuf__ DT*>(0);
+  auto ub_out = reinterpret_cast<__ubuf__ DT*>(4096);
+  cce::async_invoke<simt_lc_o4_diff_core>(cce::dim3{32, 1, 1}, gm, ub_in, ub_out);
+  out[0] = 0;
+}
