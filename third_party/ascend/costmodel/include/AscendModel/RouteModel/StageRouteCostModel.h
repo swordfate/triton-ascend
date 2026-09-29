@@ -54,6 +54,12 @@ struct StageModelFeatures {
   bool hasPointerInduction = false;
   bool hasContiguousMemory = false;
   bool hasIndirectMemory = false;
+  /// True when at least one shaped load/store owned by this Stage has a
+  /// proven 1-D constant element stride greater than one.  This is a
+  /// deliberately narrow fact: it does not claim a full memory-access model.
+  bool hasStridedMemory = false;
+  bool hasStridedLoad = false;
+  bool hasStridedStore = false;
   bool hasAtomicMemory = false;
   bool hasReduction = false;
   bool hasPrefixScan = false;
@@ -123,6 +129,23 @@ struct TensorOperationWorkload {
   llvm::json::Object toJSON() const;
 };
 
+/// One shaped load/store whose address is a proven 1-D constant-stride
+/// access: ``base + arange(0, N) * strideElements``.  This is the narrow IR
+/// fact consumed by the strided load/store calibration; it is not a general
+/// MemoryAccessFacts replacement.
+struct StridedMemoryAccess {
+  bool isLoad = true;
+  /// Logical elements in one dynamic 1-D access.
+  double elements = 0.0;
+  int64_t elementBytes = 0;
+  /// Element distance, not byte distance.  A value of one is contiguous and
+  /// is deliberately not recorded as a strided access.
+  int64_t strideElements = 1;
+
+  bool isValid() const;
+  llvm::json::Object toJSON() const;
+};
+
 /// Mode-independent work owned exactly once by one Stage.  Values are
 /// logical elements/bytes, not mode-specific instructions or cycles.
 struct StageWorkload {
@@ -133,6 +156,11 @@ struct StageWorkload {
   double storeBytes = 0.0;
   double loadWarpInstructions = 0.0;
   double storeWarpInstructions = 0.0;
+  /// Proven 1-D constant-stride shaped load/store instances.  The legacy
+  /// load/store totals above still include these accesses for reporting and
+  /// issue accounting; mapWorkload removes them from the contiguous byte /
+  /// warp-instruction rates and prices them with the strided formula below.
+  std::vector<StridedMemoryAccess> stridedMemoryAccesses;
   /// Subsets of the total load/store fields whose address depends on loaded
   /// data (or is an explicit gather).  Keeping totals and subsets preserves
   /// report compatibility while allowing direct and indirect work to be

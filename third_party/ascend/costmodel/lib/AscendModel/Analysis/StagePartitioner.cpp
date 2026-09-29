@@ -3,7 +3,9 @@
 #include "AscendModel/Analysis/StagePartitioner.h"
 #include "ascend/include/Utils/SuperBlockFactor.h"
 
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "llvm/ADT/APInt.h"
 #include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SetVector.h"
@@ -18,6 +20,7 @@
 #include <optional>
 #include <system_error>
 #include <utility>
+#include <vector>
 
 using namespace mlir;
 using namespace mlir::ascend;
@@ -141,6 +144,170 @@ static double getOperationElements(Operation *operation) {
     for (Value value : operation->getOperands())
       elements = std::max(elements, getTypeElementCount(value.getType()));
   return elements;
+}
+
+struct StridedIndexTerm {
+  int64_t rangeElements = 0;
+  int64_t coefficient = 1;
+};
+
+struct StridedIndexPattern {
+  std::vector<StridedIndexTerm> terms;
+};
+
+static std::optional<int64_t> getConstantIntegerFromSplat(Value value) {
+  Operation *definition = value.getDefiningOp();
+  if (!definition)
+    return std::nullopt;
+  const llvm::StringRef name = definition->getName().getStringRef();
+  if (name == "arith.constant") {
+    Attribute attribute = definition->getAttr("value");
+    if (auto integer = dyn_cast_or_null<IntegerAttr>(attribute))
+      return integer.getInt();
+    if (auto dense = dyn_cast_or_null<DenseIntElementsAttr>(attribute))
+      if (dense.isSplat())
+        return dense.getSplatValue<APInt>().getSExtValue();
+    return std::nullopt;
+  }
+  if (name == "tt.splat" || name == "arith.index_cast" ||
+      name == "arith.extsi")
+    return getConstantIntegerFromSplat(definition->getOperand(0));
+  return std::nullopt;
+}
+
+/// Match the range terms of a constant-stride address expression.  The
+/// matcher collects one term per structured range so the caller can flatten a
+/// nested contiguous tile or conservatively reject ambiguous multi-range
+/// addressing.
+static StridedIndexPattern matchConstantStrideIndex(Value value,
+                                                    unsigned depth) {
+  if (!value || depth > 12)
+    return {};
+  Operation *definition = value.getDefiningOp();
+  if (!definition)
+    return {};
+  const llvm::StringRef name = definition->getName().getStringRef();
+  if (name == "tt.make_range") {
+    StridedIndexPattern pattern;
+    pattern.terms.push_back(
+        {static_cast<int64_t>(getTypeElementCount(value.getType())), 1});
+    return pattern;
+  }
+  if (getConstantIntegerFromSplat(value))
+    return {};
+  if (name == "tt.splat" || name == "tt.broadcast" ||
+      name == "tt.expand_dims" || name == "arith.extsi" ||
+      name == "arith.index_cast" || name == "arith.trunci")
+    return matchConstantStrideIndex(definition->getOperand(0), depth + 1);
+  if (name == "arith.addi") {
+    StridedIndexPattern lhs =
+        matchConstantStrideIndex(definition->getOperand(0), depth + 1);
+    StridedIndexPattern rhs =
+        matchConstantStrideIndex(definition->getOperand(1), depth + 1);
+    lhs.terms.insert(lhs.terms.end(), rhs.terms.begin(), rhs.terms.end());
+    return lhs;
+  }
+  if (name == "arith.muli") {
+    std::optional<int64_t> lhsConstant =
+        getConstantIntegerFromSplat(definition->getOperand(0));
+    std::optional<int64_t> rhsConstant =
+        getConstantIntegerFromSplat(definition->getOperand(1));
+    if (lhsConstant && !rhsConstant) {
+      StridedIndexPattern pattern = matchConstantStrideIndex(
+          definition->getOperand(1), depth + 1);
+      for (StridedIndexTerm &term : pattern.terms)
+        term.coefficient *= *lhsConstant;
+      return pattern;
+    }
+    if (rhsConstant && !lhsConstant) {
+      StridedIndexPattern pattern = matchConstantStrideIndex(
+          definition->getOperand(0), depth + 1);
+      for (StridedIndexTerm &term : pattern.terms)
+        term.coefficient *= *rhsConstant;
+      return pattern;
+    }
+    return {};
+  }
+  return {};
+}
+
+/// Resolve an affine multi-range pattern into one flattened element stride.
+/// The post-layout IR often materialises ``arange(0, N) * stride`` as a 2-D
+/// tile.  A contiguous nested tile satisfies
+/// ``outer_coefficient == inner_coefficient * inner_elements``; any other
+/// relationship is left unmodeled.
+static std::optional<int64_t>
+resolveStridedElementStride(const StridedIndexPattern &pattern) {
+  if (pattern.terms.empty() || pattern.terms.size() > 2)
+    return std::nullopt;
+  if (pattern.terms.size() == 1)
+    return pattern.terms.front().coefficient;
+  std::vector<StridedIndexTerm> terms = pattern.terms;
+  llvm::sort(terms, [](const StridedIndexTerm &lhs,
+                       const StridedIndexTerm &rhs) {
+    return lhs.coefficient * lhs.rangeElements >
+           rhs.coefficient * rhs.rangeElements;
+  });
+  const StridedIndexTerm &outer = terms[0];
+  const StridedIndexTerm &inner = terms[1];
+  if (inner.coefficient <= 0 || outer.coefficient <= 0 ||
+      inner.rangeElements <= 0 || outer.rangeElements <= 0)
+    return std::nullopt;
+  if (outer.coefficient == inner.coefficient * inner.rangeElements)
+    return inner.coefficient;
+  if (inner.coefficient == outer.coefficient * outer.rangeElements)
+    return outer.coefficient;
+  return std::nullopt;
+}
+
+/// Recognise the narrow shaped strided load/store pattern emitted by
+/// ``tl.load(ptr + arange * const_stride)`` / ``tl.store(out + arange *
+/// const_stride, value)`` on the post-layout TTIR stage IR.
+static std::optional<StridedMemoryAccess>
+detectStridedMemoryAccess(Operation *operation, bool isLoad) {
+  if (!operation || operation->getNumOperands() == 0)
+    return std::nullopt;
+  Operation *addPtr = operation->getOperand(0).getDefiningOp();
+  if (!addPtr || addPtr->getName().getStringRef() != "tt.addptr" ||
+      addPtr->getNumOperands() < 2)
+    return std::nullopt;
+  StridedIndexPattern pattern =
+      matchConstantStrideIndex(addPtr->getOperand(1), 0);
+  std::optional<int64_t> strideElements =
+      resolveStridedElementStride(pattern);
+  if (!strideElements || *strideElements <= 1)
+    return std::nullopt;
+
+  Type elementType;
+  if (isLoad) {
+    if (operation->getNumResults() == 0)
+      return std::nullopt;
+    Type resultType = operation->getResult(0).getType();
+    auto shaped = dyn_cast<ShapedType>(resultType);
+    if (!shaped)
+      return std::nullopt;
+    elementType = shaped.getElementType();
+  } else {
+    if (operation->getNumOperands() < 2)
+      return std::nullopt;
+    Type valueType = operation->getOperand(1).getType();
+    auto shaped = dyn_cast<ShapedType>(valueType);
+    if (!shaped)
+      return std::nullopt;
+    elementType = shaped.getElementType();
+  }
+  const int64_t bits = getScalarBitWidth(elementType);
+  if (bits != 32)
+    return std::nullopt; // calibration domain is f32/i32/like 4-byte.
+
+  StridedMemoryAccess access;
+  access.isLoad = isLoad;
+  access.elements = getOperationElements(operation);
+  access.elementBytes = bits / 8;
+  access.strideElements = *strideElements;
+  if (!access.isValid())
+    return std::nullopt;
+  return access;
 }
 
 static bool hasTensorResult(Operation *operation) {
@@ -393,6 +560,8 @@ static void accumulateOneOperation(Operation *operation, StageWorkload &work) {
       work.indirectLoadBytes += bytes;
       work.indirectLoadTransactions += logicalMemoryGroups;
     }
+    if (auto access = detectStridedMemoryAccess(operation, true))
+      work.stridedMemoryAccesses.push_back(*access);
     return;
   }
   if (name == "tt.store" && operation->getNumOperands() > 1) {
@@ -410,6 +579,8 @@ static void accumulateOneOperation(Operation *operation, StageWorkload &work) {
       work.indirectStoreBytes += bytes;
       work.indirectStoreTransactions += logicalMemoryGroups;
     }
+    if (auto access = detectStridedMemoryAccess(operation, false))
+      work.stridedMemoryAccesses.push_back(*access);
     return;
   }
   if (name.starts_with("tt.atomic")) {
@@ -460,6 +631,8 @@ static void scaleWorkload(StageWorkload &work, double scale) {
     tensor.logicalElements *= scale;
     tensor.segmentCount *= scale;
   }
+  for (StridedMemoryAccess &access : work.stridedMemoryAccesses)
+    access.elements *= scale;
   work.predicateElements *= scale;
   work.shuffleLaneSteps *= scale;
   work.scanShuffleLaneSteps *= scale;
@@ -590,6 +763,8 @@ static void mergeWorkload(StageWorkload &into, StageWorkload from) {
     destination->logicalElements += source.logicalElements;
     destination->segmentCount += source.segmentCount;
   }
+  llvm::append_range(into.stridedMemoryAccesses,
+                     std::move(from.stridedMemoryAccesses));
   into.predicateElements += from.predicateElements;
   into.shuffleLaneSteps += from.shuffleLaneSteps;
   into.scanShuffleLaneSteps += from.scanShuffleLaneSteps;
@@ -1296,6 +1471,8 @@ static int semanticKindPriority(StageCostModelKind kind) {
     return 50;
   case StageCostModelKind::ConversionPack:
     return 40;
+  case StageCostModelKind::StridedTileMemory:
+    return 35;
   case StageCostModelKind::ContinuousTileMemory:
   case StageCostModelKind::ContinuousTileStore:
   case StageCostModelKind::ContinuousShortLoad:
@@ -1582,6 +1759,14 @@ llvm::Error StageFeatureAnalysis::analyze(StagePartition &partition) const {
           name == "tt.fp_to_fp" || name.contains("convert") ||
           name.contains("pack") || name.contains("unpack");
     }
+    for (const StridedMemoryAccess &access :
+         stage.workload.stridedMemoryAccesses) {
+      facts.hasStridedMemory = true;
+      if (access.isLoad)
+        facts.hasStridedLoad = true;
+      else
+        facts.hasStridedStore = true;
+    }
     facts.hasContiguousMemory = hasMemory && hasContiguousMemory;
     if (algorithmLoopCount > 0 && stage.iterationCount > 1) {
       // Multiple loop operations in one stage do not prove concurrent
@@ -1626,6 +1811,8 @@ llvm::Error StageKindClassifier::analyze(StagePartition &partition,
       return facts.hasIndirectMemory;
     case StageCostModelKind::AtomicMemory:
       return facts.hasAtomicMemory;
+    case StageCostModelKind::StridedTileMemory:
+      return facts.hasStridedMemory;
     case StageCostModelKind::ContinuousTileMemory:
     case StageCostModelKind::ContinuousTileStore:
     case StageCostModelKind::ContinuousShortLoad:
@@ -1673,6 +1860,8 @@ llvm::Error StageKindClassifier::analyze(StagePartition &partition,
         return StageCostModelKind::AtomicMemory;
       if (facts.hasIndirectMemory)
         return StageCostModelKind::IndirectGatherMemory;
+      if (facts.hasStridedMemory)
+        return StageCostModelKind::StridedTileMemory;
       if (facts.hasConversionPack)
         return StageCostModelKind::ConversionPack;
       if (stage.workload.scalarLoadCount > 0.0 && !facts.hasContiguousMemory)
