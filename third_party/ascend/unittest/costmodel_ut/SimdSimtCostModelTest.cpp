@@ -19,6 +19,7 @@ using mlir::ascend::StageCostModelKind;
 using mlir::ascend::StageCostTable;
 using mlir::ascend::StageFeatureAnalysis;
 using mlir::ascend::StageImplementationCost;
+using mlir::ascend::StageKernelRouteKind;
 using mlir::ascend::StageMode;
 using mlir::ascend::StageModeLegalityAnalysis;
 using mlir::ascend::StagePartition;
@@ -428,6 +429,68 @@ TEST(SimdSimtCostModelTest, KernelMixedRouteComesFromAdjacentStageModes) {
   EXPECT_EQ(result->mixed.implementations[2].mode, StageMode::SIMD);
   ASSERT_EQ(result->mixed.entryTransitionCycles.size(), 3u);
   EXPECT_DOUBLE_EQ(result->mixed.entryTransitionCycles[1], 12.0);
+}
+
+TEST(SimdSimtCostModelTest, RouteEnvelopeAddsBoundaryAndCompletionOnce) {
+  StageCostTable table;
+  table.profileVersion = "unit-test-profile-v1";
+  auto makeCost = [](StageMode mode, double cycles) {
+    StageImplementationCost cost;
+    cost.implementation = {mode, 1, false};
+    cost.totalCycles = cycles;
+    return cost;
+  };
+  LogicalStageCost stage;
+  stage.id = "payload";
+  stage.implementations = {makeCost(StageMode::SIMD, 10.0),
+                           makeCost(StageMode::SIMT, 20.0)};
+  table.stages = {stage};
+
+  StageTransitionCost transition;
+  transition.kernelBoundarySystemCycles = 100.0;
+  transition.allSimdCompletionSystemCycles = 3.0;
+  transition.allSimtF1CompletionSystemCycles = 7.0;
+  transition.allSimtF2CompletionSystemCycles = 0.0;
+  transition.allSimtF4CompletionSystemCycles = 11.0;
+  transition.mixedCompletionSystemCycles = 13.0;
+
+  auto routes = solveStageRoutes(table, transition);
+  if (!routes)
+    FAIL() << llvm::toString(routes.takeError());
+  ASSERT_TRUE(routes->allSimd.legal);
+  ASSERT_TRUE(routes->allSimt.legal);
+  EXPECT_GT(routes->allSimd.payloadCycles, 0.0);
+  EXPECT_DOUBLE_EQ(routes->allSimd.boundaryCycles, 100.0);
+  EXPECT_DOUBLE_EQ(routes->allSimd.completionCycles,
+                   transition.completionFor(
+                       StageKernelRouteKind::AllSIMD,
+                       routes->allSimd.routeSuperblockFactor));
+  EXPECT_DOUBLE_EQ(routes->allSimd.totalCycles,
+                   routes->allSimd.payloadCycles +
+                       routes->allSimd.boundaryCycles +
+                       routes->allSimd.completionCycles);
+
+  EXPECT_GT(routes->allSimt.payloadCycles, 0.0);
+  EXPECT_DOUBLE_EQ(routes->allSimt.boundaryCycles, 100.0);
+  EXPECT_DOUBLE_EQ(routes->allSimt.completionCycles,
+                   transition.completionFor(
+                       StageKernelRouteKind::AllSIMT,
+                       routes->allSimt.routeSuperblockFactor));
+  EXPECT_DOUBLE_EQ(routes->allSimt.totalCycles,
+                   routes->allSimt.payloadCycles +
+                       routes->allSimt.boundaryCycles +
+                       routes->allSimt.completionCycles);
+
+  // A missing factor entry means "not independently probed": factor 2 falls
+  // back to the F1 value, while factor 4 uses its own measured value.
+  EXPECT_DOUBLE_EQ(
+      transition.completionFor(StageKernelRouteKind::AllSIMT, 1), 7.0);
+  EXPECT_DOUBLE_EQ(
+      transition.completionFor(StageKernelRouteKind::AllSIMT, 2), 7.0);
+  EXPECT_DOUBLE_EQ(
+      transition.completionFor(StageKernelRouteKind::AllSIMT, 4), 11.0);
+  EXPECT_DOUBLE_EQ(
+      transition.completionFor(StageKernelRouteKind::AllSIMD, 1), 3.0);
 }
 
 TEST(SimdSimtCostModelTest, MixedScopePaysExactBidirectionalUbHandoffCost) {
