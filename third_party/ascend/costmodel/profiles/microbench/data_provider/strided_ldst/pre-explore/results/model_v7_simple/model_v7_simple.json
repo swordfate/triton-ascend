@@ -1,0 +1,154 @@
+{
+  "model_version": "strided_load_v7_simple_nonneg",
+  "description": "No-log, no-power, non-negative additive strided-load model.",
+  "simd_target": "ns",
+  "simt_target": "ns/iteration",
+  "alignment": "aligned base only; misalignment deferred",
+  "data": {
+    "simd": "results/model_v2/dataset.csv (simd rows)",
+    "simt": "results/model_v3_numwarps/dataset.csv"
+  },
+  "simd_wide": {
+    "group": "simd_wide",
+    "n_rows": 24,
+    "fit_domain": "raw target",
+    "fit_weights": "target^(-1)",
+    "form": "T = c0 + sum(c_i * f_i), c_i >= 0",
+    "feature_names": [
+      "1",
+      "stride_minus_1",
+      "large_tile_gt64",
+      "tail_elems_gt64"
+    ],
+    "coefficients": [
+      271.3729778488225,
+      40.79872660134627,
+      84.42962073076762,
+      0.07051640637348908
+    ],
+    "metrics": {
+      "n": 24,
+      "mape_pct": 5.100046197631943,
+      "p50_pct": 2.5082230354748214,
+      "p90_pct": 12.929678582990551,
+      "p95_pct": 17.776077897085973,
+      "max_pct": 18.99962097097234,
+      "bias_pct": 1.6486811915683575e-12,
+      "rmse_pct": 7.509753821124794,
+      "within_5pct": 66.66666666666666,
+      "within_10pct": 83.33333333333334,
+      "within_20pct": 100.0,
+      "within_30pct": 100.0,
+      "within_50pct": 100.0
+    },
+    "training_ranges": {
+      "block": [
+        8,
+        512
+      ],
+      "stride": [
+        1,
+        2
+      ]
+    }
+  },
+  "simd_gather": {
+    "group": "simd_gather",
+    "n_rows": 504,
+    "fit_domain": "raw target",
+    "fit_weights": "target^(-1)",
+    "form": "T = c0 + sum(c_i * f_i), c_i >= 0",
+    "feature_names": [
+      "1",
+      "n_cmd_block",
+      "bucket_pairs_g2048_b8",
+      "bucket_worst_g2048_b8",
+      "page_cross_count"
+    ],
+    "coefficients": [
+      373.29800954524603,
+      0.8912079754039262,
+      0.014066276535967145,
+      1.3008673227158143,
+      0.8766837199902078
+    ],
+    "metrics": {
+      "n": 504,
+      "mape_pct": 5.70557183732312,
+      "p50_pct": 4.136968949740122,
+      "p90_pct": 11.202835891425961,
+      "p95_pct": 14.526899666330362,
+      "max_pct": 76.43436104137966,
+      "bias_pct": -4.956352788505163e-14,
+      "rmse_pct": 8.715711301655631,
+      "within_5pct": 56.34920634920635,
+      "within_10pct": 85.71428571428571,
+      "within_20pct": 97.61904761904762,
+      "within_30pct": 98.80952380952381,
+      "within_50pct": 99.60317460317461
+    },
+    "training_ranges": {
+      "block": [
+        8,
+        512
+      ],
+      "stride": [
+        3,
+        256
+      ]
+    }
+  },
+  "simt": {
+    "group": "simt",
+    "n_rows": 344,
+    "fit_domain": "raw target",
+    "fit_weights": "target^(-1.5)",
+    "form": "T = c0 + sum(c_i * f_i), c_i >= 0",
+    "feature_names": [
+      "1",
+      "dupL",
+      "min_L_64",
+      "max_WL_minus_3072",
+      "dup_cross"
+    ],
+    "coefficients": [
+      112.71812243624099,
+      0.20565136569474102,
+      6.0747935132103885,
+      0.11574972982832027,
+      14.625488248994145
+    ],
+    "metrics": {
+      "n": 344,
+      "mape_pct": 18.053495704405567,
+      "p50_pct": 13.627133700713589,
+      "p90_pct": 41.96643004456118,
+      "p95_pct": 48.82242196303907,
+      "max_pct": 72.52533588926556,
+      "bias_pct": -2.561037419022561,
+      "rmse_pct": 23.476319271855417,
+      "within_5pct": 18.6046511627907,
+      "within_10pct": 38.95348837209303,
+      "within_20pct": 63.662790697674424,
+      "within_30pct": 81.1046511627907,
+      "within_50pct": 96.22093023255815
+    },
+    "training_ranges": {
+      "block": [
+        32,
+        256
+      ],
+      "stride": [
+        1,
+        256
+      ]
+    },
+    "term_note": "dupL = dup*L; min(L,64) is the line-count term before saturation; max(0, W*L-3072) is the warp-line work above the in-flight saturation threshold; dup*cross is underfilled replication on page-crossing loads.",
+    "derived_features": {
+      "dup": "max(0, 1/E - 1), E = block/(32*num_warps)",
+      "L": "aligned distinct 128B lines",
+      "W": "num_warps",
+      "cross": "1 if (block-1)*stride*4 >= 4096 else 0"
+    }
+  }
+}
