@@ -45,7 +45,7 @@ namespace {
 constexpr llvm::StringLiteral kAllSimd = "all_simd";
 constexpr llvm::StringLiteral kAllSimtOnly = "all_simt_only";
 constexpr llvm::StringLiteral kMixedSimdSimt = "mixed_simd_simt";
-constexpr int64_t kSupportedProfileSchemaVersion = 13;
+constexpr int64_t kSupportedProfileSchemaVersion = 14;
 
 struct StructuralProfile {
   int64_t tinyDotFlopsMax = 0;
@@ -601,6 +601,27 @@ loadCandidateProfile(llvm::StringRef requestedPath) {
       }
     }
     hardware.transition.simtWarpSize = hardware.simt.issueWidth;
+  }
+
+  // Whole-kernel boundary and route-specific completion live outside the
+  // per-Stage payload.  The object is optional so older profiles keep the
+  // previous zero-overhead behaviour.
+  if (const auto *routeBoundary = root->getObject("route_boundary")) {
+    hardware.transition.kernelBoundarySystemCycles = reader.optionalNumber(
+        *routeBoundary, "kernel_boundary_system_cycles", 0.0);
+    if (const auto *completion =
+            routeBoundary->getObject("completion_system_cycles")) {
+      hardware.transition.allSimdCompletionSystemCycles =
+          reader.optionalNumber(*completion, "all_simd", 0.0);
+      hardware.transition.allSimtF1CompletionSystemCycles =
+          reader.optionalNumber(*completion, "all_simt_f1", 0.0);
+      hardware.transition.allSimtF2CompletionSystemCycles =
+          reader.optionalNumber(*completion, "all_simt_f2", 0.0);
+      hardware.transition.allSimtF4CompletionSystemCycles =
+          reader.optionalNumber(*completion, "all_simt_f4", 0.0);
+      hardware.transition.mixedCompletionSystemCycles =
+          reader.optionalNumber(*completion, "mixed_simd_simt", 0.0);
+    }
   }
 
   if (reader.failed())

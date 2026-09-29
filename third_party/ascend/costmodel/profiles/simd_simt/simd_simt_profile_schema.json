@@ -23,8 +23,8 @@
       "description": "Relative path to this JSON Schema; used by editors and offline validators, not by Route Model scoring."
     },
     "schema_version": {
-      "const": 13,
-      "description": "Machine-readable Stage Route Model hardware-profile layout. Version 11 adds independent atomic-RMW rates and an explicit unknown-contention policy. Version 12 retains the legacy SIMT logical-tensor capacity field and represents local scope fixed overhead as one measured SIMD-to-SIMT-to-SIMD pair instead of two synthetic directional values. Version 13 adds the board-Event strided load/store calibration object."
+      "const": 14,
+      "description": "Machine-readable Stage Route Model hardware-profile layout. Version 11 adds independent atomic-RMW rates and an explicit unknown-contention policy. Version 12 retains the legacy SIMT logical-tensor capacity field and represents local scope fixed overhead as one measured SIMD-to-SIMT-to-SIMD pair instead of two synthetic directional values. Version 13 adds the board-Event strided load/store calibration object. Version 14 adds the route-level kernel boundary and optional route/factor completion envelope."
     },
     "profile_version": {
       "type": "string",
@@ -63,6 +63,49 @@
     },
     "selection_calibration": {
       "$ref": "#/definitions/selection_calibration"
+    },
+    "route_boundary": {
+      "type": "object",
+      "description": "Whole-kernel boundary/completion added once outside the Stage payload. Optional for legacy profiles; the canonical A5 profile provides the measured boundary.",
+      "required": [
+        "description",
+        "source",
+        "confidence",
+        "kernel_boundary_system_cycles"
+      ],
+      "properties": {
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Ownership boundary of the route envelope and how zero-valued completion entries are interpreted."
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Measurement protocol and exact shapes behind the boundary/completion values."
+        },
+        "confidence": {
+          "$ref": "#/definitions/confidence"
+        },
+        "kernel_boundary_system_cycles": {
+          "type": "number",
+          "minimum": 0,
+          "description": "One-time whole-kernel AIV boundary added once to every legal route total after wave scaling."
+        },
+        "completion_system_cycles": {
+          "type": "object",
+          "description": "Optional route/factor final drain. A zero entry means the factor was not independently probed and no synthetic completion is charged.",
+          "additionalProperties": false,
+          "properties": {
+            "all_simd": { "type": "number", "minimum": 0 },
+            "all_simt_f1": { "type": "number", "minimum": 0 },
+            "all_simt_f2": { "type": "number", "minimum": 0 },
+            "all_simt_f4": { "type": "number", "minimum": 0 },
+            "mixed_simd_simt": { "type": "number", "minimum": 0 }
+          }
+        }
+      },
+      "additionalProperties": false
     },
     "simd": {
       "$ref": "#/definitions/simd_model"

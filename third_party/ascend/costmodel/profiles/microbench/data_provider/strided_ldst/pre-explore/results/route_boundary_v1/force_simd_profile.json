@@ -1,29 +1,16 @@
 {
   "$schema": "./simd_simt_profile_schema.json",
-  "schema_version": 14,
-  "profile_version": "david-v100-simd-simt-20260929-v29-route-boundary",
+  "schema_version": 13,
+  "profile_version": "david-v100-simd-simt-20260924-v28-strided-memory",
   "target": "Ascend950PR/dav-c310",
   "description": "Stage Route Model hardware profile. Stage partitions and workloads are generated online from transformed TTIR; this file contains no workload-specific Stage template or route multiplier.",
-  "microbenchmark_profile": "../microbench/ascend_davidv100_v1.json",
+  "microbenchmark_profile": "/home/c00946898/sb64_latest_env/triton/_C/ascend/costmodel_profiles/microbench/ascend_davidv100_v1.json",
   "compatible_targets": [
     "Ascend950*",
     "Ascend910_95*",
     "dav-c310"
   ],
   "score_unit": "system_cycle_selection_score",
-  "route_boundary": {
-    "description": "One-time whole-kernel boundary plus optional route/factor completion. The boundary is added once per legal route after logical-program wave scaling; completion_system_cycles is set only for factors with a direct probe, and zero means no synthetic completion charge.",
-    "source": "A5 shape-matched selected-route torch_npu.profiler repeats: load SIMT (BLOCK=64,stride=3,W=32,grid=16), load SIMD (same shape, route forced through the production simd_simt path), store SIMT (BLOCK=1024,stride=3,W=32,grid=2), store SIMD (same shape). Confidence low; F2/F4 completion requires a dedicated phase probe.",
-    "confidence": "low",
-    "kernel_boundary_system_cycles": 830.0,
-    "completion_system_cycles": {
-      "all_simd": 0.0,
-      "all_simt_f1": 0.0,
-      "all_simt_f2": 0.0,
-      "all_simt_f4": 0.0,
-      "mixed_simd_simt": 0.0
-    }
-  },
   "selection_calibration": {
     "description": "Cost parameters used by Stage models. They influence numerical cost only; coverage, confidence, Event validation, and gain-margin admission gates are not part of online route selection.",
     "program_issue_scale": 8.0,
@@ -52,7 +39,7 @@
     "startup_system_cycles": {
       "description": "Legacy SIMD pipeline startup priors in SYS_CNT cycles. Only vector is currently consumed by Route Model scoring.",
       "vector": 21.212121,
-      "mte2": 30.303030,
+      "mte2": 30.30303,
       "mte3": 24.242424,
       "source": "Legacy selection-model seed inherited from device-cycle startup values",
       "confidence": "low",
@@ -353,7 +340,7 @@
         "memory": 2.1411,
         "float_alu": 0.6429,
         "shuffle": 0.3763,
-        "predicate": 0.0380,
+        "predicate": 0.038,
         "control": 0.2431,
         "int_alu": 0.2325
       },
@@ -440,15 +427,15 @@
         "description": "Board-Event calibrated shaped strided tl.load/tl.store model. Coefficients are raw ns per dynamic access; nanoseconds_to_system_cycles converts to this profile's SYS_CNT selection-score domain. The load model is data_provider/strided_ldst/pre-explore/results/model_v7_simple/model_v7_simple.json and the store model is results/model_store_v1/model_store_v1.json.",
         "source": "data_provider/strided_ldst/pre-explore (board Event, aligned f32 only)",
         "nanoseconds_to_system_cycles": 0.9889,
-        "simt_load_intercept_ns": 112.71812243624099,
-        "simt_load_dup_line_ns": 0.20565136569474102,
-        "simt_load_line_ns": 6.0747935132103885,
-        "simt_load_warp_line_overflow_ns": 0.11574972982832027,
-        "simt_load_dup_cross_ns": 14.625488248994145,
-        "simt_store_intercept_ns": 12.6818070592419,
-        "simt_store_warp_instruction_ns": 0.6508156379586657,
-        "simt_store_line_ns": 1.2342412476531825,
-        "simt_store_line_request_size_ns": 0.1518112854753173
+        "simt_load_intercept_ns": 11271.8122436241,
+        "simt_load_dup_line_ns": 20.565136569474102,
+        "simt_load_line_ns": 607.4793513210388,
+        "simt_load_warp_line_overflow_ns": 11.574972982832026,
+        "simt_load_dup_cross_ns": 1462.5488248994145,
+        "simt_store_intercept_ns": 1268.1807059241899,
+        "simt_store_warp_instruction_ns": 65.08156379586657,
+        "simt_store_line_ns": 123.42412476531825,
+        "simt_store_line_request_size_ns": 15.181128547531731
       }
     },
     "mixed_setup_fallback": {

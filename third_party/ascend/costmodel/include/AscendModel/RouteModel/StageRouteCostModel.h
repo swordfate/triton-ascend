@@ -283,7 +283,22 @@ struct StageTransitionCost {
   double simtUbLoadBytesPerThreadPerCycle = 1.0;
   double simtUbStoreBytesPerThreadPerCycle = 1.0;
   int64_t simtWarpSize = 1;
+  /// One-time whole-kernel boundary (AIV entry, AIC/AIV handshake, launch
+  /// prologue/epilogue).  It is added once after logical-program wave scaling
+  /// to the totalCycles of every legal route, but never to a Stage body.
+  double kernelBoundarySystemCycles = 0.0;
+  /// Route-specific final drain/completion cost.  These are intentionally
+  /// separate from the per-Stage payload and from the one-time boundary:
+  /// F2/F4 completion curves cannot be represented by a per-Stage linear
+  /// term.  Zero means "not calibrated for this factor"; the solver then does
+  /// not add a synthetic completion charge.
+  double allSimdCompletionSystemCycles = 0.0;
+  double allSimtF1CompletionSystemCycles = 0.0;
+  double allSimtF2CompletionSystemCycles = 0.0;
+  double allSimtF4CompletionSystemCycles = 0.0;
+  double mixedCompletionSystemCycles = 0.0;
 
+  double completionFor(StageKernelRouteKind kind, int64_t factor) const;
   bool isValid() const;
   llvm::json::Object toJSON() const;
 };
@@ -297,6 +312,13 @@ struct StageRoutePlan {
   int64_t routeSuperblockFactor = 1;
   int64_t runtimePhysicalProgramCount = 0;
   int64_t runtimeWaveCount = 1;
+  /// Sum of Stage payloads and mode transitions after wave scaling.
+  double payloadCycles = 0.0;
+  /// One-time kernel boundary added outside the Stage sums.
+  double boundaryCycles = 0.0;
+  /// Route/factor-specific completion/drain added outside the Stage sums.
+  double completionCycles = 0.0;
+  /// payloadCycles + boundaryCycles + completionCycles.
   double totalCycles = 0.0;
 
   llvm::json::Object toJSON() const;

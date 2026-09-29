@@ -434,6 +434,13 @@ llvm::json::Object LogicalStageCost::toJSON() const {
 }
 
 bool StageTransitionCost::isValid() const {
+  const std::array<double, 6> routeBoundary = {
+      kernelBoundarySystemCycles,
+      allSimdCompletionSystemCycles,
+      allSimtF1CompletionSystemCycles,
+      allSimtF2CompletionSystemCycles,
+      allSimtF4CompletionSystemCycles,
+      mixedCompletionSystemCycles};
   return std::isfinite(fixedPairCycles) && fixedPairCycles >= 0.0 &&
          std::isfinite(simdUbLoadBytesPerCycle) &&
          simdUbLoadBytesPerCycle > 0.0 &&
@@ -442,7 +449,28 @@ bool StageTransitionCost::isValid() const {
          std::isfinite(simtUbLoadBytesPerThreadPerCycle) &&
          simtUbLoadBytesPerThreadPerCycle > 0.0 &&
          std::isfinite(simtUbStoreBytesPerThreadPerCycle) &&
-         simtUbStoreBytesPerThreadPerCycle > 0.0 && simtWarpSize > 0;
+         simtUbStoreBytesPerThreadPerCycle > 0.0 && simtWarpSize > 0 &&
+         std::all_of(routeBoundary.begin(), routeBoundary.end(),
+                     [](double value) {
+                       return std::isfinite(value) && value >= 0.0;
+                     });
+}
+
+double StageTransitionCost::completionFor(StageKernelRouteKind kind,
+                                          int64_t factor) const {
+  switch (kind) {
+  case StageKernelRouteKind::AllSIMD:
+    return allSimdCompletionSystemCycles;
+  case StageKernelRouteKind::AllSIMT:
+    if (factor >= 4 && allSimtF4CompletionSystemCycles > 0.0)
+      return allSimtF4CompletionSystemCycles;
+    if (factor >= 2 && allSimtF2CompletionSystemCycles > 0.0)
+      return allSimtF2CompletionSystemCycles;
+    return allSimtF1CompletionSystemCycles;
+  case StageKernelRouteKind::Mixed:
+    return mixedCompletionSystemCycles;
+  }
+  llvm_unreachable("unknown route kind");
 }
 
 llvm::json::Object StageTransitionCost::toJSON() const {
@@ -455,6 +483,16 @@ llvm::json::Object StageTransitionCost::toJSON() const {
   result["simt_ub_store_bytes_per_thread_per_system_cycle"] =
       simtUbStoreBytesPerThreadPerCycle;
   result["simt_warp_size"] = simtWarpSize;
+  result["kernel_boundary_system_cycles"] = kernelBoundarySystemCycles;
+  result["all_simd_completion_system_cycles"] =
+      allSimdCompletionSystemCycles;
+  result["all_simt_f1_completion_system_cycles"] =
+      allSimtF1CompletionSystemCycles;
+  result["all_simt_f2_completion_system_cycles"] =
+      allSimtF2CompletionSystemCycles;
+  result["all_simt_f4_completion_system_cycles"] =
+      allSimtF4CompletionSystemCycles;
+  result["mixed_completion_system_cycles"] = mixedCompletionSystemCycles;
   return result;
 }
 
@@ -462,6 +500,9 @@ llvm::json::Object StageRoutePlan::toJSON() const {
   llvm::json::Object result;
   result["candidate"] = stringifyStageKernelRoute(candidate);
   result["legal"] = legal;
+  result["payload_system_cycles"] = payloadCycles;
+  result["kernel_boundary_system_cycles"] = boundaryCycles;
+  result["completion_system_cycles"] = completionCycles;
   result["total_system_cycles"] = totalCycles;
   result["route_superblock_factor"] = routeSuperblockFactor;
   result["runtime_physical_program_count"] = runtimePhysicalProgramCount;
@@ -722,6 +763,25 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
   result.allSimt = bestFactoredPlan(StageKernelRouteKind::AllSIMT);
   result.mixed = bestFactoredPlan(StageKernelRouteKind::Mixed);
   removeAutoBlockifyCostFromAllSIMD(result.allSimd, costTable);
+
+  // Boundary/completion is a whole-kernel envelope.  Add it only after the
+  // route-specific payload (including wave scaling and all-SIMD schedule
+  // cleanup) has been finalized, and only once per route.  Keep the payload
+  // in its own field so Stage sums and report consumers cannot double count
+  // the boundary as a stage body.
+  auto applyRouteEnvelope = [&](StageRoutePlan &plan) {
+    if (!plan.legal)
+      return;
+    plan.payloadCycles = plan.totalCycles;
+    plan.boundaryCycles = transition.kernelBoundarySystemCycles;
+    plan.completionCycles =
+        transition.completionFor(plan.candidate, plan.routeSuperblockFactor);
+    plan.totalCycles =
+        plan.payloadCycles + plan.boundaryCycles + plan.completionCycles;
+  };
+  applyRouteEnvelope(result.allSimd);
+  applyRouteEnvelope(result.allSimt);
+  applyRouteEnvelope(result.mixed);
 
   return result;
 }
