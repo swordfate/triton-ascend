@@ -137,3 +137,36 @@ boundary 来源：取 8 个 `(measured median - payload)` residual（4 route × 
    避免为了 force route 而复制 profile；生产路径不变。
 4. 继续保留 `strided*` 命名；runtime stride / block_ptr / mask tail / 非 4B
    dtype 另开扩展。
+
+## 6. 反例：单常数 boundary 对小 tile 不成立（本轮新增）
+
+按 step 5 又补了 `n=256` 的小 shape（同一 kernel、W=32、stride=3、
+selected route 都是 all_simt），结果如下：
+
+| case | block/grid | payload (SYS_CNT) | payload ns | +830 pred ns | 实测 median ns | error |
+|---|---|---:|---:|---:|---:|---:|
+| load | 32 / 8 | 1310.549 | 1325.3 | 2164.9 | 1090.0 | **+98.6%** |
+| load | 64 / 4 | 1310.549 | 1325.3 | 2164.9 | 1109.5 | **+95.1%** |
+| load | 128 / 2 | 1310.549 | 1325.3 | 2164.9 | 1017.0 | **+112.9%** |
+| store | 64 / 4 | 1038.519 | 1050.2 | 1889.7 | 1190.5 | **+58.7%** |
+| store | 128 / 2 | 1061.648 | 1073.5 | 1913.0 | 1158.5 | **+65.1%** |
+| store | 256 / 1 | 1107.905 | 1120.3 | 1959.8 | 1142.5 | **+71.6%** |
+
+解释：这些小 shape 的 `payload` 本身已经接近/高于整核实测，
+再加 830 常数会明显过校正。原因不是 strided 公式，而是：
+
+- 当前 route plan 是 Stage serial sum；小 grid 时 `auto_blockify` setup /
+  dispatch / scalar prologue 在模型中是加法，但实际 binary 里和 GM 访存有
+  重叠或没有完全 materialize；
+- 830 这个值来自 n=1024/2048 的 4 个 target point，本质上吸收了这些点的
+  `actual - payload`，不能外推到所有 grid。
+
+因此结论必须写清楚：
+
+1. `830` 只作为 target shape（load n=1024，store n=2048）的首版 whole-kernel
+   校正，不能当全局常数；
+2. 下一步必须按 solve_tril 口径做 in-kernel SYS_CNT / CLOCK64 phase 打点，
+   把 kernel boundary 与 SIMT completion 分开，并至少建立 grid/wave 依赖；
+3. 在完成 phase 标定前，profile 里的 boundary 只应用于目标形状或标记为
+   low-confidence，不应据此宣称所有 strided shape 绝对 ns 已对齐。
+
