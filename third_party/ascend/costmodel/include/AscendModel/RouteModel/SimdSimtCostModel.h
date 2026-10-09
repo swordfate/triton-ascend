@@ -90,6 +90,25 @@ struct SimdSimtCostModelOptions {
   /// logical-program group.
   int64_t logicalProgramCountHint = 0;
   int64_t physicalVectorCoreCountHint = 0;
+  /// Global (kernel- and shape-agnostic) TTIR-only whole-SIMT spill model.
+  /// The Python frontend publishes it under
+  /// route_transform_capability.whole_kernel_spill_model.  ``enabled`` is the
+  /// safety valve: when false the solver keeps the native route model and
+  /// never adds a spill penalty.
+  bool wholeSimtSpillModelEnabled = false;
+  /// Defaults below are the global coefficients fitted once on the 53-point
+  /// Ascend950PR manual best-factor table.
+  double wholeSimtSpillAlpha = 1.75;
+  double wholeSimtSpillReserveUnits = 15.0;
+  double wholeSimtSpillFreeOverflowUnits = 4.0;
+  double wholeSimtSpillAccessesPerWord = 1.16;
+  double wholeSimtSpillTensorWeight = 0.43;
+  double wholeSimtSpillScalarWeight = 1.46;
+  double wholeSimtSpillPointerWeight = 0.35;
+  /// A spilling factor is kept spill-free in the score when its wave count is
+  /// at most this percentage of the best non-spilling factor's wave count.
+  /// Zero disables the amortization exception.
+  double wholeSimtSpillWavePercent = 26.0;
 };
 
 struct SimdSimtCostReport {

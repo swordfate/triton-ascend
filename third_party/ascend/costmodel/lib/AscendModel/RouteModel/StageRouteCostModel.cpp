@@ -404,6 +404,17 @@ llvm::json::Object StageRoutePlan::toJSON() const {
   result["route_superblock_factor"] = routeSuperblockFactor;
   result["runtime_physical_program_count"] = runtimePhysicalProgramCount;
   result["runtime_wave_count"] = runtimeWaveCount;
+  if (candidate == StageKernelRouteKind::AllSIMT) {
+    result["whole_simt_active_warps"] = wholeSimtActiveWarps;
+    result["whole_simt_register_budget_per_thread"] =
+        wholeSimtRegisterBudgetPerThread;
+    result["whole_simt_predicted_stack_bytes_per_thread"] =
+        wholeSimtPredictedStackBytesPerThread;
+    result["whole_simt_spill_amortized_by_waves"] =
+        wholeSimtSpillAmortizedByWaves;
+    result["whole_simt_spill_penalty_system_cycles"] =
+        wholeSimtSpillPenaltyCycles;
+  }
   llvm::json::Array stages;
   for (size_t i = 0; i < implementations.size(); ++i) {
     llvm::json::Object stage;
@@ -423,6 +434,15 @@ llvm::json::Object StageCostModelSummary::toJSON() const {
   result["operation_ownership_complete"] = operationOwnershipComplete;
   result["modeled_operation_count"] = modeledOperationCount;
   result["profile_version"] = profileVersion;
+  result["simt_peak_live_units_per_thread"] =
+      wholeSimtPeakLiveUnitsPerThread;
+  result["simt_peak_tensor_units_per_thread"] =
+      wholeSimtPeakTensorUnitsPerThread;
+  result["simt_peak_scalar_units_per_thread"] =
+      wholeSimtPeakScalarUnitsPerThread;
+  result["simt_peak_pointer_units_per_thread"] =
+      wholeSimtPeakPointerUnitsPerThread;
+  result["simt_register_legal_factor"] = wholeSimtRegisterLegalFactor;
   llvm::json::Array stageArray;
   for (const LogicalStageCost &stage : stages)
     stageArray.push_back(stage.toJSON());
@@ -439,6 +459,137 @@ llvm::json::Object StageCostModelSummary::toJSON() const {
   result["routes"] = std::move(routes);
   return result;
 }
+
+namespace {
+
+constexpr int64_t kSimtWarpSize = 32;
+/// TTIR-only whole-SIMT spill model.  One observed live 32-bit unit per
+/// thread maps to one 4-byte private-stack word.  The remaining coefficients
+/// are global (kernel- and shape-agnostic) and arrive through the capability
+/// JSON; they are published by the Python frontend with calibrated defaults.
+constexpr double kSimtLiveUnitBytes = 4.0;
+
+/// A5 AIV per-thread general-register quota derived from the active-thread
+/// count: 127 (<=256 threads), 64 (<=512), 32 (<=1024), 16 (<=2048).  This
+/// table is the hardware reason a whole-kernel factor can start spilling.
+static int64_t wholeSimtRegisterBudgetPerThread(int64_t activeWarps) {
+  const int64_t threads = std::max<int64_t>(1, activeWarps) * kSimtWarpSize;
+  if (threads <= 256)
+    return 127;
+  if (threads <= 512)
+    return 64;
+  if (threads <= 1024)
+    return 32;
+  return 16;
+}
+
+/// Predicted private-stack bytes per thread for one whole-kernel factor.
+/// This is the complete general model: it uses only the TTIR live-value
+/// observation and the active-warp register-quota table.
+static double predictedWholeSimtStackBytesPerThread(
+    const StageCostTable &costTable, int64_t factor) {
+  if (!costTable.wholeSimtSpillModelEnabled)
+    return 0.0;
+  if (!costTable.wholeSimtPeakLiveKnown ||
+      costTable.wholeSimtPeakLiveUnitsPerThread <= 0)
+    return 0.0;
+  const int64_t activeWarps = std::max<int64_t>(1, costTable.baseWarpCount) *
+                              std::max<int64_t>(1, factor);
+  const int64_t budget = wholeSimtRegisterBudgetPerThread(activeWarps);
+  double weightedLive =
+      costTable.wholeSimtSpillTensorWeight *
+          costTable.wholeSimtPeakTensorUnitsPerThread +
+      costTable.wholeSimtSpillScalarWeight *
+          costTable.wholeSimtPeakScalarUnitsPerThread +
+      costTable.wholeSimtSpillPointerWeight *
+          costTable.wholeSimtPeakPointerUnitsPerThread;
+  if (weightedLive <= 0.0)
+    weightedLive = static_cast<double>(
+        costTable.wholeSimtPeakLiveUnitsPerThread);
+  const double pressure =
+      std::max(0.0, costTable.wholeSimtSpillAlpha * weightedLive -
+                        costTable.wholeSimtSpillReserveUnits);
+  const double overflow = std::max(0.0, pressure - budget);
+  if (overflow <= costTable.wholeSimtSpillFreeOverflowUnits)
+    return 0.0;
+  return overflow * kSimtLiveUnitBytes;
+}
+
+static bool wholeSimtPeakFitsRegisterBudget(const StageCostTable &costTable,
+                                            int64_t factor) {
+  if (!costTable.wholeSimtPeakLiveKnown ||
+      costTable.wholeSimtPeakLiveUnitsPerThread <= 0)
+    return true;
+  const int64_t activeWarps = std::max<int64_t>(1, costTable.baseWarpCount) *
+                              std::max<int64_t>(1, factor);
+  return costTable.wholeSimtPeakLiveUnitsPerThread <=
+         wholeSimtRegisterBudgetPerThread(activeWarps);
+}
+
+static double computeWholeSimtSpillPenaltyCycles(
+    const StageCostTable &costTable, int64_t factor,
+    double stackBytesPerThread) {
+  if (stackBytesPerThread <= 0.0 ||
+      costTable.wholeSimtSpillTransactionsPerCycle <= 0.0)
+    return 0.0;
+  const int64_t activeWarps = std::max<int64_t>(1, costTable.baseWarpCount) *
+                              std::max<int64_t>(1, factor);
+  // Each warp-level STK/LDK transaction handles one 32-bit word per lane, so
+  // the transaction count is words-per-thread * active warps.
+  const double wordsPerThread = std::ceil(stackBytesPerThread / 4.0);
+  return wordsPerThread * static_cast<double>(activeWarps) *
+         costTable.wholeSimtSpillAccessesPerWord /
+         costTable.wholeSimtSpillTransactionsPerCycle;
+}
+
+static int64_t wholeSimtWaveCount(const StageCostTable &costTable,
+                                  int64_t factor) {
+  if (costTable.logicalProgramCountHint <= 0)
+    return 1;
+  const int64_t programs =
+      (costTable.logicalProgramCountHint + std::max<int64_t>(1, factor) - 1) /
+      std::max<int64_t>(1, factor);
+  if (costTable.physicalCoreCountHint <= 0)
+    return 1;
+  return std::max<int64_t>(
+      1, (programs + costTable.physicalCoreCountHint - 1) /
+             costTable.physicalCoreCountHint);
+}
+
+/// A factor is effectively spill-free when the TTIR-only model predicts no
+/// private-stack bytes for it.
+static bool wholeSimtIsEffectivelySpillFree(const StageCostTable &costTable,
+                                            int64_t factor) {
+  return predictedWholeSimtStackBytesPerThread(costTable, factor) <= 0.0;
+}
+
+static bool wholeSimtSpillWavesAreAmortized(const StageCostTable &costTable,
+                                            int64_t factor,
+                                            bool spillPredicted) {
+  if (!spillPredicted || costTable.logicalProgramCountHint <= 0)
+    return false;
+  const int64_t baseWarps = std::max<int64_t>(1, costTable.baseWarpCount);
+  int64_t maxFactor = std::max<int64_t>(1, 64 / baseWarps);
+  maxFactor = std::min<int64_t>(maxFactor,
+                                costTable.logicalProgramCountHint);
+  int64_t referenceFactor = 0;
+  for (int64_t candidate : kSupportedSuperBlockFactors) {
+    if (candidate > maxFactor)
+      continue;
+    if (wholeSimtIsEffectivelySpillFree(costTable, candidate))
+      referenceFactor = std::max(referenceFactor, candidate);
+  }
+  if (referenceFactor <= 0 || referenceFactor >= factor)
+    return false;
+  if (costTable.wholeSimtSpillWavePercent <= 0.0)
+    return false;
+  const int64_t factorWaves = wholeSimtWaveCount(costTable, factor);
+  const int64_t referenceWaves = wholeSimtWaveCount(costTable, referenceFactor);
+  return static_cast<double>(factorWaves) * 100.0 <=
+         costTable.wholeSimtSpillWavePercent * referenceWaves;
+}
+
+} // namespace
 
 llvm::Expected<StageCostModelSummary>
 mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
@@ -470,6 +621,23 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
     StageRoutePlan plan;
     plan.candidate = kind;
     plan.routeSuperblockFactor = factor;
+    if (kind == StageKernelRouteKind::AllSIMT) {
+      plan.wholeSimtActiveWarps =
+          std::max<int64_t>(1, costTable.baseWarpCount) *
+          std::max<int64_t>(1, factor);
+      plan.wholeSimtRegisterBudgetPerThread =
+          wholeSimtRegisterBudgetPerThread(plan.wholeSimtActiveWarps);
+      const double predictedBytes =
+          predictedWholeSimtStackBytesPerThread(costTable, factor);
+      const bool spillPredicted = predictedBytes > 0.0;
+      const bool spillAmortized = wholeSimtSpillWavesAreAmortized(
+          costTable, factor, spillPredicted);
+      plan.wholeSimtPredictedStackBytesPerThread = predictedBytes;
+      plan.wholeSimtSpillAmortizedByWaves = spillAmortized;
+      plan.wholeSimtSpillPenaltyCycles = computeWholeSimtSpillPenaltyCycles(
+          costTable, factor,
+          spillPredicted && !spillAmortized ? predictedBytes : 0.0);
+    }
     costModelLog() << "route=" << stringifyStageKernelRoute(kind) << " F=" << factor << ": solving per-stage choices\n";
     struct MixedChoice {
       const StageImplementationCost *simd = nullptr;
@@ -630,6 +798,27 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
         return invalid;
       }
     }
+    if (kind == StageKernelRouteKind::AllSIMT &&
+        plan.wholeSimtSpillAmortizedByWaves) {
+      costModelLog()
+          << "  suppress_whole_simt_spill_penalty F=" << factor
+          << " reason=wave_amortization predicted_bytes_per_thread="
+          << plan.wholeSimtPredictedStackBytesPerThread << " waves="
+          << wholeSimtWaveCount(costTable, factor) << "\n";
+    }
+    // Whole-kernel private-stack traffic is paid once per physical program.
+    // Charge it before the runtime wave multiplier, otherwise a larger
+    // SuperBlock would amortize the spill away by launching fewer programs.
+    if (kind == StageKernelRouteKind::AllSIMT &&
+        plan.wholeSimtSpillPenaltyCycles > 0.0) {
+      plan.totalCycles += plan.wholeSimtSpillPenaltyCycles;
+      costModelLog() << "  whole_simt_spill_penalty F=" << factor
+                     << " predicted_bytes_per_thread="
+                     << plan.wholeSimtPredictedStackBytesPerThread
+                     << " activeWarps=" << plan.wholeSimtActiveWarps
+                     << " cycles_per_program="
+                     << plan.wholeSimtSpillPenaltyCycles << "\n";
+    }
     if (costTable.logicalProgramCountHint > 0) {
       plan.runtimePhysicalProgramCount =
           (costTable.logicalProgramCountHint + factor - 1) / factor;
@@ -666,6 +855,20 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
   result.operationOwnershipComplete = costTable.operationOwnershipComplete;
   result.modeledOperationCount = costTable.modeledOperationCount;
   result.profileVersion = costTable.profileVersion;
+  result.wholeSimtPeakLiveUnitsPerThread =
+      costTable.wholeSimtPeakLiveKnown
+          ? costTable.wholeSimtPeakLiveUnitsPerThread
+          : 0;
+  result.wholeSimtPeakTensorUnitsPerThread =
+      costTable.wholeSimtPeakTensorUnitsPerThread;
+  result.wholeSimtPeakScalarUnitsPerThread =
+      costTable.wholeSimtPeakScalarUnitsPerThread;
+  result.wholeSimtPeakPointerUnitsPerThread =
+      costTable.wholeSimtPeakPointerUnitsPerThread;
+  for (int64_t factor : kSupportedSuperBlockFactors)
+    if (wholeSimtPeakFitsRegisterBudget(costTable, factor))
+      result.wholeSimtRegisterLegalFactor =
+          std::max(result.wholeSimtRegisterLegalFactor, factor);
   result.stages = costTable.stages;
   result.transition = transition;
   result.allSimd = buildPlan(StageKernelRouteKind::AllSIMD, 1);

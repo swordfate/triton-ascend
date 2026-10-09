@@ -14,10 +14,16 @@
 #include "AscendModel/RouteModel/StageCostModels.h"
 #include "ascend/include/Utils/SuperBlockFactor.h"
 
+#include "mlir/Analysis/Liveness.h"
+#include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinTypes.h"
 #include "mlir/IR/Operation.h"
+#include "mlir/Interfaces/SideEffectInterfaces.h"
+#include "triton/Dialect/Triton/IR/Types.h"
 #include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/DenseMap.h"
+#include "llvm/ADT/DenseSet.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/SmallVector.h"
@@ -32,6 +38,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <optional>
 #include <set>
 #include <system_error>
@@ -585,6 +592,162 @@ loadCandidateProfile(llvm::StringRef requestedPath) {
   return profile;
 }
 
+
+/// Result of the lightweight whole-function live-value proxy.  The proxy is
+/// deliberately a lower bound: it counts SSA values that are simultaneously
+/// live at a program point and assigns each one its balanced per-thread
+/// 32-bit footprint.  Rematerializable constants and aliases such as
+/// tt.splat/tt.reshape/tt.expand_dims are folded away.  It is NOT a register
+/// allocator and it intentionally includes address/index state that the
+/// backend may rematerialize; the solver therefore treats it as an
+/// observation and only uses it as an explicitly-gated fallback.
+struct SimtLivePressureProxy {
+  int64_t peakLiveUnitsPerThread = 0;
+  int64_t peakTensorUnitsPerThread = 0;
+  int64_t peakScalarUnitsPerThread = 0;
+  int64_t peakPointerUnitsPerThread = 0;
+  int64_t unknownValueCount = 0;
+};
+
+static Value stripShapeOnlyAliases(Value value) {
+  while (Operation *op = value.getDefiningOp()) {
+    llvm::StringRef name = op->getName().getStringRef();
+    if (op->getNumOperands() != 1 || op->getNumResults() != 1 ||
+        (name != "tt.expand_dims" && name != "tt.reshape" &&
+         name != "tt.splat"))
+      break;
+    value = op->getOperand(0);
+  }
+  return value;
+}
+
+static std::optional<int64_t> liveValueUnits(Value value, int64_t threads) {
+  Type type = value.getType();
+  int64_t elements = 1;
+  bool tensor = false;
+  if (auto shaped = dyn_cast<ShapedType>(type)) {
+    if (!shaped.hasStaticShape())
+      return std::nullopt;
+    elements = shaped.getNumElements();
+    type = shaped.getElementType();
+    tensor = true;
+  }
+  int64_t bits = 0;
+  if (isa<IntegerType, FloatType>(type))
+    bits = type.getIntOrFloatBitWidth();
+  else if (isa<IndexType>(type))
+    bits = 64;
+  else if (isa<mlir::triton::PointerType>(type))
+    bits = 64;
+  else
+    return std::nullopt;
+  // A scalar is one value; a tensor is distributed over one logical
+  // program's base warps.  Do not assume sub-word packing.
+  const int64_t perThread =
+      tensor ? elements / std::max<int64_t>(1, threads) +
+                   (elements % std::max<int64_t>(1, threads) != 0)
+             : 1;
+  const int64_t words = (bits + 31) / 32;
+  if (words <= 0 ||
+      perThread > std::numeric_limits<int64_t>::max() / words)
+    return std::nullopt;
+  return perThread * words;
+}
+
+static bool rematerializableLiveValue(Value value) {
+  Operation *op = value.getDefiningOp();
+  return op && (op->getName().getStringRef() == "arith.constant" ||
+                op->getName().getStringRef() == "tt.make_range");
+}
+
+/// Measure the peak number of simultaneously-live 32-bit register units per
+/// thread across the whole prospective SIMT function.  The same live set is
+/// observed under every SuperBlock factor because active warps only change the
+/// physical launch shape, not the SSA program.
+static SimtLivePressureProxy analyzeSimtLivePressure(ModuleOp module,
+                                                     int64_t baseWarpCount) {
+  SimtLivePressureProxy proxy;
+  if (!module || baseWarpCount <= 0)
+    return proxy;
+  const int64_t threads = std::max<int64_t>(1, baseWarpCount) * 32;
+  Liveness liveness(module);
+  llvm::DenseSet<Value> unknown;
+  module.walk([&](Operation *op) {
+    if (!op->getBlock() || op->getNumRegions() != 0)
+      return;
+    const auto *info = liveness.getLiveness(op->getBlock());
+    if (!info)
+      return;
+    auto live = info->currentlyLiveValues(op);
+    // Region-op liveness omits values retained across an enclosing loop even
+    // when the loop body does not read them directly.  Add the loop-carried
+    // and bound/step values at each enclosing loop, matching how a physical
+    // SIMT VF keeps them across the backedge.
+    for (Operation *parent = op->getParentOp();
+         parent && parent->getBlock() &&
+         !parent->hasTrait<OpTrait::IsIsolatedFromAbove>();
+         parent = parent->getParentOp()) {
+      if (auto loop = dyn_cast<scf::ForOp>(parent)) {
+        live.insert(loop.getUpperBound());
+        live.insert(loop.getStep());
+        live.insert(loop.getInductionVar());
+      }
+      const auto *outer = liveness.getLiveness(parent->getBlock());
+      if (!outer)
+        continue;
+      for (Value value : outer->currentlyLiveValues(parent))
+        if (value.getDefiningOp() != parent &&
+            !liveness.isDeadAfter(value, parent))
+          live.insert(value);
+    }
+
+    llvm::DenseSet<Value> counted;
+    int64_t unitsAtPoint = 0;
+    int64_t tensorUnitsAtPoint = 0;
+    int64_t scalarUnitsAtPoint = 0;
+    int64_t pointerUnitsAtPoint = 0;
+    for (Value original : live) {
+      Value value = stripShapeOnlyAliases(original);
+      if (!counted.insert(value).second)
+        continue;
+      auto units = liveValueUnits(value, threads);
+      if (!units) {
+        unknown.insert(value);
+        continue;
+      }
+      if (rematerializableLiveValue(value))
+        continue;
+      Type type = value.getType();
+      const bool tensor = isa<ShapedType>(type);
+      if (tensor)
+        type = cast<ShapedType>(type).getElementType();
+      if (auto integer = dyn_cast<IntegerType>(type)) {
+        // Predicates use the separate P register bank, so they do not
+        // consume the 32-bit general-register budget observed here.
+        if (integer.getWidth() == 1)
+          continue;
+      }
+      unitsAtPoint += *units;
+      if (tensor)
+        tensorUnitsAtPoint += *units;
+      else if (isa<mlir::triton::PointerType>(type))
+        pointerUnitsAtPoint += *units;
+      else
+        scalarUnitsAtPoint += *units;
+    }
+    proxy.peakLiveUnitsPerThread =
+        std::max(proxy.peakLiveUnitsPerThread, unitsAtPoint);
+    proxy.peakTensorUnitsPerThread =
+        std::max(proxy.peakTensorUnitsPerThread, tensorUnitsAtPoint);
+    proxy.peakScalarUnitsPerThread =
+        std::max(proxy.peakScalarUnitsPerThread, scalarUnitsAtPoint);
+    proxy.peakPointerUnitsPerThread =
+        std::max(proxy.peakPointerUnitsPerThread, pointerUnitsAtPoint);
+  });
+  proxy.unknownValueCount = static_cast<int64_t>(unknown.size());
+  return proxy;
+}
+
 static llvm::Expected<StageCostModelSummary> evaluateStageModel(
     const SimdSimtFeatureSummary &features, const CandidateProfile &profile,
     unsigned numWarps, bool wholeKernelSuperblockMaterializable,
@@ -592,6 +755,7 @@ static llvm::Expected<StageCostModelSummary> evaluateStageModel(
     int64_t maximumWholeKernelSuperblockFactor,
     int64_t maximumScopeSuperblockFactor, int64_t logicalProgramCountHint,
     int64_t physicalCoreCountHint, ModuleOp module,
+    const SimdSimtCostModelOptions &options,
     const SimtAnchorPlan *anchorPlan) {
   COSTMODEL_TRACE("evaluateStageModel");
   costModelLog() << "numWarps=" << numWarps << " logicalProgramCountHint="
@@ -625,6 +789,17 @@ static llvm::Expected<StageCostModelSummary> evaluateStageModel(
   if (!partition)
     return partition.takeError();
 
+  // The live set is a property of the logical program, not of the SuperBlock
+  // factor: factor only changes how many warps are launched per physical
+  // core.  Record it once and let the route solver combine it with the
+  // active-warp register quota and the backend-calibrated stack bytes.
+  const SimtLivePressureProxy livePressure = analyzeSimtLivePressure(
+      module, static_cast<int64_t>(std::max<unsigned>(1, numWarps)));
+  costModelLog() << "wholeSimtLivePressure peakUnitsPerThread="
+                 << livePressure.peakLiveUnitsPerThread
+                 << " unknownValues=" << livePressure.unknownValueCount
+                 << "\n";
+
   HardwareProfile hardwareProfile = profile.hardware;
   hardwareProfile.logicalWarpGroupCount = std::max<int64_t>(1, numWarps);
   StageCostEvaluator evaluator;
@@ -633,6 +808,30 @@ static llvm::Expected<StageCostModelSummary> evaluateStageModel(
     return costTable.takeError();
   costTable->logicalProgramCountHint = logicalProgramCountHint;
   costTable->physicalCoreCountHint = physicalCoreCountHint;
+  costTable->baseWarpCount = std::max<int64_t>(1, numWarps);
+  costTable->wholeSimtPeakLiveUnitsPerThread =
+      livePressure.peakLiveUnitsPerThread;
+  costTable->wholeSimtPeakLiveKnown =
+      livePressure.peakLiveUnitsPerThread > 0;
+  costTable->wholeSimtPeakTensorUnitsPerThread =
+      livePressure.peakTensorUnitsPerThread;
+  costTable->wholeSimtPeakScalarUnitsPerThread =
+      livePressure.peakScalarUnitsPerThread;
+  costTable->wholeSimtPeakPointerUnitsPerThread =
+      livePressure.peakPointerUnitsPerThread;
+  costTable->wholeSimtSpillModelEnabled = options.wholeSimtSpillModelEnabled;
+  costTable->wholeSimtSpillAlpha = options.wholeSimtSpillAlpha;
+  costTable->wholeSimtSpillReserveUnits = options.wholeSimtSpillReserveUnits;
+  costTable->wholeSimtSpillFreeOverflowUnits =
+      options.wholeSimtSpillFreeOverflowUnits;
+  costTable->wholeSimtSpillAccessesPerWord =
+      options.wholeSimtSpillAccessesPerWord;
+  costTable->wholeSimtSpillTensorWeight = options.wholeSimtSpillTensorWeight;
+  costTable->wholeSimtSpillScalarWeight = options.wholeSimtSpillScalarWeight;
+  costTable->wholeSimtSpillPointerWeight = options.wholeSimtSpillPointerWeight;
+  costTable->wholeSimtSpillWavePercent = options.wholeSimtSpillWavePercent;
+  costTable->wholeSimtSpillTransactionsPerCycle =
+      hardwareProfile.simt.spillTransactionsPerCycle;
   auto routes = solveStageRoutes(*costTable, hardwareProfile.transition);
   if (!routes)
     return routes.takeError();
@@ -863,7 +1062,7 @@ estimateSimdSimtCandidatesImpl(const SimdSimtFeatureSummary &features,
       options.scopeSuperblockMaterializable,
       options.maximumWholeKernelSuperblockFactor,
       options.maximumScopeSuperblockFactor, options.logicalProgramCountHint,
-      options.physicalVectorCoreCountHint, module, anchorPlan);
+      options.physicalVectorCoreCountHint, module, options, anchorPlan);
   if (!stageModel)
     return stageModel.takeError();
   report.stageModel = std::move(*stageModel);

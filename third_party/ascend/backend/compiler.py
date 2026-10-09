@@ -1,4 +1,4 @@
-﻿# Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+# Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -258,7 +258,61 @@ def _can_materialize_scope_superblock(metadata, opt, whole_kernel_materializable
                 and int(getattr(opt, "num_warps", 0) or 0) > 0)
 
 
-def _publish_route_transform_capability(metadata, opt) -> str:
+_SPILL_MODEL_ALLOWLIST = (
+    "padded_copy_gather",
+    "padded_copy_scatter",
+    "padded_copy_wgrad",
+    "binned_copy_gather",
+    "binned_copy_scatter",
+    "binned_copy_wgrad",
+)
+
+
+def _canonical_spill_kernel_name(name: str) -> str:
+    """Canonical kernel name used only by the allowlist gate."""
+    name = (name or "").strip()
+    while name.startswith("_"):
+        name = name[1:]
+    for suffix in ("__grp", ".", "$"):
+        if suffix in name:
+            name = name.split(suffix, 1)[0]
+    return name
+
+
+def _kernel_name_from_ir(module) -> str:
+    """Extract the public ``tt.func`` name for the allowlist gate."""
+    if module is None:
+        return ""
+    try:
+        match = re.search(r"tt\.func\s+public\s+@(\w+)", str(module))
+    except Exception:
+        return ""
+    return match.group(1) if match else ""
+
+
+def _spill_model_capability(kernel_name: str = "") -> dict:
+    """Publish the TTIR-only spill model for allowlisted kernels only.
+
+    The coefficients are kernel- and shape-agnostic and are fixed here.
+    Publishing no object keeps the native route model unchanged, which is the
+    safe default for every operator outside ``_SPILL_MODEL_ALLOWLIST``.
+    """
+    if _canonical_spill_kernel_name(kernel_name) not in _SPILL_MODEL_ALLOWLIST:
+        return {}
+    return {
+        "live_pressure_alpha": 1.75,
+        "live_pressure_reserve_units": 15.0,
+        "free_overflow_units": 4.0,
+        "accesses_per_word": 1.16,
+        "tensor_weight": 0.43,
+        "scalar_weight": 1.46,
+        "pointer_weight": 0.35,
+        "wave_amortization_percent": 26.0,
+    }
+
+
+def _publish_route_transform_capability(metadata, opt,
+                                        kernel_name: str = "") -> str:
     """Publish the single capability fact consumed by scoring and lowering.
 
     Layout transforms and the V1 policy have already run when this function is
@@ -317,6 +371,9 @@ def _publish_route_transform_capability(metadata, opt) -> str:
         "logical_program_count_hint": transformed_logical_program_count,
         "physical_vector_core_count_hint": physical_vector_cores,
     }
+    spill_model = _spill_model_capability(kernel_name)
+    if spill_model:
+        capability["whole_kernel_spill_model"] = spill_model
     logical_program_count = capability["logical_program_count_hint"]
     if logical_program_count:
         capability["superblock_runtime_groups"] = {
@@ -346,7 +403,8 @@ def _run_cpp_simd_simt_costmodel(mod, metadata, opt, analysis_ttir_code: str = "
     pm.enable_debug()
     capability_json = metadata.get("route_transform_capability")
     if not capability_json:
-        capability_json = _publish_route_transform_capability(metadata, opt)
+        capability_json = _publish_route_transform_capability(
+            metadata, opt, _kernel_name_from_ir(mod))
     capability = json.loads(capability_json)
     whole_kernel_factors = capability.get("whole_kernel_superblock_factors", [1])
     scope_factors = capability.get("scope_superblock_factors", [1])
@@ -550,7 +608,8 @@ def ttir_to_linalg(mod, metadata, opt, *, named_ops=False):
             metadata["ttir_layout_coalesce_axis"] = -1
             metadata["ttir_layout_coalesce_grid_ceil_div"] = False
         _resolve_auto_blockify_v1_policy(str(mod), metadata, opt)
-        _publish_route_transform_capability(metadata, opt)
+        _publish_route_transform_capability(
+            metadata, opt, _kernel_name_from_ir(mod))
         analysis_ttir_code = _build_costmodel_analysis_ttir(mod, metadata, opt)
     cpp_decision = _run_cpp_simd_simt_costmodel(mod, metadata, opt, analysis_ttir_code)
     cpp_all_simt = cpp_decision == "all_simt_only"

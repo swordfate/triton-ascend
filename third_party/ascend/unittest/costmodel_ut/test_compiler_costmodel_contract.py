@@ -245,5 +245,17 @@ class CompilerCostmodelContractTest(unittest.TestCase):
             self.assertIn('_compile_option_list += ["--enable-debug-info=true"]', source)
 
 
+    def test_spill_model_gate_is_allowlisted_by_default(self):
+        cmplr, _dump_mgr, _GPUTarget = self._load_compiler_module()
+
+        self.assertIn("padded_copy_gather", cmplr._SPILL_MODEL_ALLOWLIST)
+        self.assertIn("binned_copy_wgrad", cmplr._SPILL_MODEL_ALLOWLIST)
+        allowed = cmplr._spill_model_capability("_padded_copy_gather")
+        self.assertIn("live_pressure_alpha", allowed)
+        self.assertEqual(cmplr._spill_model_capability("_some_other_kernel"),
+                         {})
+        self.assertEqual(cmplr._spill_model_capability(""), {})
+
+
 if __name__ == "__main__":
     unittest.main()

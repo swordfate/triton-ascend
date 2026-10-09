@@ -223,6 +223,31 @@ struct StageCostTable {
   std::string profileVersion;
   int64_t logicalProgramCountHint = 0;
   int64_t physicalCoreCountHint = 0;
+  /// Number of warps in one logical program before whole-kernel SuperBlock.
+  int64_t baseWarpCount = 1;
+  /// Whole-SIMT peak simultaneously-live 32-bit units per thread observed on
+  /// the post-AutoBlockify TTIR.  This is the only spill-model input: no
+  /// kernel name and no backend/lowering artifacts are consulted.
+  int64_t wholeSimtPeakLiveUnitsPerThread = 0;
+  bool wholeSimtPeakLiveKnown = false;
+  /// Breakdown of the same peak, used by the general TTIR-only spill model.
+  int64_t wholeSimtPeakTensorUnitsPerThread = 0;
+  int64_t wholeSimtPeakScalarUnitsPerThread = 0;
+  int64_t wholeSimtPeakPointerUnitsPerThread = 0;
+  /// Safety valve: when false the solver keeps the native route model.
+  bool wholeSimtSpillModelEnabled = false;
+  /// Global TTIR-only spill-model coefficients (see SimdSimtCostModelOptions).
+  double wholeSimtSpillAlpha = 1.0;
+  double wholeSimtSpillReserveUnits = 0.0;
+  double wholeSimtSpillFreeOverflowUnits = 0.0;
+  double wholeSimtSpillAccessesPerWord = 2.0;
+  double wholeSimtSpillTensorWeight = 1.0;
+  double wholeSimtSpillScalarWeight = 1.0;
+  double wholeSimtSpillPointerWeight = 1.0;
+  double wholeSimtSpillWavePercent = 0.0;
+  /// SIMT profile rate used to convert the predicted LDK/STK transaction
+  /// count into the native system-cycle score unit.
+  double wholeSimtSpillTransactionsPerCycle = 1.0;
   std::vector<LogicalStageCost> stages;
 };
 
@@ -253,6 +278,17 @@ struct StageRoutePlan {
   int64_t runtimePhysicalProgramCount = 0;
   int64_t runtimeWaveCount = 1;
   double totalCycles = 0.0;
+  /// TTIR-only whole-kernel spill prediction and the LDK/STK penalty that the
+  /// solver charged once per physical program before wave scaling.
+  int64_t wholeSimtActiveWarps = 0;
+  int64_t wholeSimtRegisterBudgetPerThread = 0;
+  double wholeSimtPredictedStackBytesPerThread = 0.0;
+  double wholeSimtSpillPenaltyCycles = 0.0;
+  /// True when the factor was kept spill-free in the score because its wave
+  /// count is at most 55% of the best non-spilling factor's wave count.  This
+  /// is the measured large-grid trade-off: halving the waves pays for the
+  /// predicted LDK/STK traffic.
+  bool wholeSimtSpillAmortizedByWaves = false;
 
   llvm::json::Object toJSON() const;
 };
@@ -267,6 +303,16 @@ struct StageCostModelSummary {
   StageRoutePlan allSimd;
   StageRoutePlan allSimt;
   StageRoutePlan mixed;
+  /// Observation behind the whole-SIMT register-pressure and spill-cost
+  /// terms.  These numbers are serialized for regression evidence; they do
+  /// not by themselves make a factor illegal.
+  int64_t wholeSimtPeakLiveUnitsPerThread = 0;
+  int64_t wholeSimtPeakTensorUnitsPerThread = 0;
+  int64_t wholeSimtPeakScalarUnitsPerThread = 0;
+  int64_t wholeSimtPeakPointerUnitsPerThread = 0;
+  /// Largest whole-kernel factor whose active-warp count still leaves room
+  /// for the observed peak live set under the local register-quota table.
+  int64_t wholeSimtRegisterLegalFactor = 0;
   /// Analysis aid: every whole-kernel all-SIMT candidate considered by the
   /// solver, including the losing SuperBlock factors.  Serialized under
   /// routes.all_simt_only_by_factor so the losing stage costs are inspectable.

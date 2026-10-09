@@ -28,6 +28,7 @@
 #include "llvm/Support/raw_ostream.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <string>
 #include <system_error>
@@ -191,9 +192,36 @@ struct SelectSimdSimtCostModelPass
         std::max<int64_t>(0, logicalProgramCountHint.getValue());
     if (auto capability =
             llvm::json::parse(routeTransformCapabilityJSON.getValue()))
-      if (auto *object = capability->getAsObject())
+      if (auto *object = capability->getAsObject()) {
         if (auto count = object->getInteger("physical_vector_core_count_hint"))
           options.physicalVectorCoreCountHint = std::max<int64_t>(0, *count);
+        // Global TTIR-only spill-model coefficients.  They are not keyed by
+        // kernel or shape; the Python frontend publishes the object only for
+        // allowlisted kernels, so object presence is the enable gate.
+        if (auto *model = object->getObject("whole_kernel_spill_model")) {
+          options.wholeSimtSpillModelEnabled = true;
+          auto readNonNegative = [&](llvm::StringRef key, double &target) {
+            if (auto value = model->getNumber(key))
+              if (std::isfinite(*value) && *value >= 0.0)
+                target = *value;
+          };
+          readNonNegative("live_pressure_alpha", options.wholeSimtSpillAlpha);
+          readNonNegative("live_pressure_reserve_units",
+                          options.wholeSimtSpillReserveUnits);
+          readNonNegative("free_overflow_units",
+                          options.wholeSimtSpillFreeOverflowUnits);
+          readNonNegative("accesses_per_word",
+                          options.wholeSimtSpillAccessesPerWord);
+          readNonNegative("tensor_weight",
+                          options.wholeSimtSpillTensorWeight);
+          readNonNegative("scalar_weight",
+                          options.wholeSimtSpillScalarWeight);
+          readNonNegative("pointer_weight",
+                          options.wholeSimtSpillPointerWeight);
+          readNonNegative("wave_amortization_percent",
+                          options.wholeSimtSpillWavePercent);
+        }
+      }
 
     SimtAnchorPlan anchorPlan =
         buildMixedSimtAnchorPlan(module, options.compileOn91095);
