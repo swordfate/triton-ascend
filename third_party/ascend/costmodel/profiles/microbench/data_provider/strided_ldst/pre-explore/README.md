@@ -330,17 +330,18 @@ proxy。`max(0,4-W)` 的阈值 4 是经验参数，现有 W 网格是 1/2/4/8/16
 ##### SIMT_template load 实测
 
 - 测量协议：rotate-loop Event slope，`ns/iteration`；stride 只取静态非 2 次幂。
-- 半白盒模型（in-sample）：
+- 半白盒模型（v2，in-sample；下列系数为 **profile 兼容口径**，即当前 profile 生效值）：
   ```text
-  T_load = 211.3874
-         + 1.64952 * L
-         + 0.38442 * bucket_worst_32k16
-         + 7.91975 * mean_warp_lines
-         + 0.39463 * tail_elems
+  T_load = 236.1121
+         + 1.66446 * L
+         + 0.39222 * bucket_worst_32k16
+         + 5.77588 * mean_warp_lines
+         + 0.22980 * tail_elems
   ```
-- n=92，in-sample MAPE 8.39%，p50 5.96%，p90 20.10%，p95 27.80%，max 40.70%。
-- template / pure-SIMT median ratio ≈1.92×（详见 §5.6）。
-- 完整数据、公式、误差和图见 §5.4–§5.6。
+- n=311，in-sample MAPE 6.17%，p50 4.08%，p90 13.90%，p95 19.48%，max 37.09%。
+- 不受限口径（交付模型，6 特征）MAPE 6.07%，见 §5.9.2。
+- template / pure-SIMT(v8) median ratio ≈1.54×（详见 §5.6）。
+- 完整数据、公式、误差和图见 §5.4–§5.6 与 §5.9。
 
 指标口径（相对误差定义为 `pred / target - 1`）：
 
@@ -649,17 +650,18 @@ python3 scripts/predict_strided_store_v1.py simt 128 16 --num-warps 4
 
 - 测量协议同 §5.3：rotate-loop Event slope，`ns/iteration`，只取静态非 2 次幂
   stride。
-- 半白盒模型（in-sample）：
+- 半白盒模型（v2，in-sample；下列系数为 **profile 兼容口径**，即当前 profile 生效值）：
   ```text
-  T_store = 92.1451
-          + 1.91721 * L
-          + 0.23650 * bucket_worst_32k16
-          + 6.25512 * mean_warp_lines
-          + 111.92716 * iters_per_thread
+  T_store = 101.5944
+          + 2.00411 * L
+          + 0.26456 * bucket_worst_32k16
+          + 2.72008 * mean_warp_lines
+          + 121.24280 * iters_per_thread
   ```
-- n=90，in-sample MAPE 9.26%，p50 6.27%，p90 21.89%，p95 27.47%，max 37.42%。
-- template / pure-SIMT median ratio ≈3.26×（小 block 中位可达 10× 左右）。
-- 完整数据、公式、误差和图见 §5.4–§5.6。
+- n=320，in-sample MAPE 7.07%，p50 5.18%，p90 15.72%，p95 20.81%，max 34.72%。
+- 不受限口径（交付模型，6 特征）MAPE 6.85%，见 §5.9.2。
+- template / pure-SIMT median ratio ≈3.74×（小 block 中位 6.25×）。
+- 完整数据、公式、误差和图见 §5.4–§5.6 与 §5.9。
 
 
 ## 3. 所有脚本在 scripts/
@@ -943,10 +945,13 @@ profile 拟合不需要 `num_warps` 项。
 
 ### 5.4 实测：SIMT_template 拟合公式
 
-模型文件：
+> 本节给出 **v2 重标定（2026-10-09）** 的当前公式；v1 网格（BLOCK 16..2048、
+> W=1、19 个 stride）的旧公式已被取代，测量矩阵、口径与完整分析见 §5.9。
 
-- `results/model_template_stride_v1/model_template_stride_load_v1.json`
-- `results/model_template_stride_v1/model_template_stride_store_v1.json`
+模型文件（不受限口径 = 交付口径）：
+
+- `results/model_template_stride_v2/model_template_stride_load_v2.json`
+- `results/model_template_stride_v2/model_template_stride_store_v2.json`
 
 形式：
 
@@ -957,35 +962,63 @@ target = ns/iteration (rotate-loop Event slope，min-of-reps/passes)
 
 #### Load template
 
+**profile 兼容口径（当前 profile 生效值，只用现有 5 个 load 字段）**：
+
 ```text
-T_load = 211.3874
-       + 1.64952 * L
-       + 0.38442 * bucket_worst_32k16
-       + 7.91975 * mean_warp_lines
-       + 0.39463 * tail_elems
+T_load = 236.1121
+       + 1.66446 * L
+       + 0.39222 * bucket_worst_32k16
+       + 5.77588 * mean_warp_lines
+       + 0.22980 * tail_elems
+```
+
+**不受限口径（交付模型，额外使用 `tail_lanes_gt0` / `stride_gt_line` / `active_warps`）**：
+
+```text
+T_load = 0.0000
+       + 1.74490 * L
+       + 0.45191 * bucket_worst_32k16
+       + 4.97400 * mean_warp_lines
+       + 232.03565 * tail_lanes_gt0
+       + 21.82794 * stride_gt_line
+       + 4.90183 * active_warps
 ```
 
 | 项 | 物理含义 |
 |---|---|
-| intercept 211.4 ns | 单个 rotate iteration 内 template 调用固定开销 |
-| `L` | distinct 128B line 工作量；每多一条 line 约 1.65 ns |
+| intercept 236.1 ns | 单个 rotate iteration 内 template 调用固定开销 |
+| `L` | distinct 128B line 工作量；每多一条 line 约 1.66 ns |
 | `bucket_worst_32k16` | 32KB/16-bucket 最拥塞程度，捕捉地址 bank/region 热点 |
 | `mean_warp_lines` | 每个 warp 的 line 数，捕捉 warp 级分散访问 |
 | `tail_elems` | BLOCK 不是 1024 倍数时的尾线程/尾 wave |
 
 #### Store template
 
+**profile 兼容口径（当前 profile 生效值，只用现有 5 个 store 字段）**：
+
 ```text
-T_store = 92.1451
-        + 1.91721 * L
-        + 0.23650 * bucket_worst_32k16
-        + 6.25512 * mean_warp_lines
-        + 111.92716 * iters_per_thread
+T_store = 101.5944
+        + 2.00411 * L
+        + 0.26456 * bucket_worst_32k16
+        + 2.72008 * mean_warp_lines
+        + 121.24280 * iters_per_thread
+```
+
+**不受限口径（交付模型，额外使用 `tail_lanes_gt0` / `stride_gt_line`）**：
+
+```text
+T_store = 46.3324
+        + 2.12458 * L
+        + 0.32514 * bucket_worst_32k16
+        + 1.50901 * mean_warp_lines
+        + 116.26690 * tail_lanes_gt0
+        + 12.34260 * stride_gt_line
+        + 61.60142 * iters_per_thread
 ```
 
 | 项 | 物理含义 |
 |---|---|
-| intercept 92.1 ns | template store 调用固定开销 |
+| intercept 101.6 ns | template store 调用固定开销 |
 | `L` | 写向 distinct 128B line 数 |
 | `bucket_worst_32k16` | 32KB/16-bucket 写热点 |
 | `mean_warp_lines` | warp 级写分散度 |
@@ -994,70 +1027,90 @@ T_store = 92.1451
 所有系数非负；无 log、无 x²/x³、无减法项。predictor：
 
 ```bash
-python3 scripts/predict_template_stride_v1.py --verify
-python3 scripts/predict_template_stride_v1.py load 256 3
-python3 scripts/predict_template_stride_v1.py store 256 3
+python3 scripts/predict_template_stride_v2.py --verify
+python3 scripts/predict_template_stride_v2.py load 256 3
+python3 scripts/predict_template_stride_v2.py store 256 3
 ```
 
 ### 5.5 实测：SIMT_template in-sample 误差
 
-本轮只报告 in-sample 拟合误差。
+本轮只报告 in-sample 拟合误差。v2 两套口径都列出（矩阵、口径定义与完整分析见 §5.9）：
 
-| path | n | MAPE | p50 | p90 | p95 | max | bias | RMSE |
-|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| load | 92 | 8.39% | 5.96% | 20.10% | 27.80% | 40.70% | 0.00% | 6.94% |
-| store | 90 | 9.26% | 6.27% | 21.89% | 27.47% | 37.42% | -0.85% | 9.08% |
+| 口径 | path | n | MAPE | p50 | p90 | p95 | max | bias | RMSE |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| profile 兼容（**当前 profile 生效**） | load | 311 | 6.17% | 4.08% | 13.90% | 19.48% | 37.09% | 0.00% | 6.49% |
+| profile 兼容（**当前 profile 生效**） | store | 320 | 7.07% | 5.18% | 15.72% | 20.81% | 34.72% | 0.00% | 8.24% |
+| 不受限（交付模型） | load | 311 | 6.07% | 4.37% | 13.95% | 16.55% | 33.85% | −0.67% | 6.85% |
+| 不受限（交付模型） | store | 320 | 6.85% | 5.63% | 15.65% | 18.45% | 28.82% | −0.48% | 8.75% |
 
 逐点误差：
 
 ```text
-results/model_template_stride_v1/errors_load.csv
-results/model_template_stride_v1/errors_store.csv
-results/model_template_stride_v1/errors_all.csv
+results/model_template_stride_v2/errors_load.csv     # 不受限口径的逐点误差
+results/model_template_stride_v2/errors_store.csv
+results/model_template_stride_v2/errors_all.csv
 ```
 
 图：
 
 ```text
-results/model_template_stride_v1/plots/parity_loglog.png
-results/model_template_stride_v1/plots/error_hist.png
-results/model_template_stride_v1/plots/error_vs_stride.png
-results/model_template_stride_v1/plots/error_vs_block.png
+results/model_template_stride_v2/plots/parity_loglog.png
+results/model_template_stride_v2/plots/error_hist.png
+results/model_template_stride_v2/plots/error_vs_stride.png
+results/model_template_stride_v2/plots/error_vs_block.png
 ```
 
-结论：load / store in-sample MAPE 分别为 8.39% / 9.26%，满足 <10%–15%
-目标。max 误差主要来自少数 small-block outlier 和共享板卡噪声，未被少量
-非负特征完全吸收。
+结论：v2 的 in-sample MAPE 为 load 6.07%–6.17% / store 6.85%–7.07%，明显
+优于 v1 的 8.39% / 9.26%，满足 <10%–15% 目标。残余 max 误差集中在 BLOCK
+64/128（有效样本仅 18/22 与 18/26）以及共享板卡抖动。
 
 ### 5.6 实测：SIMT_template 与 pure SIMT 对比
 
-同一 `(block, stride, num_warps)` 上，分别调用现有 pure SIMT model 和 template v1：
+同一 `(block, stride, num_warps)` 上把 template v2 模型与 pure-SIMT 模型对比。
+v2 数据集固定 `num_warps=32`，所以下面的比值是 **W=32 口径**；template 路径
+内部固定 1024 threads、与 W 无关，而 pure-SIMT 随 W 变化，因此该比值本身依赖 W
+（v1 的 1.92× / 3.26× 来自 W=1 网格且 load 基线是已废弃的 v7，不能与本节直接比较）。
 
-```text
-results/model_template_stride_v1/template_vs_pure_simt.csv
+复现：
+
+```bash
+# load(v7 基线) + store：脚本自带
+python3 scripts/compare_template_vs_pure_simt.py --dir results/model_template_stride_v2 --suffix v2
+# load 当前生产基线是 v8，用 v8 predictor 的 predict(model, block, stride, W) 复算
 ```
 
-比较（template / pure-SIMT）：
+比较（template / pure-SIMT，W=32）：
 
-| path | n | median ratio | mean ratio | min | max |
-|---|---:|---:|---:|---:|---:|
-| load | 92 | 1.92× | 2.79× | 1.20× | 7.82× |
-| store | 90 | 3.26× | 5.15× | 1.73× | 11.69× |
+| path | 基线 | n | median | mean | min | max |
+|---|---|---:|---:|---:|---:|---:|
+| load | **v8（当前生产）** | 311 | **1.54×** | 1.67× | 0.54× | 3.68× |
+| load | v7（已废弃） | 311 | 0.85× | 0.90× | 0.14× | 1.81× |
+| store | store v1（当前生产） | 320 | **3.74×** | 4.04× | 1.79× | 6.45× |
 
 按 block 看中位 ratio：
 
-| block | load ratio | store ratio |
-|---:|---:|---:|
-| 16 | 1.82× | 10.63× |
-| 64 | 1.41× | 6.33× |
-| 256 | 1.85× | 2.88× |
-| 1024 | 3.26× | 1.99× |
-| 2048 | 5.47× | 1.82× |
+| block | load vs v8 | load vs v7 | store |
+|---:|---:|---:|---:|
+| 4 | 1.59× | 0.90× | 6.25× |
+| 8 | 1.49× | 0.92× | 6.08× |
+| 16 | 1.50× | 1.03× | 5.64× |
+| 32 | 1.47× | 1.08× | 5.27× |
+| 64 | 1.41× | 1.07× | 4.74× |
+| 128 | 0.57× | 0.78× | 3.15× |
+| 256 | 0.83× | 0.80× | 2.72× |
+| 512 | 1.37× | 0.74× | 2.32× |
+| 1024 | 2.48× | 0.59× | 1.92× |
+| 2048 | 3.32× | 0.53× | 1.84× |
 
-结论：template 路径与 pure-SIMT **不能共用**系数，尤其 store 小 block
-差一个数量级；load 在 1.2×–7.8× 内，也值得独立建模。
+结论：相对**当前** pure-SIMT 模型，template 路径 load 中位贵 1.54×、store 贵
+3.74×，**两套系数不能共用**，必须独立建模（与 v1 的定性结论一致，但 v1 的绝对
+值来自 W=1 网格和已废弃的 v7 load 基线）。BLOCK 128 处 load 出现 0.57× 凹陷，
+该 block 有效样本只有 22 个，属弱约束区，不应据此调参。
 
-### 5.7 集成建议
+### 5.7 集成建议（v1 轮次提出，已在 `64e2782ae` 落地）
+
+> 下列清单是 v1 标定后给出的设计建议，**现已实现**：字段与公式接入见 §6，
+> profile 数值刷新见 §5.9.4 / §5.9.5。此处保留原始清单作为设计记录。
 
 本轮不改 C++，下一轮建议：
 
@@ -1097,7 +1150,9 @@ results/model_template_stride_v1/template_vs_pure_simt.csv
      `call @triton_stride_load/store`；
    - route report 中 pure-SIMT 与 template-SIMT 两条实现 cycle 可区分。
 
-### 5.8 剩余风险
+### 5.8 剩余风险（v1 标定期）
+
+> v2 的残余风险见 §5.9.6；本节保留 v1 轮次的记录。
 
 1. 实测在共享 NPU 上进行，witness 只锁 Aicore 频率，无法完全排除其他进程
    的 BIU/L2/HBM 干扰；已用多 pass + min target 抑制，但 store in-sample
@@ -1362,6 +1417,11 @@ simt_stride_template_store_bucket_worst_32k16_ns
 simt_stride_template_store_mean_warp_lines_ns
 simt_stride_template_store_iters_per_thread_ns
 ```
+
+这 10 个字段的**数值**已由 v2 标定刷新（`profile_version` 提升为
+`david-v100-simd-simt-20261009-v31-template-v2`，`source` 指向
+`results/model_template_stride_v2`），**字段名与 schema 15 未变**，因此
+C++/schema 无需改动。当前生效系数见 §5.5 的 "profile 兼容" 行与 §5.9.3。
 
 字段在 `SimdSimtCostModel.cpp::readStageResources()` 中解析；
 `StridedMemoryProfile::templateEnabled` 控制是否启用 template 分支。

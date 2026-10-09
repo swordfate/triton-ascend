@@ -2,6 +2,7 @@
 """Compare the template strided model against the existing pure-SIMT models."""
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 from pathlib import Path
@@ -13,7 +14,7 @@ import predict_strided_store_v1 as store_predict
 from template_stride_features import FEATURE_ORDER, feature_vector
 
 HERE = Path(__file__).resolve().parent.parent
-OUT = HERE / "results/model_template_stride_v1"
+DEFAULT_DIR = HERE / "results/model_template_stride_v1"
 
 
 def template_predict(model, block, stride, num_warps=1):
@@ -25,12 +26,18 @@ def template_predict(model, block, stride, num_warps=1):
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--dir", type=Path, default=DEFAULT_DIR)
+    ap.add_argument("--suffix", default="v1",
+                    help="model file suffix, e.g. v1 or v2")
+    args = ap.parse_args()
+    out_dir = args.dir
     load_model = json.loads((HERE / "results/model_v7_simple/model_v7_simple.json").read_text())
     store_model = json.loads((HERE / "results/model_store_v1/model_store_v1.json").read_text())
-    tload = json.loads((OUT / "model_template_stride_load_v1.json").read_text())
-    tstore = json.loads((OUT / "model_template_stride_store_v1.json").read_text())
+    tload = json.loads((out_dir / f"model_template_stride_load_{args.suffix}.json").read_text())
+    tstore = json.loads((out_dir / f"model_template_stride_store_{args.suffix}.json").read_text())
     rows = []
-    with (OUT / "dataset.csv").open(newline="") as f:
+    with (out_dir / "dataset.csv").open(newline="") as f:
         for row in csv.DictReader(f):
             if int(row["valid"]) != 1 or int(row["correctness_ok"]) != 1:
                 continue
@@ -50,7 +57,7 @@ def main():
                 "num_warps": warps, "template_ns": template,
                 "pure_simt_ns": pure, "ratio": template / pure,
             })
-    with (OUT / "template_vs_pure_simt.csv").open("w", newline="") as f:
+    with (out_dir / "template_vs_pure_simt.csv").open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
         writer.writeheader()
         writer.writerows(rows)
@@ -65,7 +72,7 @@ def main():
             "min_ratio": float(np.min(ratios)),
             "max_ratio": float(np.max(ratios)),
         }
-    (OUT / "template_vs_pure_simt_summary.json").write_text(
+    (out_dir / "template_vs_pure_simt_summary.json").write_text(
         json.dumps(summary, indent=2), encoding="utf-8"
     )
     print(json.dumps(summary, indent=2))
