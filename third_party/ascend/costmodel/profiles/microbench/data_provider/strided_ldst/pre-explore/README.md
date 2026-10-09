@@ -810,6 +810,8 @@ max strided Stage SIMT-load diff = 0
 ---
 
 ## 5. SIMT_template 路径：白盒探索与实测（`triton_stride_load/store`）
+> 注：template 路径的**当前有效标定**是 §5.9（v2，2026-10-09，含字段影响分析）；
+> §5.4–§5.6 保留为 v1 网格下的历史记录。
 
 ### 5.1 白盒探索：SIMT_template 路径怎么触发
 
@@ -1114,6 +1116,186 @@ results/model_template_stride_v1/template_vs_pure_simt.csv
 
 ---
 
+### 5.9 template v2 重标定结果（2026-10-09，最终）
+
+> 本节是 template 路径的**当前有效标定**，取代 §5.4–§5.6 中 v1 网格
+> （BLOCK 16..2048、W=1、19 个非 2 次幂 stride）的公式与误差表；
+> §5.1–§5.3 的触发条件与测量协议仍然适用。
+
+#### 5.9.1 测量矩阵与数据量
+
+- BLOCK：4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048（10 个）
+- STRIDE：3, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 17..31, 40, 48, 63,
+  65, 80, 96, 127, 129, 160, 192, 255（37 个，全部静态非 2 次幂且 >= 3）
+- num_warps：固定 32（模板内部固定 1024 threads，外层 W 不进模型）
+- load / store 分开测量，各 370 个 case；每个 case 走两个 pass：
+  pass1 = REPS 2 / MAX_ATTEMPTS 2，pass2 = REPS 3 / MAX_ATTEMPTS 1
+- 有效判据：ALU witness（15% 容差）、spread <= 0.40、Aicore 频率 >= 1500 MHz；
+  同一 attempt 三者全过才算 valid，dataset 对同一
+  (path, block, stride, num_warps) 取所有 valid+correct pass 的**最小** target
+
+数据量与有效率（测量期间板卡 load average 46–64，与其他用户共享 NPU）：
+
+| pass | cases | valid | invalid | elapsed |
+|---|---:|---:|---:|---:|
+| load pass1（旧 probe，无 launch_manifest） | 370 | 309 | 61 | 4522 s |
+| load pass2（补丁 probe） | 370 | 299 | 71 | 227 s |
+| store pass1 | 370 | 320 | 50 | ~3240 s |
+| store pass2 | 370 | 278 | 92 | 178 s |
+
+pass2 只耗时 178–227 s，因为 measure cache 已热，无编译开销。
+
+**invalid 归因**：61/61 与 50/50 全部是 `spread > 0.40`（板卡抖动），
+与频率门控无关 —— pass1 的 740 个 attempt 中 `post_freq_mhz` 全部落在
+1550–1650，`frequency_ok` 为 740/740。各 block 的有效样本数（合并两 pass）：
+
+| block | 4 | 8 | 16 | 32 | 64 | 128 | 256 | 512 | 1024 | 2048 |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| load valid | 37 | 35 | 31 | 27 | **18** | **22** | 32 | 35 | 37 | 37 |
+| store valid | 37 | 37 | 31 | 27 | **18** | 26 | 34 | 36 | 37 | 37 |
+
+BLOCK 64/128 是最薄区（约 49%–59% 有效），拟合时应视为弱约束区间。
+
+#### 5.9.2 交付口径模型（fit_template_stride_v2.py 默认参数）
+
+命令（`--max-terms 6 --corr-threshold 0.95 --alphas 1.0 1.5 2.0`，
+脚本按 in-sample MAPE 选 alpha）：
+
+```bash
+python3 scripts/fit_template_stride_v2.py \
+  --dataset results/model_template_stride_v2/dataset.csv \
+  --out-dir results/model_template_stride_v2 \
+  --alphas 1.0 1.5 2.0 --max-terms 6 --corr-threshold 0.95
+```
+
+| path | n | alpha | intercept | 特征（系数） | MAPE | p50 | p90 | p95 | max | bias | RMSE |
+|---|---:|---:|---:|---|---:|---:|---:|---:|---:|---:|---:|
+| load | 311 | 2.0 | **0.000000** | L 1.744904 / bucket_worst_32k16 0.451909 / mean_warp_lines 4.974002 / tail_lanes_gt0 232.035650 / stride_gt_line 21.827943 / active_warps 4.901828 | 6.07% | 4.37% | 13.95% | 16.55% | 33.85% | −0.67% | 6.85% |
+| store | 320 | 1.5 | 46.332398 | L 2.124577 / bucket_worst_32k16 0.325141 / mean_warp_lines 1.509009 / tail_lanes_gt0 116.266903 / stride_gt_line 12.342597 / iters_per_thread 61.601420 | 6.85% | 5.63% | 15.65% | 18.45% | 28.82% | −0.48% | 8.75% |
+
+两版都远优于 10%–15% 的 MAPE 目标，`predict_template_stride_v2.py --verify`
+逐点复算一致（max |predict − errors.pred_ns| = 2.3e-13 / 9.1e-13）。
+
+**两个需要记录的模型质量信号**：
+
+1. load 在 alpha=2.0 下 intercept 被压到 **0.0**：固定开销整体迁移进
+   `tail_lanes_gt0`（0/1 指示量，系数 232 ns）。数学上等价，但物理上
+   "block 恰为 1024 的整数倍时不付固定开销" 不可解释。
+2. store 在 alpha=2.0 下会把 `iters_per_thread` **整项剔除**：本网格里
+   该特征只取 {1, 2} 两个值（仅 BLOCK=2048 为 2），与 intercept 近乎共线，
+   NNLS 的截距/斜率拆分不可辨识（alpha=1.0/1.5/2.0 分别为
+   121.2 / 55.8 / 0.0 ns，截距同步反向移动）。
+
+#### 5.9.3 profile 兼容口径（只用现有 5+5 字段）
+
+把候选特征限制为 `template_strided_memory` 已有的 5 个 load / 5 个 store
+字段后重拟合：
+
+| path | 特征（= 现有 profile 字段） | alpha | intercept | 系数 | MAPE | max | 对比交付口径 |
+|---|---|---:|---:|---|---:|---:|---|
+| load | L / bucket_worst_32k16 / mean_warp_lines / tail_elems | 1.0 | 236.1121 | 1.664464 / 0.392218 / 5.775879 / 0.229805 | 6.17% | 37.09% | **+0.10 pp** |
+| store | L / bucket_worst_32k16 / mean_warp_lines / iters_per_thread | 1.0 | 101.5944 | 2.004107 / 0.264561 / 2.720082 / 121.242805 | 7.07% | 34.72% | **+0.22 pp** |
+
+兼容版同时消除了 §5.9.2 的两个质量信号：截距回到 236 / 102 ns，与 v1 的
+211 / 92 ns 同量级，且 `iters_per_thread` 恢复为 121 ns（v1 为 112 ns），
+系数随 alpha 的变化也小得多。因此**推荐 alpha=1.0** 的兼容版，而不是脚本
+按 MAPE 自动选中的 alpha。
+
+**C++ 与 Python 特征一致性（已数值验证）**：把 `StageCostModels.cpp` 里的
+`stridedLineCount()`、`stridedBankFacts(..., 32768, 16)`、
+`stridedTemplateMeanWarpLines()`、`fmod(elements, 1024)`、
+`ceil(elements/1024)` 按源码逐行重写成 Python，与
+`template_stride_features.py` 对比：在 v2 网格 370 个点上 **0 mismatch**，
+在更宽的 fuzz 网格（block 1..199 + 256/512/1023/1024/1025/2048/4096 ×
+stride 1..39 + 63/64/65/127/128/129/255/256）上同样 **0 mismatch**。
+即：兼容版的 4 个系数可以直接落进 profile，C++ 侧计算的特征值与标定时
+所用的值逐位一致。
+
+#### 5.9.4 是否替换 profile 中的 template_strided_memory 5+5 字段
+
+**结论：字段集不需要变化，只替换系数值。**
+
+- **交付口径**模型用到了 3 个（load：`tail_lanes_gt0`、`stride_gt_line`、
+  `active_warps`）+ 2 个（store：`tail_lanes_gt0`、`stride_gt_line`）
+  profile 中不存在的特征。若采用它，需要新增 **5 个字段**，并同步修改：
+  1. `include/AscendModel/RouteModel/StageCostModels.h`：
+     `StridedMemoryProfile` 增加 5 个系数成员；
+  2. `lib/AscendModel/RouteModel/StageCostModels.cpp`：
+     `stridedTemplateSimtLoadCostNs()` / `stridedTemplateSimtStoreCostNs()`
+     增加对应项，并为新特征补 C++ 计算辅助函数；
+     `StridedMemoryProfile::isValid()` 的 `std::array<double, 36>` 扩到 41；
+  3. `lib/AscendModel/RouteModel/SimdSimtCostModel.cpp`：
+     `readStageResources()` 解析 5 个新 key；
+  4. `profiles/simd_simt/simd_simt_profile_schema.json`：
+     `template_strided_memory` 的 `required` 与 `properties` 各加 5 项；
+  5. `profiles/simd_simt/david_v100_simd_simt_v1.json`：写入 5 个值，
+     bump `profile_version`（并按需更新 `source` 指向
+     `results/model_template_stride_v2`）。
+- **兼容口径**只改 `template_strided_memory` 里已存在的 10 个系数值，
+  外加 `profile_version` / `source` 两个元数据字段。**不需要改任何
+  C++、schema 或字段集**，代价是 MAPE +0.10 pp（load）/+0.22 pp（store）。
+
+综合考虑（误差代价 < 0.25 pp、避免引入 5 个新字段与配套 C++/schema 改动、
+并消除 §5.9.2 的零截距与不可辨识问题），**建议采用兼容口径**；交付目录中
+仍保留不受限口径的 `model_template_stride_{load,store}_v2.json` 作为对照与
+复现记录。
+
+#### 5.9.5 若要落地兼容口径：建议 commit message 与需重跑的 UT
+
+建议 commit message（字段集不变的情形）：
+
+```text
+feat(costmodel): refresh template_strided_memory with v2 board calibration
+
+Re-fit the local-SIMT triton_stride_load/store template coefficients on the
+full v2 matrix (BLOCK 4..2048, num_warps=32, 37 static non-power-of-two
+strides, two measurement passes per path, min-target merge). Only the ten
+existing simt.stage_resources.template_strided_memory coefficient values
+change: the feature set, the C++ StridedMemoryProfile layout and the profile
+schema are untouched, so no code change is required.
+
+The unrestricted v2 fit would have added five new fields (tail_lanes_gt0,
+stride_gt_line, active_warps, ...) for +0.10/+0.22 pp in-sample MAPE and a
+degenerate zero intercept on the load side; see pre-explore/README.md 5.9.
+
+source: data_provider/strided_ldst/pre-explore/results/model_template_stride_v2
+```
+
+（若最终决定新增字段，commit message 需改为
+"feat(costmodel): add v2 template strided fields ..." 并显式列出新增字段与
+schema/C++ 改动。）
+
+需要重跑的 UT / 测试：
+
+| 测试 | 位置 | 原因 |
+|---|---|---|
+| `SimdSimtCostModel` 全量（52 个） | `unittest/costmodel_ut/SimdSimtCostModelTest.cpp` | 其中 5 个 template 用例用 synthetic profile，字段集不变则**应直接通过**；仍需整体回归 |
+| `SimtLocalScopeUsesStrideTemplateLoad/Store` | 同上 | 用 `syntheticTemplateStridedProfile()` 的合成系数，与真实 profile 数值无关 |
+| `SimtLocalScopeFallsBackForIneligibleStride` | 同上 | 只验证 dispatch 条件 |
+| `StridedTemplateProfileParserRejectsMissingField` | 同上 | 读真实 profile 但只 erase `simt_stride_template_load_l_ns` 验证 fail-fast；字段名不变则通过 |
+| `CostModelPasses`（18 个） | 同上 | 回归 |
+| `test_simd_simt_costmodel_cases.py`（3 个 case） | `unittest/pytest_ut/` | profile 数值变化会影响 route 打分与 documented_us 断言，**必须重跑** |
+| `predict_template_stride_v2.py --verify` | `pre-explore/scripts/` | 出模型后自校验 |
+
+> 注意：C++ UT 的 template 用例全部使用 synthetic profile，因此
+> **仅替换 profile 系数不会让它们失败**；真正需要关注的是
+> `pytest_ut/test_simd_simt_costmodel_cases.py` 的三个 route/性能断言。
+> 若改为新增字段，则 `syntheticTemplateStridedProfile()` 与
+> `StridedTemplateProfileParserRejectsMissingField` 都需要同步更新。
+
+#### 5.9.6 残余风险
+
+- 仍只覆盖 rank1、静态 shape、无 mask、aligned base、4B element、
+  静态非 2 次幂 stride >= 3；rank2/3、mask、动态 stride、misalignment、
+  非 4B dtype 未标定（`templateEligible` 已能标出 rank 1..3，但
+  `mapWorkload()` 只在 rank1 消费 template 公式）。
+- BLOCK 64/128 有效样本仅 18/22（load）、18/26（store），是弱约束区间。
+- `iters_per_thread` 在本网格只取 {1,2}，与 intercept 不可辨识；
+  若后续网格加入更大的 BLOCK（>= 3072）应重标。
+- 实测在共享板卡上完成（load average 46–64），虽然 invalid 只由
+  spread 触发且已按协议取最小 target，残余的向上偏置仍可能存在。
+- 模板公式只在 local SIMT scope（`implementation.localScope=true`）
+  生效；whole-kernel `simt_only`/`all_simt_only` 继续走 v8 pure-SIMT。
 ## 6. CostModel 接入状态（本轮实现）
 
 > 本节记录 template v1 公式真正接入 `feature/strided-load-store-costmodel`
