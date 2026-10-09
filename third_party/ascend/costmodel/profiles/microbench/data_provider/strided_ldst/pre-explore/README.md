@@ -163,7 +163,7 @@ SIMT:  tl.load -> SIMT_LDG -> SIMT 128B DCache -> BIU 128B line read
 | SIMD wide | 24 | 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512 | 1, 2 | 1（SIMD 与 num_warps 无关） | ns |
 | SIMD gather | 504 | 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512 | 3..32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256 | 1（SIMD 与 num_warps 无关） | ns |
 | SIMT v8（v4 全量，本版最终） | **1288** | **4, 8, 16, 32, 64, 128, 256, 512** | **1..12, 16, 20, 24, 32, 40, 48, 64, 96, 128, 192, 256（23 个）** | **1, 2, 4, 8, 16, 32, 64（7 个）** | ns/iteration |
-| SIMT_template load（in-sample） | **92** | 16, 64, 256, 1024, 2048 | 3, 5, 6, 7, 9, 11, 13, 15, 17, 21, 25, 31, 40, 48, 63, 96, 129, 192, 255 | 1 | ns/iteration |
+| SIMT_template load（v2，in-sample） | **311**（370 例中 valid） | 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048 | 3, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 17..31, 40, 48, 63, 65, 80, 96, 127, 129, 160, 192, 255（37 个） | 32 | ns/iteration |
 
 v4 SIMT 数据是 8 blocks × 7 num_warps × 23 strides 的唯一 case 网格，来自
 `results/v4_retest_full_23.json`（主 retest + stride 20/24/40/48/96/192 缺失 retest），
@@ -183,11 +183,12 @@ exclude-flagged（1178 行）作为鲁棒性对照。exclude-flagged 时 in-samp
 从 16.18% 降到 14.85%、max 从 94.46% 降到 80.92%，说明部分 tail 来自
 allocation-spread 较大的 flagged 行；但主模型仍保留全部 1288 行，不直接删除。
 
-template load 数据来自 `results/model_template_stride_v1/dataset.csv` 的
-valid 行（固定 W=1、aligned base、静态非 2 次幂 stride）。in-sample 误差：
-n=92，MAPE 8.39%，p50 5.96%，p90 20.10%，p95 27.80%，max 40.70%。
-模型文件 `results/model_template_stride_v1/model_template_stride_load_v1.json`，
-原始 Event 在 `results/model_template_stride_v1/raw/`。
+template load 数据来自 `results/model_template_stride_v2/dataset.csv` 的
+valid 行（固定 W=32、aligned base、静态非 2 次幂 stride）。in-sample 误差
+（profile 兼容口径 = 当前 profile 生效值）：n=311，MAPE 6.17%，p50 4.08%，
+p90 13.90%，p95 19.48%，max 37.09%；不受限口径 MAPE 6.07%。
+模型文件 `results/model_template_stride_v2/model_template_stride_load_v2.json`，
+原始 Event（两个 pass）在 `results/model_template_stride_v2/raw/`。
 
 拟合目标函数（全部在 raw target 域求解）：
 
@@ -511,18 +512,19 @@ target = 所有重复里 min(event_time / iteration)   [ns/iteration]
 | SIMD wide | 12 | 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512 | 1 | 1（SIMD 与 num_warps 无关） | ns/iteration |
 | SIMD gather | 88 | 32, 64, 128, 256 | 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 20, 24, 32, 40, 48, 64, 96, 128, 192, 256 | 1（SIMD 与 num_warps 无关） | ns/iteration |
 | SIMT | 644 | 32, 64, 128, 256 | 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 20, 24, 32, 40, 48, 64, 96, 128, 192, 256 | 1, 2, 4, 8, 16, 32, 64 | ns/iteration |
-| SIMT_template store（in-sample） | **90** | 16, 64, 256, 1024, 2048 | 3, 5, 6, 7, 9, 11, 13, 15, 17, 21, 25, 31, 40, 48, 63, 96, 129, 192, 255 | 1 | ns/iteration |
+| SIMT_template store（v2，in-sample） | **320**（370 例中 valid） | 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048 | 3, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 17..31, 40, 48, 63, 65, 80, 96, 127, 129, 160, 192, 255（37 个） | 32 | ns/iteration |
 
 三个 v8 store 分支合计 744 cases，全部 valid；raw JSON：
 `results/model_store_v1/raw/board_store_simd.json`、
 `results/model_store_v1/raw/board_store_simd_wide_more.json` 与
 `results/model_store_v1/raw/board_store_simt.json`。
 
-template store 数据来自 `results/model_template_stride_v1/dataset.csv` 的
-valid 行（固定 W=1、aligned base、静态非 2 次幂 stride）。in-sample 误差：
-n=90，MAPE 9.26%，p50 6.27%，p90 21.89%，p95 27.47%，max 37.42%。
-模型文件 `results/model_template_stride_v1/model_template_stride_store_v1.json`，
-原始 Event 在 `results/model_template_stride_v1/raw/`。
+template store 数据来自 `results/model_template_stride_v2/dataset.csv` 的
+valid 行（固定 W=32、aligned base、静态非 2 次幂 stride）。in-sample 误差
+（profile 兼容口径 = 当前 profile 生效值）：n=320，MAPE 7.07%，p50 5.18%，
+p90 15.72%，p95 20.81%，max 34.72%；不受限口径 MAPE 6.85%。
+模型文件 `results/model_template_stride_v2/model_template_stride_store_v2.json`，
+原始 Event（两个 pass）在 `results/model_template_stride_v2/raw/`。
 
 #### 2.2.3 拟合公式与逐项解释
 
@@ -724,10 +726,11 @@ scripts/run_template_stride_measure_load.sh
 scripts/run_template_stride_measure_store.sh
 scripts/template_stride_path_check.py
 scripts/build_template_stride_dataset.py
-scripts/fit_template_stride_v1.py
-scripts/predict_template_stride_v1.py
+scripts/run_template_stride_calibration_v2.sh
+scripts/fit_template_stride_v2.py
+scripts/predict_template_stride_v2.py
 scripts/make_template_stride_plots.py
-scripts/compare_template_vs_pure_simt.py
+scripts/compare_template_vs_pure_simt.py   # --dir / --suffix 支持 v1 与 v2
 ```
 
 ## 4. v8 到 profile / C++ 的最终集成状态
@@ -853,9 +856,11 @@ superblock_factor = 1
 IR 证据（compile-only，不 launch）：
 
 - 脚本：`scripts/template_stride_path_check.py`
-- 结果：`results/model_template_stride_v1/ir_evidence/template_stride_path_check.json`
-- TTAdapter 片段：`results/model_template_stride_v1/ir_evidence/path_check_asm/*.ttadapter`
-- 实测 case 的 TTAdapter：`results/model_template_stride_v1/ir_evidence/measure_asm/*.ttadapter`
+- 结果（v2，700 个 case，mismatches=0）：
+  `results/model_template_stride_v2/ir_evidence/template_stride_path_check_v2.json`
+  （每个 case 的 `asm_keys` 记录了对应的 TTAdapter 文件名）
+- 实测 case 的 TTAdapter：`results/model_template_stride_v2/ir_evidence/measure_asm/*.ttadapter`
+- v1 轮次的证据保留在 `results/model_template_stride_v1/ir_evidence/`
 
 关键校验（0 mismatch）：
 
@@ -917,18 +922,22 @@ case 后做 ALU witness；case 前后用 npu-smi 检查 Aicore Freq；
 witness 不达标或 spread 过大的 attempt 标记 invalid。
 ```
 
-矩阵（主拟合）：
+矩阵（**v2 主拟合**，2026-10-09）：
 
-- BLOCK：16、64、256、1024、2048（`tl.arange` 为 2 的幂）；
-- STRIDE：3、5、6、7、9、11、13、15、17、21、25、31、40、48、63、96、
-  129、192、255；
+- BLOCK：4、8、16、32、64、128、256、512、1024、2048（10 个，`tl.arange` 为 2 的幂）；
+- STRIDE：3、5、6、7、9、10、11、12、13、14、15、17..31、40、48、63、65、
+  80、96、127、129、160、192、255（37 个，全部静态非 2 次幂且 >= 3）；
+- `num_warps` 固定 32（模板内部固定 1024 threads，外层 W 不进模型）；
 - 不含 stride=1/2/pow2（这些不会进入模板，只出现在 §5.1 的 boundary check）；
-- load/store 分开测量；
-- 每个 case 2 个 pass（reps=2/attempts=2 与 reps=3/attempts=1 各一轮），
-  再加一批 in-sample 误差最差点的定向 rerun；dataset builder 对同一
-  `(block,stride,num_warps)` 取所有 pass 中 valid+correct 的 **最小 target**。
+- load/store 分开测量，各 370 个 case；
+- 每个 case 2 个 pass（pass1 = `reps=2/attempts=2`，pass2 = `reps=3/attempts=1`）；
+  dataset builder 对同一 `(block,stride,num_warps)` 取所有 pass 中
+  valid+correct 的 **最小 target**。v2 的数据量、有效率与 invalid 归因见 §5.9.1。
 
-`num_warps` control：
+> 下面的 `num_warps` control 与拟合结论来自 v1 轮次（W=1/2/4/8）；v2 直接
+> 把 W 固定为 32，并沿用同一结论。
+
+`num_warps` control（v1 轮次，W=1/2/4/8）：
 
 | path | block | stride | W=1 | W=2 | W=4 | W=8 | spread |
 |---|---:|---:|---:|---:|---:|---:|---:|
@@ -1351,10 +1360,12 @@ schema/C++ 改动。）
   spread 触发且已按协议取最小 target，残余的向上偏置仍可能存在。
 - 模板公式只在 local SIMT scope（`implementation.localScope=true`）
   生效；whole-kernel `simt_only`/`all_simt_only` 继续走 v8 pure-SIMT。
-## 6. CostModel 接入状态（本轮实现）
 
-> 本节记录 template v1 公式真正接入 `feature/strided-load-store-costmodel`
-> v8 版本后的字段、判定和测试状态。
+## 6. CostModel 接入状态
+
+> 本节记录 template 公式接入 `feature/strided-load-store-costmodel` 后的
+> 字段、判定与测试状态。接入时用的是 v1 系数，**profile 数值现已由 §5.9 的
+> v2 标定刷新**（字段集、C++ 路径与 schema 15 均未变）。
 
 ### 6.1 lowering path facts
 
@@ -1387,7 +1398,7 @@ strided_template_path_eligible
 |---|---|
 | `mode=simd` | SIMD v8 structured/gather 公式 |
 | `mode=simt` + `localScope=false` | v8 pure-SIMT 公式 |
-| `mode=simt` + `localScope=true` + template eligible rank1 | template v1 公式 |
+| `mode=simt` + `localScope=true` + template eligible rank1 | template 公式（当前为 §5.9 的 v2 系数） |
 | `mode=simt` + `localScope=true` + 非 eligible | 回退 v8 pure-SIMT |
 
 template 公式使用的特征在 C++ 中按与 Python 标定脚本相同的定义计算：
@@ -1430,7 +1441,7 @@ C++/schema 无需改动。当前生效系数见 §5.5 的 "profile 兼容" 行�
 
 ### 6.4 测试
 
-- `scripts/predict_template_stride_v1.py --verify`：仍通过。
+- `scripts/predict_template_stride_v2.py --verify`：VERIFY OK（311 / 320 行逐点复算一致）。
 - `SimdSimtCostModel` UT：
   - `SimtLocalScopeUsesStrideTemplateLoad`
   - `SimtLocalScopeUsesStrideTemplateStore`
