@@ -157,10 +157,14 @@ def fit_path(rows, path, alpha, max_terms, improvement_tol, corr_threshold):
         "ir_evidence": "results/model_template_stride_v2/ir_evidence/",
         "form": "T = intercept + sum(c_i * feature_i), c_i >= 0",
         "fit_method": (
-            "weighted Lawson-Hanson NNLS + forward selection with a 0.98 "
-            "absolute-correlation guard (in-sample only)"
+            "weighted Lawson-Hanson NNLS + forward selection with a "
+            f"{corr_threshold:.2f} absolute-correlation guard and a "
+            f"{improvement_tol} relative-improvement floor (in-sample only)"
         ),
         "fit_weights_alpha": float(alpha),
+        "fit_max_terms": int(max_terms),
+        "fit_improvement_tol": float(improvement_tol),
+        "fit_corr_threshold": float(corr_threshold),
         "feature_names": list(selected),
         "intercept": float(coef[0]),
         "coefficients": [float(v) for v in coef[1:]],
