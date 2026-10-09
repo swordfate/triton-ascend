@@ -23,8 +23,8 @@
       "description": "Relative path to this JSON Schema; used by editors and offline validators, not by Route Model scoring."
     },
     "schema_version": {
-      "const": 12,
-      "description": "Machine-readable Stage Route Model hardware-profile layout. Version 11 adds independent atomic-RMW rates and an explicit unknown-contention policy. Version 12 retains the legacy SIMT logical-tensor capacity field and represents local scope fixed overhead as one measured SIMD-to-SIMT-to-SIMD pair instead of two synthetic directional values."
+      "const": 15,
+      "description": "Machine-readable Stage Route Model hardware-profile layout. Version 11 adds independent atomic-RMW rates and an explicit unknown-contention policy. Version 12 retains the legacy SIMT logical-tensor capacity field and represents local scope fixed overhead as one measured SIMD-to-SIMT-to-SIMD pair instead of two synthetic directional values. Version 13 adds the board-Event strided load/store calibration object. Version 14 introduced the v8 SIMT strided-load coefficients behind an opt-in formula switch. Version 15 removes the v7 compatibility formula; the v8 terms are the only SIMT strided-load path."
     },
     "profile_version": {
       "type": "string",
@@ -760,6 +760,139 @@
             }
           },
           "additionalProperties": false
+        },
+        "strided_memory": {
+          "$ref": "#/definitions/strided_memory"
+        }
+      },
+      "additionalProperties": false
+    },
+    "strided_memory": {
+      "type": "object",
+      "description": "Board-Event calibrated shaped strided tl.load/tl.store model. Coefficients are raw ns per dynamic access. The SIMT strided-load formula is the calibrated v8 min(L,32)/tail/dup/cross/low-warp formula; the legacy v7 coefficients and formula switch have been removed.",
+      "required": [
+        "description",
+        "source",
+        "nanoseconds_to_system_cycles"
+      ],
+      "properties": {
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "nanoseconds_to_system_cycles": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "simt_load_min_line32_ns": {
+          "type": "number",
+          "minimum": 0,
+          "description": "v8 term coefficient for min(L,32), raw ns/iteration."
+        },
+        "simt_load_tail_line32_ns": {
+          "type": "number",
+          "minimum": 0,
+          "description": "v8 term coefficient for max(0,L-32), raw ns/iteration."
+        },
+        "simt_load_dup_l_min_l128_ns": {
+          "type": "number",
+          "minimum": 0,
+          "description": "v8 term coefficient for dup*L*min(L,128), raw ns/iteration."
+        },
+        "simt_load_cross_min_l32_ns": {
+          "type": "number",
+          "minimum": 0,
+          "description": "v8 term coefficient for cross*min(L,32), raw ns/iteration."
+        },
+        "simt_load_low_warp4_l_ns": {
+          "type": "number",
+          "minimum": 0,
+          "description": "v8 term coefficient for max(0,4-W)*L, raw ns/iteration."
+        },
+        "simd_load_wide_intercept_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_load_wide_stride_minus_one_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_load_wide_large_tile_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_load_wide_tail_element_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_load_gather_intercept_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_load_gather_element_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_load_gather_bank_pair_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_load_gather_bank_worst_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_load_gather_page_cross_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_store_wide_intercept_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_store_wide_element_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_store_gather_intercept_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_store_gather_line_request_size_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_store_gather_bank_pair_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simd_store_gather_worst_g32768_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simt_load_intercept_ns": {
+          "type": "number",
+          "minimum": 0,
+          "description": "v8 SIMT strided-load intercept, raw ns/iteration."
+        },
+        "simt_store_intercept_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simt_store_warp_instruction_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simt_store_line_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simt_store_line_request_size_ns": {
+          "type": "number",
+          "minimum": 0
         }
       },
       "additionalProperties": false

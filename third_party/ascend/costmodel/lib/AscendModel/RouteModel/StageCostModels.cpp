@@ -85,6 +85,143 @@ static double simtUniformStoreCycles(const StageModeProfile &profile) {
   return profile.simtUniformStoreBaseCycles;
 }
 
+static double stridedLineCount(double elements, double strideBytes) {
+  if (elements <= 0.0)
+    return 0.0;
+  if (strideBytes >= 128.0)
+    return elements;
+  return std::floor(((elements - 1.0) * strideBytes) / 128.0) + 1.0;
+}
+
+static double stridedLineRequestSize(double elements, double strideBytes) {
+  if (strideBytes >= 128.0)
+    return 4.0;
+  const double elementsPerLine =
+      std::max(1.0, std::floor(128.0 / strideBytes));
+  return std::min(128.0, elementsPerLine * 4.0);
+}
+
+static void stridedBankFacts(double elements, double strideBytes,
+                             int64_t bucketBytes, int64_t bucketCount,
+                             double &bankPairs, double &bankWorst) {
+  std::vector<int64_t> counts(
+      static_cast<size_t>(std::max<int64_t>(1, bucketCount)), 0);
+  const int64_t count = static_cast<int64_t>(std::max(0.0, elements));
+  for (int64_t i = 0; i < count; ++i) {
+    const int64_t byteOffset =
+        static_cast<int64_t>(static_cast<double>(i) * strideBytes);
+    const int64_t bucket = (byteOffset / bucketBytes) % bucketCount;
+    ++counts[static_cast<size_t>(bucket)];
+  }
+  bankPairs = 0.0;
+  bankWorst = -1.0;
+  for (int64_t value : counts) {
+    bankPairs += static_cast<double>(value) *
+                 static_cast<double>(std::max<int64_t>(0, value - 1)) / 2.0;
+    bankWorst = std::max(bankWorst, static_cast<double>(value - 1));
+  }
+  bankWorst = std::max(0.0, bankWorst);
+}
+
+/// Board-Event strided load/store formulas.  These return raw nanoseconds
+/// per dynamic access; the caller converts the sum to the profile's SYS_CNT
+/// selection-score domain.  The branches and features are the exact ones
+/// calibrated in data_provider/strided_ldst/pre-explore/README.md.
+static double stridedSimdLoadCostNs(const StridedMemoryAccess &access,
+                                    const StridedMemoryProfile &cal) {
+  const double elements = access.elements;
+  const double elementBytes = static_cast<double>(access.elementBytes);
+  const double strideElements = static_cast<double>(access.strideElements);
+  const double strideBytes = elementBytes * strideElements;
+  if (access.strideElements <= 2) {
+    const double largeTile = elements > 64.0 ? 1.0 : 0.0;
+    const double tailElements = std::max(0.0, elements - 64.0);
+    return cal.simdLoadWideInterceptNs +
+           cal.simdLoadWideStrideMinusOneNs * (strideElements - 1.0) +
+           cal.simdLoadWideLargeTileNs * largeTile +
+           cal.simdLoadWideTailElementNs * tailElements;
+  }
+  double bankPairs = 0.0;
+  double bankWorst = 0.0;
+  stridedBankFacts(elements, strideBytes, 2048, 8, bankPairs, bankWorst);
+  const double pageCross =
+      std::floor(((elements - 1.0) * strideBytes) / 4096.0);
+  return cal.simdLoadGatherInterceptNs +
+         cal.simdLoadGatherElementNs * elements +
+         cal.simdLoadGatherBankPairNs * bankPairs +
+         cal.simdLoadGatherBankWorstNs * bankWorst +
+         cal.simdLoadGatherPageCrossNs * pageCross;
+}
+
+static double stridedSimtLoadCostNs(const StridedMemoryAccess &access,
+                                    const StridedMemoryProfile &cal,
+                                    int64_t numWarps) {
+  const double elements = access.elements;
+  const double elementBytes = static_cast<double>(access.elementBytes);
+  const double strideBytes =
+      elementBytes * static_cast<double>(access.strideElements);
+  const double warps = static_cast<double>(std::max<int64_t>(1, numWarps));
+  const double elementsPerThread = elements / (32.0 * warps);
+  const double duplicate =
+      elementsPerThread > 0.0
+          ? std::max(0.0, 1.0 / elementsPerThread - 1.0)
+          : 0.0;
+  const double lines = stridedLineCount(elements, strideBytes);
+  const double crossPage =
+      ((elements - 1.0) * strideBytes) >= 4096.0 ? 1.0 : 0.0;
+  const double lowWarp4 = std::max(0.0, 4.0 - warps);
+  return cal.simtLoadInterceptNs +
+         cal.simtLoadMinLine32Ns * std::min(lines, 32.0) +
+         cal.simtLoadTailLine32Ns * std::max(0.0, lines - 32.0) +
+         cal.simtLoadDupLMinL128Ns * duplicate * lines *
+             std::min(lines, 128.0) +
+         cal.simtLoadCrossMinL32Ns * crossPage * std::min(lines, 32.0) +
+         cal.simtLoadLowWarp4LNs * lowWarp4 * lines;
+}
+
+static double stridedSimdStoreCostNs(const StridedMemoryAccess &access,
+                                     const StridedMemoryProfile &cal) {
+  const double elements = access.elements;
+  const double elementBytes = static_cast<double>(access.elementBytes);
+  const double strideElements = static_cast<double>(access.strideElements);
+  const double strideBytes = elementBytes * strideElements;
+  if (access.strideElements == 1) {
+    return cal.simdStoreWideInterceptNs +
+           cal.simdStoreWideElementNs * elements;
+  }
+  double bankPairs = 0.0;
+  double ignoredBankWorst = 0.0;
+  double worstG32768 = 0.0;
+  stridedBankFacts(elements, strideBytes, 2048, 8, bankPairs,
+                   ignoredBankWorst);
+  stridedBankFacts(elements, strideBytes, 32768, 16, ignoredBankWorst,
+                   worstG32768);
+  return cal.simdStoreGatherInterceptNs +
+         cal.simdStoreGatherLineRequestSizeNs *
+             stridedLineRequestSize(elements, strideBytes) +
+         cal.simdStoreGatherBankPairNs * bankPairs +
+         cal.simdStoreGatherWorstG32768Ns * worstG32768;
+}
+
+static double stridedSimtStoreCostNs(const StridedMemoryAccess &access,
+                                     const StridedMemoryProfile &cal,
+                                     int64_t numWarps) {
+  const double elements = access.elements;
+  const double elementBytes = static_cast<double>(access.elementBytes);
+  const double strideBytes =
+      elementBytes * static_cast<double>(access.strideElements);
+  const double warps = static_cast<double>(std::max<int64_t>(1, numWarps));
+  const double warpsPerAccess = warps * 32.0;
+  const double stgInstructions =
+      warps * std::max(1.0, std::ceil(elements / warpsPerAccess));
+  const double lines = stridedLineCount(elements, strideBytes);
+  return cal.simtStoreInterceptNs +
+         cal.simtStoreWarpInstructionNs * stgInstructions +
+         cal.simtStoreLineNs * lines +
+         cal.simtStoreLineRequestSizeNs *
+             stridedLineRequestSize(elements, strideBytes);
+}
+
 static StageResourceCycles
 materializeControlFlow(const LogicalStage &stage, StageMode mode,
                        StageResourceCycles resources,
@@ -109,7 +246,7 @@ materializeControlFlow(const LogicalStage &stage, StageMode mode,
 
 static StageResourceCycles mapWorkload(const LogicalStage &stage,
                                        const StageModeProfile &profile,
-                                       StageMode mode) {
+                                       StageMode mode, int64_t numWarps) {
   StageResourceCycles resources;
   const StageWorkload &work = stage.workload;
   const bool simd = mode == StageMode::SIMD;
@@ -150,12 +287,48 @@ static StageResourceCycles mapWorkload(const LogicalStage &stage,
         instructions / rate->second.throughput * rate->second.factor;
   }
   resources.scalar += work.scalarOperations / profile.scalarOperationsPerCycle;
-  const double directLoadBytes = work.loadBytes - work.indirectLoadBytes;
-  const double directStoreBytes = work.storeBytes - work.indirectStoreBytes;
-  const double directLoadInstructions =
-      work.loadWarpInstructions - work.indirectLoadTransactions;
-  const double directStoreInstructions =
-      work.storeWarpInstructions - work.indirectStoreTransactions;
+  double stridedLoadBytes = 0.0;
+  double stridedStoreBytes = 0.0;
+  double stridedLoadInstructions = 0.0;
+  double stridedStoreInstructions = 0.0;
+  double stridedLoadCycles = 0.0;
+  double stridedStoreCycles = 0.0;
+  if (profile.stridedMemory.enabled) {
+    const double nsToCycles =
+        profile.stridedMemory.nanosecondsToSystemCycles;
+    for (const StridedMemoryAccess &access : work.stridedMemoryAccesses) {
+      const double bytes = access.elements * access.elementBytes;
+      const double instructions = std::ceil(access.elements / 32.0);
+      if (access.isLoad) {
+        stridedLoadBytes += bytes;
+        stridedLoadInstructions += instructions;
+        const double ns =
+            simd ? stridedSimdLoadCostNs(access, profile.stridedMemory)
+                 : stridedSimtLoadCostNs(access, profile.stridedMemory,
+                                         numWarps);
+        stridedLoadCycles += ns * nsToCycles;
+      } else {
+        stridedStoreBytes += bytes;
+        stridedStoreInstructions += instructions;
+        const double ns =
+            simd ? stridedSimdStoreCostNs(access, profile.stridedMemory)
+                 : stridedSimtStoreCostNs(access, profile.stridedMemory,
+                                          numWarps);
+        stridedStoreCycles += ns * nsToCycles;
+      }
+    }
+  }
+  const double directLoadBytes =
+      std::max(0.0, work.loadBytes - work.indirectLoadBytes - stridedLoadBytes);
+  const double directStoreBytes =
+      std::max(0.0,
+               work.storeBytes - work.indirectStoreBytes - stridedStoreBytes);
+  const double directLoadInstructions = std::max(
+      0.0, work.loadWarpInstructions - work.indirectLoadTransactions -
+               stridedLoadInstructions);
+  const double directStoreInstructions = std::max(
+      0.0, work.storeWarpInstructions - work.indirectStoreTransactions -
+               stridedStoreInstructions);
   if (simd) {
     resources.load = directLoadBytes / profile.loadBytesPerCycle;
     resources.store = directStoreBytes / profile.storeBytesPerCycle;
@@ -165,6 +338,8 @@ static StageResourceCycles mapWorkload(const LogicalStage &stage,
     resources.store =
         directStoreInstructions / profile.storeWarpInstructionsPerCycle;
   }
+  resources.load += stridedLoadCycles;
+  resources.store += stridedStoreCycles;
   resources.load +=
       work.indirectLoadTransactions / profile.indirectLoadTransactionsPerCycle;
   resources.store += work.indirectStoreTransactions /
@@ -323,6 +498,7 @@ static double estimateStage(const LogicalStage &stage,
            dispatchCount * std::max(r.scalar + controlBody(r), r.issue);
   }
   case StageCostModelKind::ContinuousTileMemory:
+  case StageCostModelKind::StridedTileMemory:
   case StageCostModelKind::ContinuousTileStore:
   case StageCostModelKind::ContinuousShortLoad:
   case StageCostModelKind::CachePolicyStore:
@@ -468,6 +644,8 @@ llvm::StringRef mlir::ascend::stringifyStageCostModel(StageCostModelKind kind) {
     return "loop_predicate";
   case StageCostModelKind::ContinuousTileMemory:
     return "continuous_tile_memory";
+  case StageCostModelKind::StridedTileMemory:
+    return "strided_tile_memory";
   case StageCostModelKind::ContinuousTileStore:
     return "continuous_tile_store";
   case StageCostModelKind::ContinuousShortLoad:
@@ -518,6 +696,42 @@ bool StageAtomicRate::isValid() const {
          unknownContentionMultiplier >= 1.0;
 }
 
+bool StridedMemoryProfile::isValid() const {
+  const std::array<double, 26> values = {nanosecondsToSystemCycles,
+                                         simdLoadWideInterceptNs,
+                                         simdLoadWideStrideMinusOneNs,
+                                         simdLoadWideLargeTileNs,
+                                         simdLoadWideTailElementNs,
+                                         simdLoadGatherInterceptNs,
+                                         simdLoadGatherElementNs,
+                                         simdLoadGatherBankPairNs,
+                                         simdLoadGatherBankWorstNs,
+                                         simdLoadGatherPageCrossNs,
+                                         simdStoreWideInterceptNs,
+                                         simdStoreWideElementNs,
+                                         simdStoreGatherInterceptNs,
+                                         simdStoreGatherLineRequestSizeNs,
+                                         simdStoreGatherBankPairNs,
+                                         simdStoreGatherWorstG32768Ns,
+                                         simtLoadInterceptNs,
+                                         simtLoadMinLine32Ns,
+                                         simtLoadTailLine32Ns,
+                                         simtLoadDupLMinL128Ns,
+                                         simtLoadCrossMinL32Ns,
+                                         simtLoadLowWarp4LNs,
+                                         simtStoreInterceptNs,
+                                         simtStoreWarpInstructionNs,
+                                         simtStoreLineNs,
+                                         simtStoreLineRequestSizeNs};
+  if (!std::all_of(values.begin(), values.end(), [](double value) {
+        return std::isfinite(value) && value >= 0.0;
+      }))
+    return false;
+  return !enabled ||
+         (std::isfinite(nanosecondsToSystemCycles) &&
+          nanosecondsToSystemCycles > 0.0);
+}
+
 bool StageModeProfile::isValid(StageMode mode) const {
   const std::array<double, 14> common = {setupCycles,
                                          predicateOperationsPerCycle,
@@ -537,7 +751,7 @@ bool StageModeProfile::isValid(StageMode mode) const {
           common.begin(), common.end(),
           [](double value) { return std::isfinite(value) && value > 0.0; }) ||
       !std::isfinite(indirectDependencyLatencyCycles) ||
-      indirectDependencyLatencyCycles < 0.0 ||
+      indirectDependencyLatencyCycles < 0.0 || !stridedMemory.isValid() ||
       !controlFlow.isFiniteAndNonNegative())
     return false;
   if (mode == StageMode::SIMD) {
@@ -648,7 +862,7 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
       StageResourceCycles resources = mapWorkload(
           stage,
           implementation.mode == StageMode::SIMD ? profile.simd : profile.simt,
-          implementation.mode);
+          implementation.mode, profile.logicalWarpGroupCount);
       StageImplementationCost cost;
       cost.implementation = implementation;
       cost.resources = resources;

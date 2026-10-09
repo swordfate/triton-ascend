@@ -34,6 +34,7 @@ enum class StageCostModelKind {
   PredicateMask,
   LoopPredicate,
   ContinuousTileMemory,
+  StridedTileMemory,
   ContinuousTileStore,
   ContinuousShortLoad,
   CachePolicyStore,
@@ -124,6 +125,51 @@ struct StageAtomicRate {
   bool isValid() const;
 };
 
+/// Board-Event strided load/store calibration.  Coefficients retain the
+/// calibration's raw ns unit; mapWorkload converts the predicted value to the
+/// profile's SYS_CNT selection-score domain with
+/// ``nanosecondsToSystemCycles``.  ``enabled`` is true only when the loaded
+/// PROFILE contains the strided_memory object, so older or unit-test profiles
+/// keep the legacy continuous-memory path.
+struct StridedMemoryProfile {
+  bool enabled = false;
+  double nanosecondsToSystemCycles = 0.0;
+  /// SIMD shaped tl.load, stride=1/2 wide MTE2 path.
+  double simdLoadWideInterceptNs = 0.0;
+  double simdLoadWideStrideMinusOneNs = 0.0;
+  double simdLoadWideLargeTileNs = 0.0;
+  double simdLoadWideTailElementNs = 0.0;
+  /// SIMD shaped tl.load, stride>=3 per-element MTE2 gather path.
+  double simdLoadGatherInterceptNs = 0.0;
+  double simdLoadGatherElementNs = 0.0;
+  double simdLoadGatherBankPairNs = 0.0;
+  double simdLoadGatherBankWorstNs = 0.0;
+  double simdLoadGatherPageCrossNs = 0.0;
+  /// SIMD shaped tl.store, stride=1 wide MTE3 path.
+  double simdStoreWideInterceptNs = 0.0;
+  double simdStoreWideElementNs = 0.0;
+  /// SIMD shaped tl.store, stride>=2 per-element MTE3 gather path.
+  double simdStoreGatherInterceptNs = 0.0;
+  double simdStoreGatherLineRequestSizeNs = 0.0;
+  double simdStoreGatherBankPairNs = 0.0;
+  double simdStoreGatherWorstG32768Ns = 0.0;
+  /// SIMT shaped tl.load, SIMT_LDG + 128B DCache lines.  Coefficients are
+  /// raw ns/iteration for the calibrated v8 formula.
+  double simtLoadInterceptNs = 0.0;
+  double simtLoadMinLine32Ns = 0.0;
+  double simtLoadTailLine32Ns = 0.0;
+  double simtLoadDupLMinL128Ns = 0.0;
+  double simtLoadCrossMinL32Ns = 0.0;
+  double simtLoadLowWarp4LNs = 0.0;
+  /// SIMT shaped tl.store, SIMT_STG + 128B DCache lines.
+  double simtStoreInterceptNs = 0.0;
+  double simtStoreWarpInstructionNs = 0.0;
+  double simtStoreLineNs = 0.0;
+  double simtStoreLineRequestSizeNs = 0.0;
+
+  bool isValid() const;
+};
+
 struct StageModeProfile {
   double setupCycles = 0.0;
   /// Physical SIMD instruction width.  Unlike vectorWidth, this preserves
@@ -158,6 +204,9 @@ struct StageModeProfile {
   double mte3StorePrepCycles = 0.0;
   double mte3StoreFillCycles = 0.0;
   double simtUniformStoreBaseCycles = 0.0;
+  /// Shaped strided load/store calibration, shared by both modes' profiles
+  /// but consumed through the current StageMode's StageModeProfile.
+  StridedMemoryProfile stridedMemory;
   /// Loaded-index memory cannot use the continuous MTE/LSU throughput model.
   /// These rates operate on logical warp/transaction counts and include one
   /// uncovered dependency latency per Stage iteration.

@@ -198,6 +198,20 @@ llvm::json::Object AtomicWorkload::toJSON() const {
   return result;
 }
 
+bool StridedMemoryAccess::isValid() const {
+  return std::isfinite(elements) && elements >= 0.0 && elementBytes > 0 &&
+         strideElements >= 1;
+}
+
+llvm::json::Object StridedMemoryAccess::toJSON() const {
+  return llvm::json::Object{
+      {"access", isLoad ? "load" : "store"},
+      {"elements_per_iteration", elements},
+      {"element_bytes", static_cast<int64_t>(elementBytes)},
+      {"stride_elements", static_cast<int64_t>(strideElements)},
+      {"stride_bytes", static_cast<double>(elementBytes * strideElements)}};
+}
+
 bool TensorOperationWorkload::isFiniteAndNonNegative() const {
   const std::array<double, 2> values = {logicalElements, segmentCount};
   return !operation.empty() && elementBitWidth > 0 &&
@@ -252,6 +266,10 @@ bool StageWorkload::isFiniteAndNonNegative() const {
                       [](const TensorOperationWorkload &tensor) {
                         return tensor.isFiniteAndNonNegative();
                       }) &&
+         llvm::all_of(stridedMemoryAccesses,
+                      [](const StridedMemoryAccess &access) {
+                        return access.isValid();
+                      }) &&
          llvm::all_of(atomicWorkloads, [](const AtomicWorkload &atomic) {
            return atomic.isFiniteAndNonNegative();
          });
@@ -267,6 +285,10 @@ llvm::json::Object StageWorkload::toJSON() const {
   for (const TensorOperationWorkload &tensor : tensorOperationWorkloads)
     tensors.push_back(tensor.toJSON());
   result["tensor_operation_workloads"] = std::move(tensors);
+  llvm::json::Array stridedAccesses;
+  for (const StridedMemoryAccess &access : stridedMemoryAccesses)
+    stridedAccesses.push_back(access.toJSON());
+  result["strided_memory_accesses"] = std::move(stridedAccesses);
   result["scalar_operations_per_iteration"] = scalarOperations;
   result["load_bytes_per_iteration"] = loadBytes;
   result["store_bytes_per_iteration"] = storeBytes;
@@ -307,6 +329,9 @@ llvm::json::Object StageModelFeatures::toJSON() const {
   result["has_pointer_induction"] = hasPointerInduction;
   result["has_contiguous_memory"] = hasContiguousMemory;
   result["has_indirect_memory"] = hasIndirectMemory;
+  result["has_strided_memory"] = hasStridedMemory;
+  result["has_strided_load"] = hasStridedLoad;
+  result["has_strided_store"] = hasStridedStore;
   result["has_atomic_memory"] = hasAtomicMemory;
   result["has_reduction"] = hasReduction;
   result["has_prefix_scan"] = hasPrefixScan;
