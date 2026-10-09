@@ -6,8 +6,7 @@
   "compile_mode": "simd_simt_template",
   "ir_evidence": "results/model_template_stride_v1/ir_evidence/",
   "form": "T = intercept + sum(c_i * feature_i), c_i >= 0",
-  "fit_method": "weighted non-negative least squares + forward selection",
-  "selection_scope": "all",
+  "fit_method": "weighted non-negative least squares + forward selection (in-sample only)",
   "fit_weights_alpha": 1.5,
   "feature_names": [
     "L",
@@ -23,8 +22,6 @@
     111.9271567782345
   ],
   "n_rows": 90,
-  "n_train": 90,
-  "n_holdout": 37,
   "training_ranges": {
     "block": [
       16,
@@ -36,10 +33,6 @@
     ],
     "num_warps": [
       1
-    ],
-    "holdout_blocks": [
-      64,
-      1024
     ]
   },
   "selection_history": [
@@ -76,56 +69,5 @@
     "rmse_ns": 117.60405601713461,
     "tag": "in_sample"
   },
-  "holdout_metrics": {
-    "n": 37,
-    "mape_pct": 11.970736489487676,
-    "p50_pct": 10.721084873339004,
-    "p90_pct": 23.695270780273763,
-    "p95_pct": 29.74079462629218,
-    "max_pct": 39.697027817697176,
-    "bias_pct": -0.23375918168862184,
-    "rmse_pct": 11.154578438362488,
-    "rmse_ns": 119.28664819708148,
-    "tag": "cv_by_block"
-  },
-  "cv_by_block": {
-    "n": 37,
-    "mape_pct": 11.970736489487676,
-    "p50_pct": 10.721084873339004,
-    "p90_pct": 23.695270780273763,
-    "p95_pct": 29.74079462629218,
-    "max_pct": 39.697027817697176,
-    "bias_pct": -0.23375918168862184,
-    "rmse_pct": 11.154578438362488,
-    "rmse_ns": 119.28664819708148,
-    "tag": "cv_by_block"
-  },
-  "cv_by_stride": {
-    "n": 29,
-    "mape_pct": 10.375494294103714,
-    "p50_pct": 6.417753733275444,
-    "p90_pct": 22.941374817411596,
-    "p95_pct": 30.249799934221045,
-    "max_pct": 38.14104054076301,
-    "bias_pct": -2.1024687781938534,
-    "rmse_pct": 10.567113718606771,
-    "rmse_ns": 142.10441803187467,
-    "tag": "cv_by_stride"
-  },
-  "cv_by_stride_values": [
-    5,
-    11,
-    21,
-    48,
-    129,
-    255
-  ],
-  "coefficients_nonnegative": true,
-  "selected_max_terms": 4,
-  "max_terms_candidates": [
-    4,
-    5,
-    6,
-    8
-  ]
+  "coefficients_nonnegative": true
 }

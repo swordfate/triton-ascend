@@ -126,6 +126,17 @@ SIMT:  tl.load -> SIMT_LDG -> SIMT 128B DCache -> BIU 128B line read
                  DC 合并同一 line 内 lane，但 line 利用率随 stride 下降
 ```
 
+##### SIMT_template：mixed local SIMT 模板路径
+
+- `compile_mode=simd_simt` 的 Route Model 选中 local SIMT scope 后，rank1..3、
+  静态非 2 次幂 `stride>=3` 的 `tt.load/store` 会走
+  `ascend.stride_load/store -> triton_stride_load/store` 模板调用。
+- 它既不是纯 SIMD，也不是 `simt_only` 的 pure-SIMT；模板内部固定
+  1024 threads，每个 thread 以 scalar GM 访问循环处理元素。
+- 本轮白盒触发条件、半白盒特征、实测数据、拟合公式和误差见 §4。
+- 与 pure-SIMT 的关键区别：pure-SIMT 走 `SIMT_LDG` + 128B DCache；
+  template 路径的线程/loop 结构和成本不同，不能复用 v8 pure-SIMT 系数。
+
 ---
 
 ### 1.2 实测性能与数据重新拟合
@@ -365,6 +376,21 @@ results/model_v4_simple/v7_vs_v8_group_metrics.csv
 - `max(0,4-W)` 的阈值 4 是经验参数：现有 W 网格是 1/2/4/8/16/32/64，
   没有 W=3/6/12 点；后续需要补点验证阈值和系数可迁移性。
 
+##### SIMT_template load 实测
+
+- 测量协议：rotate-loop Event slope，`ns/iteration`；stride 只取静态非 2 次幂。
+- 半白盒模型（in-sample）：
+  ```text
+  T_load = 211.3874
+         + 1.64952 * L
+         + 0.38442 * bucket_worst_32k16
+         + 7.91975 * mean_warp_lines
+         + 0.39463 * tail_elems
+  ```
+- n=92，in-sample MAPE 8.39%，p50 5.96%，p90 20.10%，p95 27.80%，max 40.70%。
+- template / pure-SIMT median ratio ≈1.92×（详见 §4.6）。
+- 完整数据、公式、误差和图见 §4.4–§4.6。
+
 指标口径（相对误差定义为 `pred / target - 1`）：
 
 - **MAPE**：`mean(|pred/target - 1|)`；**p50**：绝对百分比误差中位数；**max**：最坏点。
@@ -486,6 +512,15 @@ BLOCK=32 白盒 store active window（MTE3 push→retire，raw CAModel cycle）�
 - 当前 dump 未观察到 write-allocate read。
 - 多条 STG 的 issue/retire 明显 overlap；BLOCK=128 时 4 条 STG 的总窗口只有约 1.17k
   cycle，不能按 `K × 单条 latency` 放大。
+
+#### 2.1.3 SIMT_template store
+
+- mixed local SIMT scope 内、rank1..3、静态非 2 次幂 `stride>=3` 的 shaped
+  `tt.store` 会走 `triton_stride_store` 模板，而不是 `SIMT_STG`。
+- 模板 1D store 同样是固定 1024 threads，每个 thread 执行
+  `dst[storeLower + i0*stride] = src[i0]` 的 scalar 写循环。
+- 本轮白盒触发条件和实测协议见 §4.1–§4.3；拟合公式与 in-sample 误差见
+  §4.4–§4.5。
 
 ### 2.2 实测性能与数据重新拟合
 
@@ -661,6 +696,22 @@ VERIFY OK
 python3 scripts/predict_strided_store_v1.py simd 128 16
 python3 scripts/predict_strided_store_v1.py simt 128 16 --num-warps 4
 ```
+
+#### 2.2.6 SIMT_template store 实测
+
+- 测量协议同 §4.3：rotate-loop Event slope，`ns/iteration`，只取静态非 2 次幂
+  stride。
+- 半白盒模型（in-sample）：
+  ```text
+  T_store = 92.1451
+          + 1.91721 * L
+          + 0.23650 * bucket_worst_32k16
+          + 6.25512 * mean_warp_lines
+          + 111.92716 * iters_per_thread
+  ```
+- n=90，in-sample MAPE 9.26%，p50 6.27%，p90 21.89%，p95 27.47%，max 37.42%。
+- template / pure-SIMT median ratio ≈3.26×（小 block 中位可达 10× 左右）。
+- 完整数据、公式、误差和图见 §4.4–§4.6。
 
 
 ## 3. 所有脚本在 scripts/
@@ -847,13 +898,28 @@ A/B 结论：
 - route 变化（b8/s256 W2/W3、b512/s256 W1/W2）是基于 v8 校准结果的预期
   修正，但仍建议后续用 in-domain 板卡数据复查这些边界。
 
----
+### 3.3 SIMT_template 脚本
+
+```text
+scripts/template_stride_common.py
+scripts/template_stride_features.py
+scripts/template_stride_load_probe.py
+scripts/template_stride_store_probe.py
+scripts/run_template_stride_measure_load.sh
+scripts/run_template_stride_measure_store.sh
+scripts/template_stride_path_check.py
+scripts/build_template_stride_dataset.py
+scripts/fit_template_stride_v1.py
+scripts/predict_template_stride_v1.py
+scripts/make_template_stride_plots.py
+scripts/compare_template_vs_pure_simt.py
+```
 
 ---
 
-## 5. Template strided load/store calibration（`triton_stride_load/store`）
+## 5. SIMT_template 路径：白盒探索与实测（`triton_stride_load/store`）
 
-### 5.1 模板路径怎么触发
+### 5.1 白盒探索：SIMT_template 路径怎么触发
 
 后端源码：`StridedLoadStoreRewrite.cpp` / `TritonToLinalgPass.cpp`。
 
@@ -901,7 +967,7 @@ IR 证据（compile-only，不 launch）：
 - `stride=1/2/4/8/16/32/64/128/256`：不包含模板调用（保留 structured
   / `memref.copy` / deinterleave 路径）。
 
-### 5.2 半白盒特征从哪里来
+### 5.2 白盒探索：SIMT_template 半白盒特征
 
 1D 模板源码：`SIMTStrideLoad.cpp` / `SIMTStrideStore.cpp`。
 
@@ -935,7 +1001,7 @@ for (i0 = threadIdx.x; i0 < size; i0 += blockDim.x)
 | `bucket_worst_32k16` | 32KB/16 桶的最拥塞计数 |
 | `num_warps_minus1` | control，验证模板线程数是否受外层影响 |
 
-### 5.3 实测协议
+### 5.3 实测：SIMT_template 测量协议
 
 脚本：
 
@@ -963,7 +1029,7 @@ witness 不达标或 spread 过大的 attempt 标记 invalid。
 - 不含 stride=1/2/pow2（这些不会进入模板，只出现在 §4.1 的 boundary check）；
 - load/store 分开测量；
 - 每个 case 2 个 pass（reps=2/attempts=2 与 reps=3/attempts=1 各一轮），
-  再加一批 CV 最差点的定向 rerun；dataset builder 对同一
+  再加一批 in-sample 误差最差点的定向 rerun；dataset builder 对同一
   `(block,stride,num_warps)` 取所有 pass 中 valid+correct 的 **最小 target**。
 
 `num_warps` control：
@@ -981,7 +1047,7 @@ witness 不达标或 spread 过大的 attempt 标记 invalid。
 结论：template target 与 `num_warps` 基本无关，模板内部 1024 threads 固定；
 profile 拟合不需要 `num_warps` 项。
 
-### 5.4 模型
+### 5.4 实测：SIMT_template 拟合公式
 
 模型文件：
 
@@ -998,16 +1064,16 @@ target = ns/iteration (rotate-loop Event slope，min-of-reps/passes)
 #### Load template
 
 ```text
-T_load = 206.8523
-       + 1.65336 * L
-       + 0.38271 * bucket_worst_32k16
-       + 8.08055 * mean_warp_lines
-       + 0.35758 * tail_elems
+T_load = 211.3874
+       + 1.64952 * L
+       + 0.38442 * bucket_worst_32k16
+       + 7.91975 * mean_warp_lines
+       + 0.39463 * tail_elems
 ```
 
 | 项 | 物理含义 |
 |---|---|
-| intercept 206.9 ns | 单个 rotate iteration 内 template 调用固定开销 |
+| intercept 211.4 ns | 单个 rotate iteration 内 template 调用固定开销 |
 | `L` | distinct 128B line 工作量；每多一条 line 约 1.65 ns |
 | `bucket_worst_32k16` | 32KB/16-bucket 最拥塞程度，捕捉地址 bank/region 热点 |
 | `mean_warp_lines` | 每个 warp 的 line 数，捕捉 warp 级分散访问 |
@@ -1039,26 +1105,21 @@ python3 scripts/predict_template_stride_v1.py load 256 3
 python3 scripts/predict_template_stride_v1.py store 256 3
 ```
 
-### 5.5 误差
+### 5.5 实测：SIMT_template in-sample 误差
 
-In-sample 与 out-of-sample（按 block/stride 做 leave-group-out，重新拟合系数）：
+本轮只报告 in-sample 拟合误差。
 
-| path | split | n | MAPE | p50 | p90 | p95 | max | bias | RMSE |
-|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| load | in-sample | 92 | 8.40% | 6.15% | 18.47% | 27.33% | 36.58% | -0.71% | 7.01% |
-| load | CV by block | 36 | 9.11% | 5.85% | 22.00% | 27.59% | 33.35% | +2.93% | 7.33% |
-| load | CV by stride | 28 | 7.81% | 4.93% | 18.99% | 21.96% | 28.11% | -1.58% | 6.09% |
-| store | in-sample | 90 | 9.26% | 6.27% | 21.89% | 27.47% | 37.42% | -0.85% | 9.08% |
-| store | CV by block | 37 | 11.97% | 10.72% | 23.70% | 29.74% | 39.70% | -0.23% | 11.15% |
-| store | CV by stride | 29 | 10.38% | 6.42% | 22.94% | 30.25% | 38.14% | -2.10% | 10.57% |
+| path | n | MAPE | p50 | p90 | p95 | max | bias | RMSE |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| load | 92 | 8.39% | 5.96% | 20.10% | 27.80% | 40.70% | 0.00% | 6.94% |
+| store | 90 | 9.26% | 6.27% | 21.89% | 27.47% | 37.42% | -0.85% | 9.08% |
 
 逐点误差：
 
 ```text
 results/model_template_stride_v1/errors_load.csv
 results/model_template_stride_v1/errors_store.csv
-results/model_template_stride_v1/errors_cv_block_{load,store}.csv
-results/model_template_stride_v1/errors_cv_stride_{load,store}.csv
+results/model_template_stride_v1/errors_all.csv
 ```
 
 图：
@@ -1070,11 +1131,11 @@ results/model_template_stride_v1/plots/error_vs_stride.png
 results/model_template_stride_v1/plots/error_vs_block.png
 ```
 
-结论：load 满足 <10%–15% 目标；store 的 block CV 12.0%，stride CV 10.4%，
-略高于 10%，但仍在“可先 keep v1 + 后续加板卡重复”的范围内。max 误差主要来自
-少数 small-block outlier 和共享板卡噪声，未被少量非负特征完全吸收。
+结论：load / store in-sample MAPE 分别为 8.39% / 9.26%，满足 <10%–15%
+目标。max 误差主要来自少数 small-block outlier 和共享板卡噪声，未被少量
+非负特征完全吸收。
 
-### 5.6 与 pure SIMT 路径的差异
+### 5.6 实测：SIMT_template 与 pure SIMT 对比
 
 同一 `(block, stride, num_warps)` 上，分别调用现有 pure SIMT model 和 template v1：
 
@@ -1086,18 +1147,18 @@ results/model_template_stride_v1/template_vs_pure_simt.csv
 
 | path | n | median ratio | mean ratio | min | max |
 |---|---:|---:|---:|---:|---:|
-| load | 92 | 1.89× | 2.78× | 1.17× | 7.84× |
+| load | 92 | 1.92× | 2.79× | 1.20× | 7.82× |
 | store | 90 | 3.26× | 5.15× | 1.73× | 11.69× |
 
 按 block 看中位 ratio：
 
 | block | load ratio | store ratio |
 |---:|---:|---:|
-| 16 | 1.80× | 10.63× |
-| 64 | 1.40× | 6.33× |
-| 256 | 1.82× | 2.88× |
+| 16 | 1.82× | 10.63× |
+| 64 | 1.41× | 6.33× |
+| 256 | 1.85× | 2.88× |
 | 1024 | 3.26× | 1.99× |
-| 2048 | 5.48× | 1.82× |
+| 2048 | 5.47× | 1.82× |
 
 结论：template 路径与 pure-SIMT **不能共用**系数，尤其 store 小 block
 差一个数量级；load 在 1.2×–7.8× 内，也值得独立建模。
@@ -1145,8 +1206,8 @@ results/model_template_stride_v1/template_vs_pure_simt.csv
 ### 5.8 剩余风险
 
 1. 实测在共享 NPU 上进行，witness 只锁 Aicore 频率，无法完全排除其他进程
-   的 BIU/L2/HBM 干扰；已用多 pass + min target 抑制，但 store block CV
-   max 仍有 39.7%。
+   的 BIU/L2/HBM 干扰；已用多 pass + min target 抑制，但 store in-sample
+   max 仍有 37.4%。
 2. 本轮触发使用 `simd_simt_template` legacy 全局路径（没有 `scope.scope`）。
    真实 `simd_simt` mixed local scope 会额外包含 scope handoff/transition；
    该部分应由现有 scope transition cost 承担，template 公式只负责 loop 内
