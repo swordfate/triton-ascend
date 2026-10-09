@@ -1,0 +1,73 @@
+{
+  "model_version": "template_stride_v1",
+  "path": "triton_stride_load",
+  "target": "ns/iteration",
+  "target_definition": "torch.npu.Event slope over a 2000/8000-iteration rotate loop; min event per point across reps/passes",
+  "compile_mode": "simd_simt_template",
+  "ir_evidence": "results/model_template_stride_v1/ir_evidence/",
+  "form": "T = intercept + sum(c_i * feature_i), c_i >= 0",
+  "fit_method": "weighted non-negative least squares + forward selection (in-sample only)",
+  "fit_weights_alpha": 1.0,
+  "feature_names": [
+    "L",
+    "bucket_worst_32k16",
+    "mean_warp_lines",
+    "tail_elems"
+  ],
+  "intercept": 211.3874357686902,
+  "coefficients": [
+    1.6495154689720701,
+    0.3844188104592256,
+    7.919750697217851,
+    0.3946322601050462
+  ],
+  "n_rows": 92,
+  "training_ranges": {
+    "block": [
+      16,
+      2048
+    ],
+    "stride": [
+      3,
+      255
+    ],
+    "num_warps": [
+      1
+    ]
+  },
+  "selection_history": [
+    {
+      "candidate": "L",
+      "objective": 2916.49703022741,
+      "relative_improvement": 0.9464241276330948
+    },
+    {
+      "candidate": "bucket_worst_32k16",
+      "objective": 1678.1250648801579,
+      "relative_improvement": 0.424609369566439
+    },
+    {
+      "candidate": "mean_warp_lines",
+      "objective": 834.327702033044,
+      "relative_improvement": 0.5028215003196874
+    },
+    {
+      "candidate": "tail_elems",
+      "objective": 687.3137915675585,
+      "relative_improvement": 0.17620643556153068
+    }
+  ],
+  "metrics": {
+    "n": 92,
+    "mape_pct": 8.391273289458145,
+    "p50_pct": 5.959799597869236,
+    "p90_pct": 20.09656705237529,
+    "p95_pct": 27.800810361294488,
+    "max_pct": 40.70352520237663,
+    "bias_pct": 1.4239817054974832e-13,
+    "rmse_pct": 6.937928066153861,
+    "rmse_ns": 85.47035943418592,
+    "tag": "in_sample"
+  },
+  "coefficients_nonnegative": true
+}
