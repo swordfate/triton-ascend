@@ -77,6 +77,13 @@ public:
     return nullptr;
   }
 
+  const llvm::json::Object *optionalObject(const llvm::json::Object &parent,
+                                           llvm::StringRef key) {
+    if (failed())
+      return nullptr;
+    return parent.getObject(key);
+  }
+
   double number(const llvm::json::Object &parent, llvm::StringRef key,
                 llvm::StringRef context) {
     if (failed())
@@ -348,6 +355,39 @@ static void readStageResources(ProfileJSONReader &reader,
       stridedProfile.simtStoreLineRequestSizeNs =
           reader.number(*strided, "simt_store_line_request_size_ns", path);
     }
+  }
+  if (const auto *stridedTemplate =
+          reader.optionalObject(*resources, "template_strided_memory")) {
+    const std::string path = prefix + ".template_strided_memory";
+    StridedMemoryProfile &stridedProfile = profile.stridedMemory;
+    stridedProfile.templateEnabled = true;
+    stridedProfile.simtStrideTemplateLoadInterceptNs = reader.number(
+        *stridedTemplate, "simt_stride_template_load_intercept_ns", path);
+    stridedProfile.simtStrideTemplateLoadLNs = reader.number(
+        *stridedTemplate, "simt_stride_template_load_l_ns", path);
+    stridedProfile.simtStrideTemplateLoadBucketWorst32k16Ns =
+        reader.number(*stridedTemplate,
+                      "simt_stride_template_load_bucket_worst_32k16_ns",
+                      path);
+    stridedProfile.simtStrideTemplateLoadMeanWarpLinesNs =
+        reader.number(*stridedTemplate,
+                      "simt_stride_template_load_mean_warp_lines_ns", path);
+    stridedProfile.simtStrideTemplateLoadTailElemsNs = reader.number(
+        *stridedTemplate, "simt_stride_template_load_tail_elems_ns", path);
+    stridedProfile.simtStrideTemplateStoreInterceptNs = reader.number(
+        *stridedTemplate, "simt_stride_template_store_intercept_ns", path);
+    stridedProfile.simtStrideTemplateStoreLNs = reader.number(
+        *stridedTemplate, "simt_stride_template_store_l_ns", path);
+    stridedProfile.simtStrideTemplateStoreBucketWorst32k16Ns =
+        reader.number(*stridedTemplate,
+                      "simt_stride_template_store_bucket_worst_32k16_ns",
+                      path);
+    stridedProfile.simtStrideTemplateStoreMeanWarpLinesNs =
+        reader.number(*stridedTemplate,
+                      "simt_stride_template_store_mean_warp_lines_ns", path);
+    stridedProfile.simtStrideTemplateStoreItersPerThreadNs =
+        reader.number(*stridedTemplate,
+                      "simt_stride_template_store_iters_per_thread_ns", path);
   }
   if (const auto *indirect =
           reader.object(*resources, "indirect_memory", prefix)) {

@@ -1837,6 +1837,35 @@ LogicalStage syntheticStridedLoadStage(double elements,
   return stage;
 }
 
+LogicalStage syntheticStridedStoreStage(double elements,
+                                        int64_t strideElements) {
+  LogicalStage stage =
+      logicalStage("strided_store", StageCostModelKind::StridedTileMemory);
+  stage.features.hasStridedMemory = true;
+  stage.features.hasStridedStore = true;
+  stage.workload.operationElements.clear();
+  stage.workload.issueElements = 0.0;
+  stage.workload.storeBytes = 0.0;
+  stage.workload.storeWarpInstructions = 0.0;
+  StridedMemoryAccess access;
+  access.isLoad = false;
+  access.elements = elements;
+  access.elementBytes = 4;
+  access.strideElements = strideElements;
+  stage.workload.stridedMemoryAccesses.push_back(access);
+  return stage;
+}
+
+void markTemplateEligible(LogicalStage &stage) {
+  ASSERT_EQ(stage.workload.stridedMemoryAccesses.size(), 1u);
+  StridedMemoryAccess &access = stage.workload.stridedMemoryAccesses.front();
+  access.rank = 1;
+  access.hasStaticShape = true;
+  access.isMasked = false;
+  access.staticNonPowerOfTwoStride = true;
+  access.templateEligible = true;
+}
+
 HardwareProfile syntheticV8StridedProfile(int64_t numWarps) {
   HardwareProfile profile = hardwareProfile();
   profile.logicalWarpGroupCount = numWarps;
@@ -1864,6 +1893,54 @@ double syntheticSimtLoadCycles(LogicalStage stage, HardwareProfile profile) {
       if (implementation.implementation.mode == StageMode::SIMT)
         return implementation.resources.load;
   ADD_FAILURE() << "no SIMT implementation in synthetic strided stage";
+  return std::numeric_limits<double>::quiet_NaN();
+}
+
+LogicalStage syntheticLocalScopeStridedStage(double elements,
+                                             int64_t strideElements,
+                                             bool isLoad) {
+  LogicalStage stage = isLoad
+                           ? syntheticStridedLoadStage(elements, strideElements)
+                           : syntheticStridedStoreStage(elements,
+                                                        strideElements);
+  stage.localSimtMaterializable = true;
+  stage.localSimtFactors = {1};
+  stage.legalSimtFactors = {1};
+  return stage;
+}
+
+HardwareProfile syntheticTemplateStridedProfile() {
+  HardwareProfile profile = syntheticV8StridedProfile(1);
+  StridedMemoryProfile &strided = profile.simt.stridedMemory;
+  strided.templateEnabled = true;
+  strided.simtStrideTemplateLoadInterceptNs = 100.0;
+  strided.simtStrideTemplateLoadLNs = 1.0;
+  strided.simtStrideTemplateLoadBucketWorst32k16Ns = 2.0;
+  strided.simtStrideTemplateLoadMeanWarpLinesNs = 3.0;
+  strided.simtStrideTemplateLoadTailElemsNs = 4.0;
+  strided.simtStrideTemplateStoreInterceptNs = 200.0;
+  strided.simtStrideTemplateStoreLNs = 5.0;
+  strided.simtStrideTemplateStoreBucketWorst32k16Ns = 7.0;
+  strided.simtStrideTemplateStoreMeanWarpLinesNs = 11.0;
+  strided.simtStrideTemplateStoreItersPerThreadNs = 13.0;
+  return profile;
+}
+
+double syntheticSimtCyclesForScope(LogicalStage stage, HardwareProfile profile,
+                                   bool localScope, bool isLoad) {
+  auto table = evaluateOneStage(std::move(stage), std::move(profile));
+  if (!table) {
+    ADD_FAILURE() << llvm::toString(table.takeError());
+    return std::numeric_limits<double>::quiet_NaN();
+  }
+  for (const LogicalStageCost &stageCost : table->stages)
+    for (const StageImplementationCost &implementation :
+         stageCost.implementations)
+      if (implementation.implementation.mode == StageMode::SIMT &&
+          implementation.implementation.localScope == localScope)
+        return isLoad ? implementation.resources.load
+                      : implementation.resources.store;
+  ADD_FAILURE() << "no requested SIMT implementation in synthetic stage";
   return std::numeric_limits<double>::quiet_NaN();
 }
 
@@ -1934,6 +2011,40 @@ TEST(SimdSimtCostModelTest, SimtStridedLoadV8DoesNotDoubleCountDirectRates) {
   // remains for this access.
   EXPECT_NEAR(syntheticSimtLoadCycles(std::move(stage), std::move(profile)),
               155.578681246386340, 1e-9);
+}
+
+TEST(SimdSimtCostModelTest, SimtLocalScopeUsesStrideTemplateLoad) {
+  LogicalStage stage = syntheticLocalScopeStridedStage(32.0, 3, true);
+  markTemplateEligible(stage);
+  HardwareProfile profile = syntheticTemplateStridedProfile();
+  // Features for BLOCK=32, stride=3: L=3, bucket_worst_32k16=31,
+  // mean_warp_lines=3, tail_elems=32.  With the synthetic template
+  // coefficients above the expected value is 100+3+62+9+128 = 302.
+  EXPECT_NEAR(syntheticSimtCyclesForScope(stage, profile, true, true), 302.0,
+              1e-9);
+  // The whole-kernel simt_only/all_simt_only implementation must stay on the
+  // v8 formula even when template coefficients are present in the profile.
+  double wholeKernel = syntheticSimtCyclesForScope(stage, profile, false, true);
+  EXPECT_GT(std::abs(wholeKernel - 302.0), 1.0);
+}
+
+TEST(SimdSimtCostModelTest, SimtLocalScopeUsesStrideTemplateStore) {
+  LogicalStage stage = syntheticLocalScopeStridedStage(32.0, 3, false);
+  markTemplateEligible(stage);
+  HardwareProfile profile = syntheticTemplateStridedProfile();
+  // Features for BLOCK=32, stride=3: L=3, bucket_worst_32k16=31,
+  // mean_warp_lines=3, iters_per_thread=1.  Expected value:
+  // 200+5*3+7*31+11*3+13*1 = 478.
+  EXPECT_NEAR(syntheticSimtCyclesForScope(stage, profile, true, false), 478.0,
+              1e-9);
+}
+
+TEST(SimdSimtCostModelTest, SimtLocalScopeFallsBackForIneligibleStride) {
+  LogicalStage stage = syntheticLocalScopeStridedStage(32.0, 4, true);
+  HardwareProfile profile = syntheticTemplateStridedProfile();
+  double local = syntheticSimtCyclesForScope(stage, profile, true, true);
+  double whole = syntheticSimtCyclesForScope(stage, profile, false, true);
+  EXPECT_NEAR(local, whole, 1e-9);
 }
 
 TEST(SimdSimtCostModelTest, StridedFactDetectionFindsLoadAndStorePatterns) {
@@ -2010,7 +2121,59 @@ TEST(SimdSimtCostModelTest, StridedFactDetectionFindsLoadAndStorePatterns) {
     EXPECT_DOUBLE_EQ(accesses.front().elements, 32.0);
     EXPECT_EQ(accesses.front().elementBytes, 4);
     EXPECT_EQ(accesses.front().strideElements, 4);
+    EXPECT_TRUE(accesses.front().hasStaticShape);
+    EXPECT_EQ(accesses.front().rank, 1);
+    EXPECT_FALSE(accesses.front().staticNonPowerOfTwoStride);
+    EXPECT_FALSE(accesses.front().templateEligible);
   }
+}
+
+TEST(SimdSimtCostModelTest, StridedFactDetectionMarksTemplateEligible) {
+  mlir::MLIRContext context;
+  context.allowUnregisteredDialects();
+  context.getOrLoadDialect<mlir::arith::ArithDialect>();
+  context.getOrLoadDialect<mlir::func::FuncDialect>();
+  auto module = mlir::parseSourceString<mlir::ModuleOp>(R"mlir(
+    module {
+      func.func @load_kernel(%base: i64) -> tensor<32xf32> {
+        %range = "tt.make_range"() : () -> tensor<32xi32>
+        %stride_const = arith.constant 3 : i32
+        %stride_splat = "tt.splat"(%stride_const) : (i32) -> tensor<32xi32>
+        %stride = arith.muli %range, %stride_splat : tensor<32xi32>
+        %bases = "tt.splat"(%base) : (i64) -> tensor<32xi64>
+        %ptrs = "tt.addptr"(%bases, %stride) : (tensor<32xi64>, tensor<32xi32>) -> tensor<32xi64>
+        %value = "tt.load"(%ptrs) : (tensor<32xi64>) -> tensor<32xf32>
+        return %value : tensor<32xf32>
+      }
+    }
+  )mlir",
+                                                            &context);
+  ASSERT_TRUE(module) << "failed to parse synthetic template-eligible module";
+
+  mlir::Operation *root = nullptr;
+  module->walk([&](mlir::Operation *operation) {
+    if (operation->getName().getStringRef() == "tt.load")
+      root = operation;
+  });
+  ASSERT_NE(root, nullptr);
+
+  StagePartition partition;
+  partition.operationOwnershipComplete = true;
+  LogicalStage stage =
+      logicalStage("strided_template_fact", StageCostModelKind::StridedTileMemory);
+  stage.operations.push_back(root);
+  partition.stages.push_back(std::move(stage));
+  llvm::Error error = StageWorkloadAnalysis().analyze(partition);
+  ASSERT_FALSE(static_cast<bool>(error)) << llvm::toString(std::move(error));
+
+  const auto &accesses = partition.stages.front().workload.stridedMemoryAccesses;
+  ASSERT_EQ(accesses.size(), 1u);
+  EXPECT_EQ(accesses.front().strideElements, 3);
+  EXPECT_EQ(accesses.front().rank, 1);
+  EXPECT_TRUE(accesses.front().hasStaticShape);
+  EXPECT_FALSE(accesses.front().isMasked);
+  EXPECT_TRUE(accesses.front().staticNonPowerOfTwoStride);
+  EXPECT_TRUE(accesses.front().templateEligible);
 }
 
 TEST(SimdSimtCostModelTest, StridedProfileParserRejectsMissingV8Field) {
@@ -2070,6 +2233,68 @@ TEST(SimdSimtCostModelTest, StridedProfileParserRejectsMissingV8Field) {
   if (!report) {
     const std::string error = llvm::toString(report.takeError());
     EXPECT_NE(error.find("simt_load_min_line32_ns"), std::string::npos)
+        << error;
+  }
+  llvm::sys::fs::remove(tempPath);
+}
+
+TEST(SimdSimtCostModelTest, StridedTemplateProfileParserRejectsMissingField) {
+  auto buffer =
+      llvm::MemoryBuffer::getFile(TRITON_ASCEND_SIMD_SIMT_TEST_PROFILE_PATH);
+  ASSERT_TRUE(static_cast<bool>(buffer)) << buffer.getError().message();
+  auto parsed = llvm::json::parse((*buffer)->getBuffer());
+  ASSERT_TRUE(static_cast<bool>(parsed)) << llvm::toString(parsed.takeError());
+
+  llvm::json::Value value = std::move(*parsed);
+  auto *root = value.getAsObject();
+  ASSERT_NE(root, nullptr);
+
+  llvm::SmallString<256> microbenchPath(
+      TRITON_ASCEND_SIMD_SIMT_TEST_PROFILE_PATH);
+  llvm::sys::path::remove_filename(microbenchPath);
+  llvm::sys::path::remove_filename(microbenchPath);
+  llvm::sys::path::append(microbenchPath, "microbench",
+                          "ascend_davidv100_v1.json");
+  (*root)["microbenchmark_profile"] = microbenchPath.str().str();
+
+  auto *simt = root->getObject("simt");
+  ASSERT_NE(simt, nullptr);
+  auto *stageResources = simt->getObject("stage_resources");
+  ASSERT_NE(stageResources, nullptr);
+  auto *stridedTemplate =
+      stageResources->getObject("template_strided_memory");
+  ASSERT_NE(stridedTemplate, nullptr);
+  EXPECT_TRUE(stridedTemplate->erase("simt_stride_template_load_l_ns"));
+
+  std::string profileText;
+  llvm::raw_string_ostream profileStream(profileText);
+  profileStream << value;
+  profileStream.flush();
+
+  llvm::SmallString<256> tempModel;
+  llvm::sys::path::system_temp_directory(/*ErasedOnReboot=*/false, tempModel);
+  llvm::sys::path::append(tempModel, "costmodel-template-%%%%%%.json");
+  llvm::SmallString<256> tempPath;
+  std::error_code errorCode =
+      llvm::sys::fs::createUniqueFile(tempModel.str(), tempPath);
+  ASSERT_FALSE(errorCode) << errorCode.message();
+  {
+    llvm::raw_fd_ostream file(tempPath, errorCode);
+    ASSERT_FALSE(errorCode) << errorCode.message();
+    file << profileText;
+  }
+
+  mlir::MLIRContext context;
+  auto module = mlir::parseSourceString<mlir::ModuleOp>("module {}", &context);
+  ASSERT_TRUE(module);
+  SimdSimtCostModelOptions options;
+  options.profilePath = tempPath.str().str();
+  auto report = mlir::ascend::analyzeSimdSimtCandidates(*module, options);
+  EXPECT_FALSE(static_cast<bool>(report));
+  if (!report) {
+    const std::string error = llvm::toString(report.takeError());
+    EXPECT_NE(error.find("simt_stride_template_load_l_ns"),
+              std::string::npos)
         << error;
   }
   llvm::sys::fs::remove(tempPath);

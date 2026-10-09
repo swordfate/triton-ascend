@@ -763,6 +763,9 @@
         },
         "strided_memory": {
           "$ref": "#/definitions/strided_memory"
+        },
+        "template_strided_memory": {
+          "$ref": "#/definitions/template_strided_memory"
         }
       },
       "additionalProperties": false
@@ -891,6 +894,75 @@
           "minimum": 0
         },
         "simt_store_line_request_size_ns": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "template_strided_memory": {
+      "type": "object",
+      "description": "Optional coefficients for the local-SIMT triton_stride_load/store template path. The coefficients are raw ns per dynamic access and are converted with the sibling strided_memory.nanoseconds_to_system_cycles value. Absence of this object preserves the v8 pure-SIMT formula for all SIMT implementations.",
+      "required": [
+        "description",
+        "source",
+        "simt_stride_template_load_intercept_ns",
+        "simt_stride_template_load_l_ns",
+        "simt_stride_template_load_bucket_worst_32k16_ns",
+        "simt_stride_template_load_mean_warp_lines_ns",
+        "simt_stride_template_load_tail_elems_ns",
+        "simt_stride_template_store_intercept_ns",
+        "simt_stride_template_store_l_ns",
+        "simt_stride_template_store_bucket_worst_32k16_ns",
+        "simt_stride_template_store_mean_warp_lines_ns",
+        "simt_stride_template_store_iters_per_thread_ns"
+      ],
+      "properties": {
+        "description": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1
+        },
+        "simt_stride_template_load_intercept_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simt_stride_template_load_l_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simt_stride_template_load_bucket_worst_32k16_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simt_stride_template_load_mean_warp_lines_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simt_stride_template_load_tail_elems_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simt_stride_template_store_intercept_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simt_stride_template_store_l_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simt_stride_template_store_bucket_worst_32k16_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simt_stride_template_store_mean_warp_lines_ns": {
+          "type": "number",
+          "minimum": 0
+        },
+        "simt_stride_template_store_iters_per_thread_ns": {
           "type": "number",
           "minimum": 0
         }

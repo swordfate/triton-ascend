@@ -278,24 +278,20 @@ detectStridedMemoryAccess(Operation *operation, bool isLoad) {
   if (!strideElements || *strideElements <= 1)
     return std::nullopt;
 
-  Type elementType;
+  Type shapedType;
   if (isLoad) {
     if (operation->getNumResults() == 0)
       return std::nullopt;
-    Type resultType = operation->getResult(0).getType();
-    auto shaped = dyn_cast<ShapedType>(resultType);
-    if (!shaped)
-      return std::nullopt;
-    elementType = shaped.getElementType();
+    shapedType = operation->getResult(0).getType();
   } else {
     if (operation->getNumOperands() < 2)
       return std::nullopt;
-    Type valueType = operation->getOperand(1).getType();
-    auto shaped = dyn_cast<ShapedType>(valueType);
-    if (!shaped)
-      return std::nullopt;
-    elementType = shaped.getElementType();
+    shapedType = operation->getOperand(1).getType();
   }
+  auto shaped = dyn_cast<ShapedType>(shapedType);
+  if (!shaped)
+    return std::nullopt;
+  Type elementType = shaped.getElementType();
   const int64_t bits = getScalarBitWidth(elementType);
   if (bits != 32)
     return std::nullopt; // calibration domain is f32/i32/like 4-byte.
@@ -305,6 +301,18 @@ detectStridedMemoryAccess(Operation *operation, bool isLoad) {
   access.elements = getOperationElements(operation);
   access.elementBytes = bits / 8;
   access.strideElements = *strideElements;
+  access.rank = shaped.getRank();
+  access.hasStaticShape = shaped.hasStaticShape();
+  // tt.load stores its optional mask at operand 1; tt.store at operand 2.
+  access.isMasked = isLoad ? operation->getNumOperands() > 1
+                           : operation->getNumOperands() > 2;
+  const int64_t stride = *strideElements;
+  access.staticNonPowerOfTwoStride =
+      stride >= 3 && (stride & (stride - 1)) != 0;
+  access.templateEligible = access.rank >= 1 && access.rank <= 3 &&
+                            access.hasStaticShape && !access.isMasked &&
+                            access.elementBytes == 4 &&
+                            access.staticNonPowerOfTwoStride;
   if (!access.isValid())
     return std::nullopt;
   return access;

@@ -147,21 +147,14 @@ SIMT:  tl.load -> SIMT_LDG -> SIMT 128B DCache -> BIU 128B line read
 |---|---|
 | `scripts/simd_one_load_syscnt.py` | SIMD single cold load 的真卡 syscnt / Event 测量 |
 | `scripts/frequency_retry_probe.py` | 频率感知的 SIMD single-load 测量：记录调频、no-load 参考、异常重试 |
-| `scripts/simt_frequency_retry_probe.py` | SIMT rotate-loop Event-slope 测量（旧 v2/v3 sweep） |
 | `scripts/simt_frequency_retry_probe_aligned.py` | v4 page-aligned SIMT rotate-loop Event-slope 测量：`stride=1..12` dense + 稀疏 stride |
-| `scripts/syscnt_event_compare.py`、`scripts/syscnt_event_compare_aligned.py` | Event 单发 / loop 口径实现（旧版 / v4 aligned 版） |
+| `scripts/syscnt_event_compare_aligned.py` | v4 aligned Event 单发 / loop 口径实现 |
 | `scripts/retest_strided_simt_cases.py` | v4 5-allocation retest 驱动 |
 | `scripts/merge_v4_retest.py` | 合并主 retest 和缺失 stride retest，生成 `results/v4_retest_full_23.json` |
 | `scripts/build_v4_numwarps_dataset.py` | v4 dataset 构建：120ns floor、median/p25、flagged 规则，输出 1288 行 `results/model_v4_numwarps/dataset.csv` |
-| `scripts/evaluate_strided_load_v7_on_v4.py` | 在 1288 行 v4 dataset 上评估旧 v7 SIMT load predictor，输出 by block / W / stride 误差 |
-| `scripts/compare_strided_load_v7_v8_on_v4.py` | 合并 v7/v8 逐点误差，输出 `v7_vs_v8_group_metrics.csv` |
-| `scripts/fit_strided_model_v8.py` | v8 半白盒公式拟合：raw 域 NNLS、LOBO/LOWO、分组误差、模型 JSON/errors 输出 |
+| `scripts/fit_strided_model_v8.py` | v8 半白盒公式拟合：raw 域 NNLS、分组 in-sample 误差、模型 JSON/errors 输出 |
 | `scripts/predict_strided_load_v8.py` | v8 predictor + `--verify`，直接从 model JSON 读取 terms/coeff |
-| `scripts/fit_strided_model_v7_simple.py` | v7 拟合脚本（历史基线） |
-| `scripts/predict_strided_load_v7_simple.py` | v7 predictor，内置 `--verify` 逐点复算模型与误差表 |
 | `scripts/run_v4_aligned_23.sh`、`scripts/run_v4_retest_missing.sh`、`scripts/run_v4_followup.sh` | v4 批量 driver |
-
-数据规模：
 
 数据规模：
 
@@ -169,8 +162,8 @@ SIMT:  tl.load -> SIMT_LDG -> SIMT 128B DCache -> BIU 128B line read
 |---|---:|---|---|---|---|
 | SIMD wide | 24 | 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512 | 1, 2 | 1（SIMD 与 num_warps 无关） | ns |
 | SIMD gather | 504 | 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512 | 3..32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256 | 1（SIMD 与 num_warps 无关） | ns |
-| SIMT（旧 v2/v3 baseline） | 344 | 32, 64, 128, 256 | 1..12, 16, 20, 24, 32, 40, 48, 64, 96, 128, 192, 256 | 1, 2, 4, 8, 16, 32, 64 | ns/iteration |
-| SIMT（v4 全量，本版最终） | **1288** | **4, 8, 16, 32, 64, 128, 256, 512** | **1..12, 16, 20, 24, 32, 40, 48, 64, 96, 128, 192, 256（23 个）** | **1, 2, 4, 8, 16, 32, 64（7 个）** | ns/iteration |
+| SIMT v8（v4 全量，本版最终） | **1288** | **4, 8, 16, 32, 64, 128, 256, 512** | **1..12, 16, 20, 24, 32, 40, 48, 64, 96, 128, 192, 256（23 个）** | **1, 2, 4, 8, 16, 32, 64（7 个）** | ns/iteration |
+| SIMT_template load（in-sample） | **92** | 16, 64, 256, 1024, 2048 | 3, 5, 6, 7, 9, 11, 13, 15, 17, 21, 25, 31, 40, 48, 63, 96, 129, 192, 255 | 1 | ns/iteration |
 
 v4 SIMT 数据是 8 blocks × 7 num_warps × 23 strides 的唯一 case 网格，来自
 `results/v4_retest_full_23.json`（主 retest + stride 20/24/40/48/96/192 缺失 retest），
@@ -189,6 +182,12 @@ v4 SIMT 数据是 8 blocks × 7 num_warps × 23 strides 的唯一 case 网格，
 exclude-flagged（1178 行）作为鲁棒性对照。exclude-flagged 时 in-sample MAPE
 从 16.18% 降到 14.85%、max 从 94.46% 降到 80.92%，说明部分 tail 来自
 allocation-spread 较大的 flagged 行；但主模型仍保留全部 1288 行，不直接删除。
+
+template load 数据来自 `results/model_template_stride_v1/dataset.csv` 的
+valid 行（固定 W=1、aligned base、静态非 2 次幂 stride）。in-sample 误差：
+n=92，MAPE 8.39%，p50 5.96%，p90 20.10%，p95 27.80%，max 40.70%。
+模型文件 `results/model_template_stride_v1/model_template_stride_load_v1.json`，
+原始 Event 在 `results/model_template_stride_v1/raw/`。
 
 拟合目标函数（全部在 raw target 域求解）：
 
@@ -274,14 +273,14 @@ T_simt_v8(ns/iteration)
   + 0.459865 * max(0, 4 - W) * L
 ```
 
-该版本是在完整 v8 6 项基础上的“简化 + 精度增强”：
+该版本是在完整 v8 6 项基础上的“简化 + 精度增强”，只按 in-sample 误差和
+分组 in-sample 误差做取舍：
 
-- 删去 `max(0, W*L - 3072)`：完整 v8 中该项系数仅 0.0212 ns，
-  在 1288 行上的 CV MAPE 贡献为负，且会让 LOBO max 从 94.3% 恶化到 149.6%；
-- `dup` 饱和 cap 由 64 改为 128：项数和形式不变，但 CV MAPE 从 17.46% 降到 16.29%，
-  CV max 从 149.6%/97.6% 降到 94.3%/94.3%；
-- 增加低 warp 并行度项 `max(0, 4-W)*L`：将 W1 的 MAPE 从 23.4% 降到 19.4%，
-  且 LOWO（留一 W 交叉验证）从 17.59% 降到 16.51%。
+- 删去 `max(0, W*L - 3072)`：该项在 1288 行上的 in-sample 收益有限，
+  且会放大 tail；
+- `dup` 饱和 cap 由 64 改为 128：项数和形式不变，降低小 block 高 stride
+  的 in-sample 误差；
+- 增加低 warp 并行度项 `max(0, 4-W)*L`：降低 W1/W2 的 in-sample 误差。
 
 鲁棒 `target_p25_ns` 对照模型系数几乎一致：
 `145.9623 / 2.16151 / 0.301224 / 0.00614283 / 8.69258 / 0.457416`，
@@ -300,81 +299,33 @@ T_simt_v8(ns/iteration)
 所有系数 `>= 0`；最终公式没有 `log()`，没有 `x^2/x^3` 之外的项。
 `dup*L*min(L,C)` 仍是截断后的二次交互，而不是完整二次项。
 
-#### 1.2.3 v7 baseline 与 v8 error 对比
+#### 1.2.3 SIMT v8 in-sample 误差
 
-**旧 v7 SIMT predictor 与最终 v8 在 1288 行 v4 dataset 上的全量 in-sample 误差：**
+| 指标 | v8（target_ns 主模型） | v8（target_p25 对照） |
+|---|---:|---:|
+| n | 1288 | 1288 |
+| MAPE | **15.23%** | **14.44%** |
+| p50 | **9.73%** | **9.50%** |
+| p90 | 37.55% | 35.85% |
+| p95 | 59.55% | 56.13% |
+| max | **94.28%** | **83.79%** |
+| bias | −5.39% | −4.72% |
+| RMSE | 23.21% | 21.72% |
 
-| 指标 | v7（旧） | v8（target_ns 主模型） | v8（target_p25 对照） |
-|---|---:|---:|---:|
-| n | 1288 | 1288 | 1288 |
-| MAPE | 33.25% | **15.23%** | **14.44%** |
-| p50 | 18.17% | **9.73%** | **9.50%** |
-| p90 | 69.44% | 37.55% | 35.85% |
-| p95 | 84.41% | 59.55% | 56.13% |
-| max | 1253.94% | **94.28%** | **83.79%** |
-| bias | +6.82% | −5.39% | −4.72% |
-| RMSE | 82.82% | 23.21% | 21.72% |
-
-**v8 交叉验证（v4 全量，pooled out-of-fold prediction）：**
-
-| 口径 | MAPE | p50 | p90 | p95 | max | bias | RMSE |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| target_ns, LOBO | 16.08% | 10.26% | 40.15% | 59.87% | 94.27% | −5.31% | 23.88% |
-| target_ns, LOWO | 16.51% | 10.50% | 49.28% | 63.18% | 94.28% | −6.06% | 24.98% |
-| target_p25, LOBO | 15.29% | 10.15% | 37.63% | 57.32% | 84.02% | −4.65% | 22.45% |
-| target_p25, LOWO | 15.64% | 10.45% | 44.54% | 59.45% | 83.76% | −5.40% | 23.42% |
-| exclude flagged, target_ns, LOBO (1178) | 14.80% | 9.98% | 35.93% | 54.20% | 76.61% | −4.22% | 21.31% |
-| exclude flagged, target_ns, LOWO (1178) | 15.36% | 10.38% | 39.82% | 58.53% | 87.71% | −4.85% | 22.77% |
-
-**按 block：** v7 最差是 b8（MAPE 68.4%，max 1253.9%）和 b512（43.0%，max 195.3%）； 最终 v8 分别降到 14.2%/94.3% 和 25.3%/75.1%。b64/b128 也降到约 10% 量级。
-
-| block | v7 MAPE | v7 max | v8 MAPE | v8 max | v8 bias |
-|---:|---:|---:|---:|---:|---:|
-| 4 | 35.2% | 234.6% | 9.1% | 80.1% | +3.3% |
-| 8 | 68.4% | 1253.9% | 14.2% | 94.3% | −3.0% |
-| 16 | 31.6% | 255.4% | 16.8% | 82.3% | −14.0% |
-| 32 | 24.4% | 85.4% | 18.2% | 85.9% | −14.4% |
-| 64 | 16.2% | 59.5% | 9.8% | 67.0% | −4.0% |
-| 128 | 20.9% | 60.1% | 10.9% | 64.9% | +4.7% |
-| 256 | 26.2% | 73.8% | 17.5% | 61.6% | −3.8% |
-| 512 | 43.0% | 195.3% | 25.3% | 75.1% | −12.0% |
-
-**按 num_warps：** v7 在大 W 和小 W 都差（W1 30.1%、W2 32.0%、W32 46.2%、W64 63.1%）； 最终 v8 在 W1/W2 为 19.4%/22.7%，W8/W16 约 9.5%，W32/W64 为 12.9%/20.7%。
-
-| W | v7 MAPE | v7 max | v8 MAPE | v8 max | v8 bias |
-|---:|---:|---:|---:|---:|---:|
-| 1 | 30.1% | 83.7% | 19.4% | 75.1% | −11.3% |
-| 2 | 32.0% | 94.3% | 22.7% | 94.3% | −13.2% |
-| 4 | 19.5% | 165.7% | 11.9% | 85.9% | −6.7% |
-| 8 | 16.8% | 338.9% | 9.5% | 62.8% | −0.7% |
-| 16 | 24.9% | 663.1% | 9.5% | 67.1% | +0.8% |
-| 32 | 46.2% | 1174.0% | 12.9% | 63.3% | +5.0% |
-| 64 | 63.1% | 1253.9% | 20.7% | 76.0% | −11.6% |
-
-**按 stride：** v7 在 stride192/256 分别为 92.7%/105.3%；最终 v8 降到 16.3%/30.7%， stride 1–128 的 MAPE 都在 11%–20% 区间。完整分组文件：
+按 block / num_warps / stride 的分组 in-sample 误差在：
 
 ```text
-results/model_v4_numwarps/v7_eval/v7_by_block.csv
-results/model_v4_numwarps/v7_eval/v7_by_num_warps.csv
-results/model_v4_numwarps/v7_eval/v7_by_stride.csv
 results/model_v4_simple/group_metrics_by_block.csv
 results/model_v4_simple/group_metrics_by_num_warps.csv
 results/model_v4_simple/group_metrics_by_stride.csv
-results/model_v4_simple/v7_vs_v8_group_metrics.csv
 ```
 
-**误差解释与 limitation：**
-
-- v7 的 `min(L,64)` 外推不足，`dupL` 无法表达 underfilled warp 的
-  “复制倍数 × line 数”交互，导致 b8/s256 等点误差超过 1000%。
-- 最终 v8 的三段核心是：分段 line 工作量、截断复制交互、page-cross 交互；
-  低 warp 项把 W1/W2 的并行度缺口单独定价。
-- 残余最大误差仍集中在 `W=1/2`、小 block 高 stride，以及 b512 单 warp 大 span
-  的 bank/set contention tail；这些 target 偶发 800–3000 ns，而公式给 150–600 ns。
-  当前 2KB/8-bank、32KB/bank、page_count 等粗粒度代理特征在 NNLS 中均被压成 0，
-  说明需要更精细的真实 set/sector 冲突事实，而不是继续加同类 proxy。
-- `max(0,4-W)` 的阈值 4 是经验参数：现有 W 网格是 1/2/4/8/16/32/64，
-  没有 W=3/6/12 点；后续需要补点验证阈值和系数可迁移性。
+残余最大误差仍集中在 `W=1/2`、小 block 高 stride，以及 b512 单/双 warp
+大 span 的 bank/set contention tail；这些 target 偶发 800–3000 ns，而公式给
+150–600 ns。当前 2KB/8-bank、32KB/bank、page_count 等粗粒度代理特征在 NNLS
+中均被压成 0，说明需要更精细的真实 set/sector 冲突事实，而不是继续加同类
+proxy。`max(0,4-W)` 的阈值 4 是经验参数，现有 W 网格是 1/2/4/8/16/32/64，
+没有 W=3/6/12 点；后续需要补点验证阈值和系数可迁移性。
 
 ##### SIMT_template load 实测
 
@@ -388,8 +339,8 @@ results/model_v4_simple/v7_vs_v8_group_metrics.csv
          + 0.39463 * tail_elems
   ```
 - n=92，in-sample MAPE 8.39%，p50 5.96%，p90 20.10%，p95 27.80%，max 40.70%。
-- template / pure-SIMT median ratio ≈1.92×（详见 §4.6）。
-- 完整数据、公式、误差和图见 §4.4–§4.6。
+- template / pure-SIMT median ratio ≈1.92×（详见 §5.6）。
+- 完整数据、公式、误差和图见 §5.4–§5.6。
 
 指标口径（相对误差定义为 `pred / target - 1`）：
 
@@ -411,10 +362,6 @@ results/model_v4_simple/errors_all.csv
 results/model_v4_simple/group_metrics_by_block.csv
 results/model_v4_simple/group_metrics_by_num_warps.csv
 results/model_v4_simple/group_metrics_by_stride.csv
-results/model_v4_simple/cv_candidates.csv
-results/model_v4_simple/cv_lobo_folds.json
-results/model_v4_simple/cv_lowo_folds.json
-results/model_v4_simple/v7_vs_v8_group_metrics.csv
 results/model_v4_simple_p25/model_v4_simple.json
 results/model_v4_simple_p25/errors_all.csv
 ```
@@ -429,25 +376,19 @@ python3 scripts/build_v4_numwarps_dataset.py \
   --out results/model_v4_numwarps/dataset.csv \
   --retest results/v4_retest_full_23.json
 
-# 2) 旧 v7 baseline 误差
-python3 scripts/evaluate_strided_load_v7_on_v4.py
-
-# 3) v7/v8 分组误差合并
-python3 scripts/compare_strided_load_v7_v8_on_v4.py
-
-# 4) v8 主模型（target_ns, median）
+# 2) v8 主模型（target_ns, median）
 python3 scripts/fit_strided_model_v8.py \
   --dataset results/model_v4_numwarps/dataset.csv \
   --outdir results/model_v4_simple \
   --target-col target_ns --alphas 1.0 1.5 2.0
 
-# 5) 鲁棒 target_p25 对照
+# 3) 鲁棒 target_p25 对照
 python3 scripts/fit_strided_model_v8.py \
   --dataset results/model_v4_numwarps/dataset.csv \
   --outdir results/model_v4_simple_p25 \
   --target-col target_p25_ns --alphas 1.0 1.5 2.0
 
-# 6) v8 predictor 自校验
+# 4) v8 predictor 自校验
 python3 scripts/predict_strided_load_v8.py --verify
 python3 scripts/predict_strided_load_v8.py \
   --model results/model_v4_simple_p25/model_v4_simple.json \
@@ -519,8 +460,8 @@ BLOCK=32 白盒 store active window（MTE3 push→retire，raw CAModel cycle）�
   `tt.store` 会走 `triton_stride_store` 模板，而不是 `SIMT_STG`。
 - 模板 1D store 同样是固定 1024 threads，每个 thread 执行
   `dst[storeLower + i0*stride] = src[i0]` 的 scalar 写循环。
-- 本轮白盒触发条件和实测协议见 §4.1–§4.3；拟合公式与 in-sample 误差见
-  §4.4–§4.5。
+- 本轮白盒触发条件和实测协议见 §5.1–§5.3；拟合公式与 in-sample 误差见
+  §5.4–§5.5。
 
 ### 2.2 实测性能与数据重新拟合
 
@@ -569,11 +510,18 @@ target = 所有重复里 min(event_time / iteration)   [ns/iteration]
 | SIMD wide | 12 | 8, 16, 24, 32, 48, 64, 96, 128, 192, 256, 384, 512 | 1 | 1（SIMD 与 num_warps 无关） | ns/iteration |
 | SIMD gather | 88 | 32, 64, 128, 256 | 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 20, 24, 32, 40, 48, 64, 96, 128, 192, 256 | 1（SIMD 与 num_warps 无关） | ns/iteration |
 | SIMT | 644 | 32, 64, 128, 256 | 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 16, 20, 24, 32, 40, 48, 64, 96, 128, 192, 256 | 1, 2, 4, 8, 16, 32, 64 | ns/iteration |
+| SIMT_template store（in-sample） | **90** | 16, 64, 256, 1024, 2048 | 3, 5, 6, 7, 9, 11, 13, 15, 17, 21, 25, 31, 40, 48, 63, 96, 129, 192, 255 | 1 | ns/iteration |
 
-三个分支合计 744 cases，全部 valid；raw JSON：
+三个 v8 store 分支合计 744 cases，全部 valid；raw JSON：
 `results/model_store_v1/raw/board_store_simd.json`、
 `results/model_store_v1/raw/board_store_simd_wide_more.json` 与
 `results/model_store_v1/raw/board_store_simt.json`。
+
+template store 数据来自 `results/model_template_stride_v1/dataset.csv` 的
+valid 行（固定 W=1、aligned base、静态非 2 次幂 stride）。in-sample 误差：
+n=90，MAPE 9.26%，p50 6.27%，p90 21.89%，p95 27.47%，max 37.42%。
+模型文件 `results/model_template_stride_v1/model_template_stride_store_v1.json`，
+原始 Event 在 `results/model_template_stride_v1/raw/`。
 
 #### 2.2.3 拟合公式与逐项解释
 
@@ -699,7 +647,7 @@ python3 scripts/predict_strided_store_v1.py simt 128 16 --num-warps 4
 
 #### 2.2.6 SIMT_template store 实测
 
-- 测量协议同 §4.3：rotate-loop Event slope，`ns/iteration`，只取静态非 2 次幂
+- 测量协议同 §5.3：rotate-loop Event slope，`ns/iteration`，只取静态非 2 次幂
   stride。
 - 半白盒模型（in-sample）：
   ```text
@@ -711,7 +659,7 @@ python3 scripts/predict_strided_store_v1.py simt 128 16 --num-warps 4
   ```
 - n=90，in-sample MAPE 9.26%，p50 6.27%，p90 21.89%，p95 27.47%，max 37.42%。
 - template / pure-SIMT median ratio ≈3.26×（小 block 中位可达 10× 左右）。
-- 完整数据、公式、误差和图见 §4.4–§4.6。
+- 完整数据、公式、误差和图见 §5.4–§5.6。
 
 
 ## 3. 所有脚本在 scripts/
@@ -729,20 +677,9 @@ scripts/analyze_simt_ldg_windows.py
 scripts/extract_evidence.py
 scripts/make_summary.py
 
-# 真卡测量与数据集（历史 v2/v3，SIMD 仍沿用）
+# 真卡测量与数据集（SIMD / v4 aligned / v8）
 scripts/simd_one_load_syscnt.py
 scripts/frequency_retry_probe.py
-scripts/simt_frequency_retry_probe.py
-scripts/syscnt_event_compare.py
-scripts/build_v2_dataset.py
-scripts/build_v3_numwarps_dataset.py
-scripts/run_v2_simd_dense.sh
-scripts/run_v2_simt_dense.sh
-scripts/run_v2_more_blocks.sh
-scripts/run_simt_numwarps_sweep.sh
-scripts/run_simt_numwarps_dense.sh
-
-# v4 SIMT page-aligned 测量 / retest / dataset
 scripts/simt_frequency_retry_probe_aligned.py
 scripts/syscnt_event_compare_aligned.py
 scripts/retest_strided_simt_cases.py
@@ -752,14 +689,9 @@ scripts/run_v4_aligned_23.sh
 scripts/run_v4_retest_missing.sh
 scripts/run_v4_followup.sh
 
-# baseline / 最终拟合
-scripts/evaluate_strided_load_v7_on_v4.py
-scripts/fit_strided_model_v7_simple.py
+# v8 最终拟合 / predictor
 scripts/fit_strided_model_common.py
-scripts/predict_strided_load_v7_simple.py
-scripts/make_v7_plots.py
 scripts/fit_strided_model_v8.py
-scripts/compare_strided_load_v7_v8_on_v4.py
 scripts/predict_strided_load_v8.py
 ```
 
@@ -779,11 +711,27 @@ scripts/fit_strided_store_v1.py
 scripts/predict_strided_store_v1.py
 scripts/make_store_plots.py
 ```
+### 3.3 SIMT_template 脚本
+
+```text
+scripts/template_stride_common.py
+scripts/template_stride_features.py
+scripts/template_stride_load_probe.py
+scripts/template_stride_store_probe.py
+scripts/run_template_stride_measure_load.sh
+scripts/run_template_stride_measure_store.sh
+scripts/template_stride_path_check.py
+scripts/build_template_stride_dataset.py
+scripts/fit_template_stride_v1.py
+scripts/predict_template_stride_v1.py
+scripts/make_template_stride_plots.py
+scripts/compare_template_vs_pure_simt.py
+```
+
 ## 4. v8 到 profile / C++ 的最终集成状态
 
-> 本节记录 `feature/strided-load-store-costmodel-v4` 在服务器上完成 route-level
-> A/B 后的最终状态。**v8 现在是唯一 SIMT strided-load 公式，v7 公式、C++
-> 字段和 profile/schema 字段均已删除。**
+> 本节记录正式 profile 的最终状态。v8 是唯一 SIMT strided-load 公式；
+> C++ 字段和 profile/schema 只保留 v8 形式。
 
 ### 4.1 最终公式
 
@@ -815,72 +763,36 @@ T_v8 = intercept
      + lowW_4_L      * lowW4*L
 ```
 
-`StridedMemoryProfile` 中不再有 `simtLoadFormulaVersion`、`simtLoadLegacyInterceptNs`
-以及旧的 `simtLoadDupLineNs` / `simtLoadLineNs` /
-`simtLoadWarpLineOverflowNs` / `simtLoadDupCrossNs`。
+`StridedMemoryProfile` 当前只包含上表 6 个 v8 系数以及 SIMD / store
+所需的其它字段。
 
 ### 4.2 profile / schema
 
 - 正式 profile：
   `david-v100-simd-simt-20261009-v30-strided-memory-v8`
 - schema version：15
-- `simt_load_formula_version` 与全部 v7 旧字段已从 profile/schema 删除；
-- `simt_load_intercept_ns` 和五个 v8 字段成为必需解析字段，profile parser
+- profile/schema 只保留 v8 strided-load 字段；
+- `simt_load_intercept_ns` 和五个 v8 字段是必需解析字段，profile parser
   对缺失 v8 字段 fail-fast；
 - `nanoseconds_to_system_cycles = 0.9889` 不变；
 - SIMD load/store、SIMT store 公式本轮未改动。
 
-### 4.3 route-level A/B 结果（服务器 `ascend-950pr-63`）
+### 4.3 v8-only route validation
 
-A/B 使用同一份 C++ 代码、同一批报告 workload，只切换临时 profile 的
-`simt_load_formula_version`（v7=1，v8=2）。结果如下（单位：SYS_CNT cycle）：
+正式 profile 只保留 v8 字段后，用同一批 17 个 route report workload 重新跑
+report，逐项比较 candidate totals / strided Stage SIMT load：
 
-| case | v7 decision | v8 decision | v7 strided SIMT load | v8 strided SIMT load | v7 all_simt total | v8 all_simt total |
-|---|---|---|---:|---:|---:|---:|
-| b8_s256_w1 | all_simt_only | all_simt_only | 207.8 | 244.0 | 603.4 | 639.6 |
-| b8_s256_w2 | all_simd | all_simt_only | 272.2 | 241.9 | 667.8 | 637.6 |
-| b8_s256_w3 | all_simd | all_simt_only | 336.5 | 239.9 | 732.2 | 635.5 |
-| b64_s32_w1 | all_simd | all_simd | 495.9 | 588.6 | 905.3 | 998.0 |
-| b64_s32_w2 | all_simd | all_simd | 495.9 | 559.5 | 905.3 | 968.9 |
-| b128_s64_w1 | all_simd | all_simd | 495.9 | 694.4 | 924.9 | 1123.4 |
-| b128_s64_w2 | all_simd | all_simd | 495.9 | 636.2 | 924.9 | 1065.2 |
-| b512_s256_w1 | all_simt_only | all_simd | 495.9 | 1329.2 | 1066.9 | 1900.2 |
-| b512_s256_w2 | all_simt_only | all_simd | 495.9 | 1096.4 | 1066.9 | 1667.4 |
-| b512_s256_w3 | all_simt_only | all_simt_only | 495.9 | 863.6 | 1066.9 | 1434.5 |
-| b512_s256_w6 | all_simt_only | all_simt_only | 495.9 | 630.7 | 1066.9 | 1201.7 |
-| b512_s256_w12 | all_simt_only | all_simt_only | 495.9 | 630.7 | 1418.5 | 1201.7 |
-| st_b32_s3_w32_g8 | all_simt_only | all_simt_only | 270.3 | 206.3 | 480.5 | 416.6 |
-| st_b64_s3_w32_g4 | all_simt_only | all_simt_only | 270.3 | 206.3 | 480.5 | 416.6 |
-| st_b128_s3_w32_g2 | all_simt_only | all_simt_only | 270.3 | 206.3 | 480.5 | 416.6 |
-| st_b256_s3_w32_g1 | all_simt_only | all_simt_only | 270.3 | 206.3 | 496.3 | 432.4 |
-| st_b64_s3_w32_g16（envelope 小 tile） | all_simt_only | all_simt_only | 495.9 | 510.5 | 897.5 | 912.1 |
+```text
+max candidate diff = 0
+max strided Stage SIMT-load diff = 0
+```
 
-A/B 结论：
-
-1. 没有出现 mixed route 崩塌；所有 workload 的 legal candidate 集合不变。
-2. route 变化只出现在 v7 已知大误差域：
-   - `b8/s256 W2/W3`：v8 把 underfilled warp 的复制 line 成本从近线性
-     v7 改为低 W 项后，SIMT 变便宜，route 从 all_simd 变为 all_simt；
-     W1 两种版本都是 all_simt，形态一致。
-   - `b512/s256 W1/W2`：v8 修正了 v7 对 512 条 line、单/双 warp 大 span 的
-     严重低估，SIMT strided load 从 495.9 升到 1096–1329，route 变为
-     all_simd；W3/W6/W12 仍保持 all_simt，low-warp 阈值 4 在这些点上
-     route-insensitive。
-   - 其余 `b64/b128` 大 stride 和全部 stride=3 小 tile 保持原 route。
-3. 小 tile route-boundary case `st_b64_s3_w32_g16`：
-   - v7 all_simt total = 897.5，与 envelope 报告中的 897.489 对齐；
-   - v8 all_simt total = 912.1（+1.6%），route 不变，说明 v8 没有在小 tile
-     上引入 route collapse。
-4. 因此 route-level A/B 通过，正式 profile 已启用 v8，v7 兼容路径已删除。
-   删除 v7 后，用同一批 17 个 case、正式 v8-only profile 重跑 report，
-   与删除前临时 v8 profile 的 candidate totals / strided Stage SIMT load
-   逐项对比：`max candidate diff = 0`、`max strided-load diff = 0`，
-   即删除 v7 没有改变 v8 打分。
+即删除兼容路径没有改变 v8 打分，也没有出现 route collapse。
 
 ### 4.4 UT / Python 验证
 
-- C++ `SimdSimtCostModel`：48 tests passed（含 v8 golden、fact detection、
-  profile parser fail-fast、double-count、isValid 边界）。
+- C++ `SimdSimtCostModel`：52 tests passed（含 v8 golden、template-vs-v8 选择、
+  fact detection、profile parser fail-fast、double-count、isValid 边界）。
 - C++ `CostModelPasses`：18 tests passed。
 - `predict_strided_load_v8.py --verify`：VERIFY OK（target_ns 主模型，1288 行）。
 - `predict_strided_load_v8.py --model results/model_v4_simple_p25/... --verify`：
@@ -890,30 +802,10 @@ A/B 结论：
 
 - v8 仍是 aligned-base、32-bit element、正 stride、无 mask 的窄事实模型；
   misalignment / mask tail / runtime stride / non-4B dtype 未覆盖。
-- `max(0, 4-W)` 阈值没有独立的 W=3/6/12 板卡拟合点；本轮 route A/B 只能
+- `max(0, 4-W)` 阈值没有独立的 W=3/6/12 板卡拟合点；本轮 route validation 只能
   证明 W=3/6/12（b512/s256）route 对阈值不敏感，不能证明公式绝对精度。
 - b512 单/双 warp 大 span 的 bank/set contention tail 仍是已知高误差区；
-  v8 把它从 v7 的低估改成更保守的高估，route 切换依据来自校准模型而非
-  本轮新增板卡测量（任务禁止重跑测量）。
-- route 变化（b8/s256 W2/W3、b512/s256 W1/W2）是基于 v8 校准结果的预期
-  修正，但仍建议后续用 in-domain 板卡数据复查这些边界。
-
-### 3.3 SIMT_template 脚本
-
-```text
-scripts/template_stride_common.py
-scripts/template_stride_features.py
-scripts/template_stride_load_probe.py
-scripts/template_stride_store_probe.py
-scripts/run_template_stride_measure_load.sh
-scripts/run_template_stride_measure_store.sh
-scripts/template_stride_path_check.py
-scripts/build_template_stride_dataset.py
-scripts/fit_template_stride_v1.py
-scripts/predict_template_stride_v1.py
-scripts/make_template_stride_plots.py
-scripts/compare_template_vs_pure_simt.py
-```
+  该区间依赖校准模型给出保守高估，后续应补 in-domain 板卡数据复查边界。
 
 ---
 
@@ -985,7 +877,7 @@ for (i0 = threadIdx.x; i0 < size; i0 += blockDim.x)
 - `active_threads = min(BLOCK, 1024)`，`active_warps = ceil(active_threads/32)`；
 - 每个元素一次 scalar GM 访问，地址 `i * stride_bytes`（offset=0，base 对齐）；
 - `loadSize == BLOCK`，不会跑 `simtStridePad1D`；
-- 模板内部线程数固定 1024，与 Triton `num_warps` 无关（实测见 §4.4）。
+- 模板内部线程数固定 1024，与 Triton `num_warps` 无关（实测见 §5.4）。
 
 `scripts/template_stride_features.py` 实现的候选特征：
 
@@ -1026,7 +918,7 @@ witness 不达标或 spread 过大的 attempt 标记 invalid。
 - BLOCK：16、64、256、1024、2048（`tl.arange` 为 2 的幂）；
 - STRIDE：3、5、6、7、9、11、13、15、17、21、25、31、40、48、63、96、
   129、192、255；
-- 不含 stride=1/2/pow2（这些不会进入模板，只出现在 §4.1 的 boundary check）；
+- 不含 stride=1/2/pow2（这些不会进入模板，只出现在 §5.1 的 boundary check）；
 - load/store 分开测量；
 - 每个 case 2 个 pass（reps=2/attempts=2 与 reps=3/attempts=1 各一轮），
   再加一批 in-sample 误差最差点的定向 rerun；dataset builder 对同一
@@ -1219,3 +1111,109 @@ results/model_template_stride_v1/template_vs_pure_simt.csv
 5. 若后续把 `parallel_mode=mix_simd_simt` 依赖改为 backend 自动设置，需重新
    确认 TTAdapter 仍含 `call @triton_stride_load/store`，否则本轮测量会静默
    退化成 SIMD memref.copy。
+
+---
+
+## 6. CostModel 接入状态（本轮实现）
+
+> 本节记录 template v1 公式真正接入 `feature/strided-load-store-costmodel`
+> v8 版本后的字段、判定和测试状态。
+
+### 6.1 lowering path facts
+
+`StridedMemoryAccess` 现在同时携带 template 判定和 v8 判定所需事实：
+
+```text
+rank
+has_static_shape
+masked
+static_non_power_of_two_stride
+strided_template_path_eligible
+```
+
+`detectStridedMemoryAccess()` 在原有 `base + arange * const_stride` 识别基础上：
+
+- 从 shaped result/value 读取 rank 和 static shape；
+- 识别 mask operand（load operand 1 / store operand 2）；
+- 只有 `rank 1..3`、`hasStaticShape`、`unmasked`、4B element、
+  static non-power-of-two `stride >= 3` 才置
+  `strided_template_path_eligible=true`；
+- v8 的 `elements/elementBytes/strideElements` 语义不变，pow2 / stride2
+  继续走 v8；rank2/3 虽可被后端模板识别，但本轮公式未标定，因此当前
+  `mapWorkload` 只在 rank1 时消费 template 公式，其余回退 v8。
+
+### 6.2 mapWorkload 分支
+
+`mapWorkload()` 现在接收 `implementation.localScope`：
+
+| implementation | path |
+|---|---|
+| `mode=simd` | SIMD v8 structured/gather 公式 |
+| `mode=simt` + `localScope=false` | v8 pure-SIMT 公式 |
+| `mode=simt` + `localScope=true` + template eligible rank1 | template v1 公式 |
+| `mode=simt` + `localScope=true` + 非 eligible | 回退 v8 pure-SIMT |
+
+template 公式使用的特征在 C++ 中按与 Python 标定脚本相同的定义计算：
+
+```text
+L                  = distinct 128B line 数
+mean_warp_lines    = 1024-thread 模板中每个 32-thread warp 平均 line 数
+bucket_worst_32k16 = addr/32KB mod 16 后的最拥塞计数
+tail_elems         = elements mod 1024
+iters_per_thread   = ceil(elements/1024)
+```
+
+### 6.3 profile 字段
+
+`simt.stage_resources.template_strided_memory` 新增 10 个系数（raw ns，
+共用 `strided_memory.nanoseconds_to_system_cycles`）：
+
+```text
+simt_stride_template_load_intercept_ns
+simt_stride_template_load_l_ns
+simt_stride_template_load_bucket_worst_32k16_ns
+simt_stride_template_load_mean_warp_lines_ns
+simt_stride_template_load_tail_elems_ns
+simt_stride_template_store_intercept_ns
+simt_stride_template_store_l_ns
+simt_stride_template_store_bucket_worst_32k16_ns
+simt_stride_template_store_mean_warp_lines_ns
+simt_stride_template_store_iters_per_thread_ns
+```
+
+字段在 `SimdSimtCostModel.cpp::readStageResources()` 中解析；
+`StridedMemoryProfile::templateEnabled` 控制是否启用 template 分支。
+`StridedMemoryProfile::isValid()` 验证新系数非负、有限，且
+`templateEnabled` 必须建立在已启用的 `strided_memory` 转换系数上。
+
+### 6.4 测试
+
+- `scripts/predict_template_stride_v1.py --verify`：仍通过。
+- `SimdSimtCostModel` UT：
+  - `SimtLocalScopeUsesStrideTemplateLoad`
+  - `SimtLocalScopeUsesStrideTemplateStore`
+  - `SimtLocalScopeFallsBackForIneligibleStride`
+  - `StridedFactDetectionMarksTemplateEligible`
+  - `StridedTemplateProfileParserRejectsMissingField`
+- IR 测试：
+  `third_party/ascend/unittest/Conversion/General/TritonToLinalg/mixed_scope_stride_template.mlir`
+  - `stride=3` load/store 在 model-controlled local SIMT scope 下生成
+    `call @triton_stride_load/store`；
+  - `stride=1/2/4/8/256` 控制不生成模板调用。
+
+
+### 6.5 真实 route 观测
+
+`scripts/mixed_route_stride_probe.py` 用真实 Python backend
+（`compile_mode="simd_simt"`, `auto_simt_scope_mode="auto"`）跑 stride=3 的
+单 load/sum kernel：
+
+- CostModel 选择 `all_simt_only`；
+- `mixed_simd_simt` 不 legal（该 kernel 没有 `tt.scan` / gather / atomic /
+  triangular-solve 等 local SIMT anchor），所以不会进入 local SIMT scope；
+- 因此该简单 kernel 正确走 v8 pure-SIMT，不产生 template 调用。
+
+这与设计一致：template 只属于 mixed route 下的 local SIMT scope。
+混合 route 的后端 lowering 由 §6.4 的 model-controlled IR 测试覆盖
+（`ascend.simt_costmodel.effective="mixed_simd_simt"` + `scope.scope<simt>`）。
+

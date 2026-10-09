@@ -123,6 +123,88 @@ static void stridedBankFacts(double elements, double strideBytes,
   bankWorst = std::max(0.0, bankWorst);
 }
 
+/// Mean number of distinct 128B lines touched by one 32-thread warp of the
+/// fixed 1024-thread template loop.  The template runs `active` threads where
+/// `active = min(elements, 1024)`, so the scan is bounded by 1024 steps.
+static double stridedTemplateMeanWarpLines(double elements,
+                                           double strideBytes) {
+  const int64_t active =
+      static_cast<int64_t>(std::min(std::max(0.0, elements), 1024.0));
+  if (active <= 0 || strideBytes <= 0.0)
+    return 0.0;
+  double sum = 0.0;
+  int64_t warps = 0;
+  for (int64_t start = 0; start < active; start += 32) {
+    const int64_t stop = std::min<int64_t>(start + 32, active);
+    int64_t previousLine = -1;
+    int64_t lines = 0;
+    for (int64_t i = start; i < stop; ++i) {
+      const int64_t line =
+          static_cast<int64_t>(std::floor(static_cast<double>(i) *
+                                         strideBytes / 128.0));
+      if (line != previousLine) {
+        ++lines;
+        previousLine = line;
+      }
+    }
+    sum += static_cast<double>(lines);
+    ++warps;
+  }
+  return warps > 0 ? sum / static_cast<double>(warps) : 0.0;
+}
+
+/// Board-Event calibrated local-SIMT ``triton_stride_load`` template formula.
+/// Target is raw ns per dynamic access; it uses the fixed 1024-thread
+/// SIMTStrideLoad loop and the same feature definitions as
+/// data_provider/strided_ldst/pre-explore/scripts/template_stride_features.py.
+static double
+stridedTemplateSimtLoadCostNs(const StridedMemoryAccess &access,
+                              const StridedMemoryProfile &cal) {
+  const double elements = std::max(0.0, access.elements);
+  const double strideBytes =
+      static_cast<double>(access.elementBytes) *
+      static_cast<double>(access.strideElements);
+  const double lines = stridedLineCount(elements, strideBytes);
+  double ignoredPairs = 0.0;
+  double worst32k16 = 0.0;
+  stridedBankFacts(elements, strideBytes, 32768, 16, ignoredPairs,
+                   worst32k16);
+  const double meanWarpLines =
+      stridedTemplateMeanWarpLines(elements, strideBytes);
+  const double tailElements =
+      elements > 0.0 ? std::fmod(elements, 1024.0) : 0.0;
+  return cal.simtStrideTemplateLoadInterceptNs +
+         cal.simtStrideTemplateLoadLNs * lines +
+         cal.simtStrideTemplateLoadBucketWorst32k16Ns * worst32k16 +
+         cal.simtStrideTemplateLoadMeanWarpLinesNs * meanWarpLines +
+         cal.simtStrideTemplateLoadTailElemsNs * tailElements;
+}
+
+/// Board-Event calibrated local-SIMT ``triton_stride_store`` template
+/// formula.  The template store loop has the same 1024-thread geometry as the
+/// load loop; its selected model uses iters_per_thread instead of tail_elems.
+static double
+stridedTemplateSimtStoreCostNs(const StridedMemoryAccess &access,
+                               const StridedMemoryProfile &cal) {
+  const double elements = std::max(0.0, access.elements);
+  const double strideBytes =
+      static_cast<double>(access.elementBytes) *
+      static_cast<double>(access.strideElements);
+  const double lines = stridedLineCount(elements, strideBytes);
+  double ignoredPairs = 0.0;
+  double worst32k16 = 0.0;
+  stridedBankFacts(elements, strideBytes, 32768, 16, ignoredPairs,
+                   worst32k16);
+  const double meanWarpLines =
+      stridedTemplateMeanWarpLines(elements, strideBytes);
+  const double itersPerThread = std::ceil(elements / 1024.0);
+  return cal.simtStrideTemplateStoreInterceptNs +
+         cal.simtStrideTemplateStoreLNs * lines +
+         cal.simtStrideTemplateStoreBucketWorst32k16Ns * worst32k16 +
+         cal.simtStrideTemplateStoreMeanWarpLinesNs * meanWarpLines +
+         cal.simtStrideTemplateStoreItersPerThreadNs * itersPerThread;
+}
+
 /// Board-Event strided load/store formulas.  These return raw nanoseconds
 /// per dynamic access; the caller converts the sum to the profile's SYS_CNT
 /// selection-score domain.  The branches and features are the exact ones
@@ -246,7 +328,8 @@ materializeControlFlow(const LogicalStage &stage, StageMode mode,
 
 static StageResourceCycles mapWorkload(const LogicalStage &stage,
                                        const StageModeProfile &profile,
-                                       StageMode mode, int64_t numWarps) {
+                                       StageMode mode, int64_t numWarps,
+                                       bool localSimtScope) {
   StageResourceCycles resources;
   const StageWorkload &work = stage.workload;
   const bool simd = mode == StageMode::SIMD;
@@ -299,21 +382,38 @@ static StageResourceCycles mapWorkload(const LogicalStage &stage,
     for (const StridedMemoryAccess &access : work.stridedMemoryAccesses) {
       const double bytes = access.elements * access.elementBytes;
       const double instructions = std::ceil(access.elements / 32.0);
+      // The local-SIMT mixed route lowers rank1 static non-power-of-two
+      // stride>=3 memory to triton_stride_load/store.  Whole-kernel
+      // simt_only/all_simt_only implementations keep localScope=false and
+      // therefore stay on the v8 pure-SIMT formula.
+      const bool useTemplatePath =
+          !simd && localSimtScope && profile.stridedMemory.templateEnabled &&
+          access.templateEligible && access.rank == 1;
       if (access.isLoad) {
         stridedLoadBytes += bytes;
         stridedLoadInstructions += instructions;
         const double ns =
-            simd ? stridedSimdLoadCostNs(access, profile.stridedMemory)
-                 : stridedSimtLoadCostNs(access, profile.stridedMemory,
-                                         numWarps);
+            useTemplatePath
+                ? stridedTemplateSimtLoadCostNs(access,
+                                                profile.stridedMemory)
+                : (simd ? stridedSimdLoadCostNs(access,
+                                                profile.stridedMemory)
+                        : stridedSimtLoadCostNs(access,
+                                                profile.stridedMemory,
+                                                numWarps));
         stridedLoadCycles += ns * nsToCycles;
       } else {
         stridedStoreBytes += bytes;
         stridedStoreInstructions += instructions;
         const double ns =
-            simd ? stridedSimdStoreCostNs(access, profile.stridedMemory)
-                 : stridedSimtStoreCostNs(access, profile.stridedMemory,
-                                          numWarps);
+            useTemplatePath
+                ? stridedTemplateSimtStoreCostNs(access,
+                                                 profile.stridedMemory)
+                : (simd ? stridedSimdStoreCostNs(access,
+                                                 profile.stridedMemory)
+                        : stridedSimtStoreCostNs(access,
+                                                 profile.stridedMemory,
+                                                 numWarps));
         stridedStoreCycles += ns * nsToCycles;
       }
     }
@@ -697,7 +797,7 @@ bool StageAtomicRate::isValid() const {
 }
 
 bool StridedMemoryProfile::isValid() const {
-  const std::array<double, 26> values = {nanosecondsToSystemCycles,
+  const std::array<double, 36> values = {nanosecondsToSystemCycles,
                                          simdLoadWideInterceptNs,
                                          simdLoadWideStrideMinusOneNs,
                                          simdLoadWideLargeTileNs,
@@ -722,10 +822,22 @@ bool StridedMemoryProfile::isValid() const {
                                          simtStoreInterceptNs,
                                          simtStoreWarpInstructionNs,
                                          simtStoreLineNs,
-                                         simtStoreLineRequestSizeNs};
+                                         simtStoreLineRequestSizeNs,
+                                         simtStrideTemplateLoadInterceptNs,
+                                         simtStrideTemplateLoadLNs,
+                                         simtStrideTemplateLoadBucketWorst32k16Ns,
+                                         simtStrideTemplateLoadMeanWarpLinesNs,
+                                         simtStrideTemplateLoadTailElemsNs,
+                                         simtStrideTemplateStoreInterceptNs,
+                                         simtStrideTemplateStoreLNs,
+                                         simtStrideTemplateStoreBucketWorst32k16Ns,
+                                         simtStrideTemplateStoreMeanWarpLinesNs,
+                                         simtStrideTemplateStoreItersPerThreadNs};
   if (!std::all_of(values.begin(), values.end(), [](double value) {
         return std::isfinite(value) && value >= 0.0;
       }))
+    return false;
+  if (templateEnabled && !enabled)
     return false;
   return !enabled ||
          (std::isfinite(nanosecondsToSystemCycles) &&
@@ -862,7 +974,8 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
       StageResourceCycles resources = mapWorkload(
           stage,
           implementation.mode == StageMode::SIMD ? profile.simd : profile.simt,
-          implementation.mode, profile.logicalWarpGroupCount);
+          implementation.mode, profile.logicalWarpGroupCount,
+          implementation.localScope);
       StageImplementationCost cost;
       cost.implementation = implementation;
       cost.resources = resources;
