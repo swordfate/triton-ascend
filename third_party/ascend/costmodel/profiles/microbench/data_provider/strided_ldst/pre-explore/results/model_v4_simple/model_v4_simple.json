@@ -1,0 +1,124 @@
+{
+  "model_version": "strided_load_v8_semi_white_box_v4",
+  "description": "Additive non-negative SIMT strided-load model fitted on the v4 1288-case page-aligned dataset.  Coefficients are ns/iteration; each term is a white-box line/duplication/page fact.",
+  "target": {
+    "column": "target_ns",
+    "unit": "ns/iteration",
+    "domain": "board Event slope",
+    "target_ns_definition": "median of cleaned allocation samples for target_ns",
+    "target_p25_definition": "lower-quartile of cleaned allocation samples for target_p25_ns",
+    "cleaning": {
+      "floor_ns": 120.0,
+      "drop_non_positive": true,
+      "flagged_rule": "spread>1.4 or n_samples<3 or n_dropped>0"
+    }
+  },
+  "dataset": "results/model_v4_numwarps/dataset.csv",
+  "n_rows": 1288,
+  "selection": {
+    "criterion": "pooled CV mean(LOBO MAPE, LOWO MAPE), then CV max, then in-sample max; the documented v4 final model is forced to the simpler no-WL + dup cap128 + lowW4 candidate",
+    "mode": "forced",
+    "chosen_spec": "v8_l32_t32_d128_p32_lowW4",
+    "chosen_alpha": 2.0,
+    "lobo_pooled_mape_pct": 16.079799930316657,
+    "lowo_pooled_mape_pct": 16.509751819833493
+  },
+  "formula": "146.772295*intercept + 2.12616574*min_L_32 + 0.292235946*max_L_minus_32 + 0.00628590519*dupL_minL_128 + 8.83529748*cross_minL_32 + 0.459865494*lowW_4_L",
+  "intercept_ns": 146.7722948208243,
+  "coefficients_ns": {
+    "min_L_32": 2.126165744146226,
+    "max_L_minus_32": 0.29223594621358456,
+    "dupL_minL_128": 0.00628590518702342,
+    "cross_minL_32": 8.83529747800243,
+    "lowW_4_L": 0.45986549366866875
+  },
+  "feature_names": [
+    "1",
+    "min_L_32",
+    "max_L_minus_32",
+    "dupL_minL_128",
+    "cross_minL_32",
+    "lowW_4_L"
+  ],
+  "feature_notes": {
+    "1": "fixed SIMT start/control/first-LDG cost, ns",
+    "min_L_32": "min(L,32); first 32 128B lines of fill/queue work",
+    "max_L_minus_32": "max(0,L-32); additional lines past 32, cheaper due to overlap",
+    "dupL_minL_128": "dup * L * min(L,128); replicated line requests capped at 128 lines (16KB)",
+    "cross_minL_32": "cross * min(L,32); page-cross penalty on at most 32 lines (one 4KB page of 128B lines)",
+    "lowW_4_L": "max(0,4-W)*L; fewer than four warps cannot hide line fill latency"
+  },
+  "metrics": {
+    "in_sample": {
+      "n": 1288,
+      "mape_pct": 15.225233586792648,
+      "p50_pct": 9.73039697421601,
+      "p90_pct": 37.546683256591386,
+      "p95_pct": 59.55223481024736,
+      "max_pct": 94.27727788088771,
+      "bias_pct": -5.387518165999801,
+      "rmse_pct": 23.211027909164606,
+      "within_5pct": 28.959627329192543,
+      "within_10pct": 51.31987577639752,
+      "within_20pct": 80.51242236024845,
+      "within_30pct": 85.48136645962732,
+      "within_50pct": 92.2360248447205
+    },
+    "lobo_pooled": {
+      "n": 1288,
+      "mape_pct": 16.079799930316657,
+      "p50_pct": 10.261010971370744,
+      "p90_pct": 40.14714291582203,
+      "p95_pct": 59.86950238735006,
+      "max_pct": 94.26885415264191,
+      "bias_pct": -5.313481690161103,
+      "rmse_pct": 23.88219321415039,
+      "within_5pct": 24.53416149068323,
+      "within_10pct": 48.68012422360248,
+      "within_20pct": 78.95962732919256,
+      "within_30pct": 85.01552795031056,
+      "within_50pct": 92.08074534161491
+    },
+    "lowo_pooled": {
+      "n": 1288,
+      "mape_pct": 16.509751819833493,
+      "p50_pct": 10.49716777809293,
+      "p90_pct": 49.28274511025598,
+      "p95_pct": 63.18364194179689,
+      "max_pct": 94.27967410211767,
+      "bias_pct": -6.0629695618251755,
+      "rmse_pct": 24.97743950571545,
+      "within_5pct": 25.85403726708074,
+      "within_10pct": 47.59316770186335,
+      "within_20pct": 79.42546583850931,
+      "within_30pct": 84.86024844720497,
+      "within_50pct": 90.29503105590062
+    }
+  },
+  "profile_mapping": {
+    "note": "The coefficients are raw ns and map to the existing nanoseconds_to_system_cycles conversion.  Do not change the production profile until route-level validation passes.",
+    "formula_terms": [
+      {
+        "model_term": "min_L_32",
+        "quantity": "min(L,32); first 32 128B lines of fill/queue work"
+      },
+      {
+        "model_term": "max_L_minus_32",
+        "quantity": "max(0,L-32); additional lines past 32, cheaper due to overlap"
+      },
+      {
+        "model_term": "dupL_minL_128",
+        "quantity": "dup * L * min(L,128); replicated line requests capped at 128 lines (16KB)"
+      },
+      {
+        "model_term": "cross_minL_32",
+        "quantity": "cross * min(L,32); page-cross penalty on at most 32 lines (one 4KB page of 128B lines)"
+      },
+      {
+        "model_term": "lowW_4_L",
+        "quantity": "max(0,4-W)*L; fewer than four warps cannot hide line fill latency"
+      }
+    ]
+  },
+  "alignment": "aligned base only; misalignment deferred"
+}
