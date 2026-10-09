@@ -39,17 +39,23 @@ def check_store_kernel(out_ptr, BLOCK: tl.constexpr, STRIDE: tl.constexpr):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--blocks", nargs="+", type=int, default=[64, 256])
+    ap.add_argument("--blocks", nargs="+", type=int,
+                    default=[4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048])
     ap.add_argument("--strides", nargs="+", type=int,
-                    default=[1, 2, 3, 4, 5, 7, 8, 16, 32, 64, 128, 255, 256])
-    ap.add_argument("--out", type=Path, default=Path("template_stride_path_check.json"))
-    ap.add_argument("--asm-dir", type=Path, default=Path("template_stride_path_check_asm"))
+                    default=[3, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 20, 21,
+                             22, 23, 24, 25, 26, 27, 28, 29, 30, 31,
+                             1, 2, 4, 8, 16, 32, 64, 128, 256])
+    ap.add_argument("--num-warps", type=int, default=32)
+    ap.add_argument("--out", type=Path,
+                    default=Path("results/model_template_stride_v2/ir_evidence/template_stride_path_check_v2.json"))
+    ap.add_argument("--asm-dir", type=Path,
+                    default=Path("results/model_template_stride_v2/ir_evidence/path_check_asm"))
     args = ap.parse_args()
 
     torch_npu.npu.set_device(0)
     x = torch.randn(1 << 18, dtype=torch.float32, device="npu")
     y = torch.zeros(1 << 18, dtype=torch.float32, device="npu")
-    opts = template_opts(num_warps=1, grid=1)
+    opts = template_opts(num_warps=args.num_warps, grid=1)
     results = []
     for path, kernel, kernel_args in [
         ("triton_stride_load", check_load_kernel, (x, y)),
@@ -64,7 +70,7 @@ def main():
                 text = asm_text(compiled)
                 contains = path in text
                 expected = expect_template(stride)
-                keys = save_asm(compiled, args.asm_dir, f"{path.split('_')[-1]}_b{block}_s{stride}")
+                keys = save_asm(compiled, args.asm_dir, f"{path.split('_')[-1]}_b{block}_s{stride}_w{args.num_warps}")
                 results.append({
                     "path": path,
                     "block": int(block),
@@ -77,6 +83,7 @@ def main():
                 })
                 print(f'{path} b{block} s{stride}: expected={expected} '
                       f'contains={contains} match={expected == contains}', flush=True)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps({"results": results}, indent=2), encoding="utf-8")
     bad = [r for r in results if not r["match"]]
     print(f"wrote {args.out}; mismatches={len(bad)}")

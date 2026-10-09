@@ -10,19 +10,16 @@ from pathlib import Path
 from template_stride_features import FEATURE_ORDER, feature_vector
 
 HERE = Path(__file__).resolve().parent.parent
-RAW = HERE / "results/model_template_stride_v1/raw"
+RAW = HERE / "results/model_template_stride_v2/raw"
 DEFAULT_LOAD = [
-    RAW / "board_template_stride_load.json",
+    RAW / "board_template_stride_load_pass1.json",
     RAW / "board_template_stride_load_pass2.json",
-    RAW / "board_template_stride_load_rerun_outliers.json",
-    RAW / "board_template_stride_load_rerun2_outliers.json",
 ]
 DEFAULT_STORE = [
-    RAW / "board_template_stride_store.json",
+    RAW / "board_template_stride_store_pass1.json",
     RAW / "board_template_stride_store_pass2.json",
-    RAW / "board_template_stride_store_rerun_outliers.json",
 ]
-DEFAULT_OUT = HERE / "results/model_template_stride_v1/dataset.csv"
+DEFAULT_OUT = HERE / "results/model_template_stride_v2/dataset.csv"
 
 
 def read_path(path: Path, expected: str):

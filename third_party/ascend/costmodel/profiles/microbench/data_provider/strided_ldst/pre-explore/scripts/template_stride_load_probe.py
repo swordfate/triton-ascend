@@ -26,6 +26,7 @@ from template_stride_common import (
     freq_check,
     make_ramp,
     measure_event_us,
+    read_aicore_freq_mhz,
     save_asm,
     slope_ns_per_iter,
     template_opts,
@@ -73,6 +74,7 @@ def run_case(
     device,
     reference_witness_ns,
     witness_tol,
+    min_freq_mhz,
     max_attempts,
     busy_iters,
     max_spread,
@@ -158,17 +160,22 @@ def run_case(
             post_witness_ns / reference_witness_ns - 1.0
         ) <= witness_tol
         stable_ok = spread <= max_spread
+        post_freq_mhz = read_aicore_freq_mhz(device)
+        frequency_ok = post_freq_mhz is not None and post_freq_mhz >= min_freq_mhz
         row = {
             "attempt": attempt,
             "rows": raw_rows,
             "target_ns": target,
             "post_witness_ns": post_witness_ns,
+            "post_freq_mhz": post_freq_mhz,
             "witness_ok": bool(witness_ok),
+            "frequency_ok": bool(frequency_ok),
             "spread": spread,
             "stable_ok": bool(stable_ok),
         }
         attempts.append(row)
-    accepted_candidates = [a for a in attempts if a["witness_ok"] and a["stable_ok"]]
+    accepted_candidates = [a for a in attempts
+                          if a["witness_ok"] and a["stable_ok"] and a["frequency_ok"]]
     # Use the minimum target among stable/boosted attempts: contention can
     # only make Event timing larger, so the minimum is the closest estimate.
     accepted = min(accepted_candidates, key=lambda a: a["target_ns"]) if accepted_candidates else None
@@ -206,6 +213,7 @@ def main():
     ap.add_argument("--step", type=int, default=8192)
     ap.add_argument("--mask", type=int, default=16383)
     ap.add_argument("--device", type=int, default=0)
+    ap.add_argument("--min-freq-mhz", type=int, default=1500)
     ap.add_argument("--witness-tol", type=float, default=0.15)
     ap.add_argument("--max-spread", type=float, default=0.40)
     ap.add_argument("--max-attempts", type=int, default=3)
@@ -250,6 +258,7 @@ def main():
                     args.device,
                     reference_witness_ns,
                     args.witness_tol,
+                    args.min_freq_mhz,
                     args.max_attempts,
                     args.busy_iters,
                     args.max_spread,
@@ -268,6 +277,17 @@ def main():
         "path": "triton_stride_load",
         "compile_mode": "simd_simt_template",
         "cases": cases,
+        "launch_manifest": [
+            {
+                "path": c["path"],
+                "block": c["block"],
+                "stride": c["stride"],
+                "num_warps": c["num_warps"],
+                "options": c["options"],
+                "target_kind": c["target_kind"],
+            }
+            for c in cases
+        ],
         "frequency_check": {
             "inflight_freq_mhz": freq_mhz,
             "query_seconds": query_seconds,
