@@ -33,6 +33,19 @@ DEFAULT_OUT_DIR = HERE / "results/model_template_stride_v2"
 # be selected into the physical model.
 EXCLUDED_FEATURES = {"num_warps_minus1"}
 
+# Candidate-feature subsets.
+#   profile - restrict the pool to the features the C++ StageCostModels template
+#             formulas and the hardware profile already expose, so the fitted
+#             coefficients drop into simt.stage_resources.template_strided_memory
+#             with no code change.  This is the adopted model.
+#   all     - re-open the full pool.  Diagnostic only: it additionally selects
+#             tail_lanes_gt0 / stride_gt_line / active_warps for ~0.1-0.2 pp of
+#             in-sample MAPE and would require new profile fields.
+PROFILE_FEATURE_SETS = {
+    "triton_stride_load": ("L", "bucket_worst_32k16", "mean_warp_lines", "tail_elems"),
+    "triton_stride_store": ("L", "bucket_worst_32k16", "mean_warp_lines", "iters_per_thread"),
+}
+
 
 def fit_weighted(X, y, alpha):
     X = np.asarray(X, dtype=float)
@@ -89,13 +102,15 @@ def correlation_guard(rows, selected, remaining, threshold):
     return keep
 
 
-def forward_select(rows, alpha, max_terms, improvement_tol, corr_threshold):
+def forward_select(rows, alpha, max_terms, improvement_tol, corr_threshold,
+                   candidates=None):
     y = np.asarray([float(r["target_ns"]) for r in rows], dtype=float)
     selected = []
     X = design(rows, selected, include_intercept=True)
     obj, coef, pred = weighted_obj(X, y, alpha)
     history = []
-    remaining = [name for name in FEATURE_ORDER
+    pool = FEATURE_ORDER if candidates is None else list(candidates)
+    remaining = [name for name in pool
                  if name != "intercept" and name not in EXCLUDED_FEATURES]
     while remaining and len(selected) < max_terms:
         candidates = correlation_guard(rows, selected, remaining, corr_threshold)
@@ -125,7 +140,8 @@ def forward_select(rows, alpha, max_terms, improvement_tol, corr_threshold):
     return selected, coef, pred, history
 
 
-def fit_path(rows, path, alpha, max_terms, improvement_tol, corr_threshold):
+def fit_path(rows, path, alpha, max_terms, improvement_tol, corr_threshold,
+             candidates=None):
     valid = [
         r for r in rows
         if r["path"] == path and int(r["valid"]) == 1 and int(r["correctness_ok"]) == 1
@@ -133,7 +149,7 @@ def fit_path(rows, path, alpha, max_terms, improvement_tol, corr_threshold):
     if not valid:
         raise SystemExit(f"no valid rows for path={path}")
     selected, coef, _, history = forward_select(
-        valid, alpha, max_terms, improvement_tol, corr_threshold
+        valid, alpha, max_terms, improvement_tol, corr_threshold, candidates
     )
     # Prune zero coefficients that NNLS may leave behind.
     keep = [i for i, c in enumerate(coef[1:]) if c > 1e-9]
@@ -225,6 +241,11 @@ def main():
     ap.add_argument("--max-terms", type=int, default=6)
     ap.add_argument("--improvement-tol", type=float, default=0.002)
     ap.add_argument("--corr-threshold", type=float, default=0.98)
+    ap.add_argument("--feature-subset", choices=("profile", "all"),
+                    default="profile",
+                    help="profile = only the features the hardware profile "
+                         "already exposes (default, adopted model); "
+                         "all = full candidate pool (diagnostic)")
     args = ap.parse_args()
 
     rows = load_dataset(args.dataset)
@@ -236,14 +257,17 @@ def main():
         # Select alpha by in-sample MAPE; ties naturally keep the first alpha.
         best = None
         for alpha in args.alphas:
+            candidates = (PROFILE_FEATURE_SETS[path]
+                          if args.feature_subset == "profile" else None)
             model, valid, selected, coef = fit_path(
                 rows, path, alpha, args.max_terms, args.improvement_tol,
-                args.corr_threshold
+                args.corr_threshold, candidates
             )
             mape = model["metrics"]["mape_pct"]
             if best is None or mape < best[0]:
                 best = (mape, model, valid, selected, coef)
         _, model, valid, selected, coef = best
+        model["feature_subset"] = args.feature_subset
         stem = "load" if path == "triton_stride_load" else "store"
         (args.out_dir / f"model_template_stride_{stem}_v2.json").write_text(
             json.dumps(model, indent=2), encoding="utf-8"

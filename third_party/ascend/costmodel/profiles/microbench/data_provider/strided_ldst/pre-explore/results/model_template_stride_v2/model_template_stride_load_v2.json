@@ -7,7 +7,7 @@
   "ir_evidence": "results/model_template_stride_v2/ir_evidence/",
   "form": "T = intercept + sum(c_i * feature_i), c_i >= 0",
   "fit_method": "weighted Lawson-Hanson NNLS + forward selection with a 0.95 absolute-correlation guard and a 0.002 relative-improvement floor (in-sample only)",
-  "fit_weights_alpha": 2.0,
+  "fit_weights_alpha": 1.5,
   "fit_max_terms": 6,
   "fit_improvement_tol": 0.002,
   "fit_corr_threshold": 0.95,
@@ -15,18 +15,14 @@
     "L",
     "bucket_worst_32k16",
     "mean_warp_lines",
-    "tail_lanes_gt0",
-    "stride_gt_line",
-    "active_warps"
+    "tail_elems"
   ],
-  "intercept": 0.0,
+  "intercept": 236.4493648196842,
   "coefficients": [
-    1.7449042251793787,
-    0.4519087709354197,
-    4.974002153715598,
-    232.03565013485044,
-    21.827942991591268,
-    4.901827574651235
+    1.6758701453177038,
+    0.3848609413067588,
+    5.431101135362341,
+    0.24777443849445577
   ],
   "n_rows": 311,
   "training_ranges": {
@@ -47,52 +43,41 @@
   "selection_history": [
     {
       "candidate": "L",
-      "objective": 8.785906645518466,
-      "relative_improvement": 0.9063708011131268,
-      "n_candidates": 19
+      "objective": 251.8248096775681,
+      "relative_improvement": 0.9305106846425799,
+      "n_candidates": 4
     },
     {
       "candidate": "bucket_worst_32k16",
-      "objective": 5.669025719062967,
-      "relative_improvement": 0.35475916740423874,
-      "n_candidates": 18
+      "objective": 147.4251325505901,
+      "relative_improvement": 0.4145726438179362,
+      "n_candidates": 3
     },
     {
       "candidate": "mean_warp_lines",
-      "objective": 2.717203141440958,
-      "relative_improvement": 0.5206931003498632,
-      "n_candidates": 17
+      "objective": 64.47964004470663,
+      "relative_improvement": 0.5626278984515756,
+      "n_candidates": 2
     },
     {
-      "candidate": "tail_lanes_gt0",
-      "objective": 2.2674145430272317,
-      "relative_improvement": 0.16553366642112718,
-      "n_candidates": 14
-    },
-    {
-      "candidate": "stride_gt_line",
-      "objective": 2.134278289469475,
-      "relative_improvement": 0.05871720897582579,
-      "n_candidates": 13
-    },
-    {
-      "candidate": "active_warps",
-      "objective": 2.0903151572459757,
-      "relative_improvement": 0.020598594119807835,
-      "n_candidates": 12
+      "candidate": "tail_elems",
+      "objective": 52.041263792436695,
+      "relative_improvement": 0.1929039343837194,
+      "n_candidates": 1
     }
   ],
   "metrics": {
     "n": 311,
-    "mape_pct": 6.0749638526538146,
-    "p50_pct": 4.370715181773233,
-    "p90_pct": 13.953570332424281,
-    "p95_pct": 16.549352502780735,
-    "max_pct": 33.851551292507345,
-    "bias_pct": -0.6721270602077449,
-    "rmse_pct": 6.848058374481168,
-    "rmse_ns": 66.78085134988852,
+    "mape_pct": 6.165590590854112,
+    "p50_pct": 4.042433569363357,
+    "p90_pct": 13.807107553217012,
+    "p95_pct": 18.654225269730397,
+    "max_pct": 37.560179765970936,
+    "bias_pct": -0.39960813478288126,
+    "rmse_pct": 6.541408571945027,
+    "rmse_ns": 63.79046578951569,
     "tag": "in_sample"
   },
-  "coefficients_nonnegative": true
+  "coefficients_nonnegative": true,
+  "feature_subset": "profile"
 }

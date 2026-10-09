@@ -1,7 +1,7 @@
 {
   "$schema": "./simd_simt_profile_schema.json",
   "schema_version": 15,
-  "profile_version": "david-v100-simd-simt-20261009-v31-template-v2",
+  "profile_version": "david-v100-simd-simt-20261009-v32-template-v2",
   "target": "Ascend950PR/dav-c310",
   "description": "Stage Route Model hardware profile. Stage partitions and workloads are generated online from transformed TTIR; this file contains no workload-specific Stage template or route multiplier.",
   "microbenchmark_profile": "../microbench/ascend_davidv100_v1.json",
@@ -441,16 +441,16 @@
       "template_strided_memory": {
         "description": "Board-Event calibrated local-SIMT triton_stride_load/store template path. This object is consumed only when the mixed Route Model selects a rank1 static non-power-of-two stride>=3 access inside a local SIMT scope; whole-kernel simt_only/all_simt_only continue to use strided_memory.simt_* v8 fields. Coefficients are raw ns per dynamic access and share strided_memory.nanoseconds_to_system_cycles. v2 refit (2026-10-09): coefficients re-fitted on the full v2 board matrix, restricted to this object existing feature set; see pre-explore/README.md 5.9.",
         "source": "data_provider/strided_ldst/pre-explore/results/model_template_stride_v2",
-        "simt_stride_template_load_intercept_ns": 236.11214089445681,
-        "simt_stride_template_load_l_ns": 1.664464427240865,
-        "simt_stride_template_load_bucket_worst_32k16_ns": 0.3922175957218484,
-        "simt_stride_template_load_mean_warp_lines_ns": 5.775878905197415,
-        "simt_stride_template_load_tail_elems_ns": 0.22980451296750873,
-        "simt_stride_template_store_intercept_ns": 101.59439592890543,
-        "simt_stride_template_store_l_ns": 2.004106982693225,
-        "simt_stride_template_store_bucket_worst_32k16_ns": 0.2645611357798729,
-        "simt_stride_template_store_mean_warp_lines_ns": 2.7200824895573605,
-        "simt_stride_template_store_iters_per_thread_ns": 121.24280468926553
+        "simt_stride_template_load_intercept_ns": 236.4493648196842,
+        "simt_stride_template_load_l_ns": 1.6758701453177038,
+        "simt_stride_template_load_bucket_worst_32k16_ns": 0.3848609413067588,
+        "simt_stride_template_load_mean_warp_lines_ns": 5.431101135362341,
+        "simt_stride_template_load_tail_elems_ns": 0.24777443849445577,
+        "simt_stride_template_store_intercept_ns": 169.32733626741006,
+        "simt_stride_template_store_l_ns": 2.0561981460341556,
+        "simt_stride_template_store_bucket_worst_32k16_ns": 0.2654168193056941,
+        "simt_stride_template_store_mean_warp_lines_ns": 2.0485807823030684,
+        "simt_stride_template_store_iters_per_thread_ns": 55.77977041352469
       }
     },
     "mixed_setup_fallback": {
