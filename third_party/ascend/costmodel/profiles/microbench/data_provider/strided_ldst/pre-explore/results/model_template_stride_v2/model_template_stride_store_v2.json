@@ -1,0 +1,98 @@
+{
+  "model_version": "template_stride_v2",
+  "path": "triton_stride_store",
+  "target": "ns/iteration",
+  "target_definition": "torch.npu.Event slope over a 2000/8000-iteration rotate loop; minimum Event per point across reps, then minimum valid/correct target across pass1/pass2 for the same (path, block, stride, num_warps)",
+  "compile_mode": "simd_simt_template",
+  "ir_evidence": "results/model_template_stride_v2/ir_evidence/",
+  "form": "T = intercept + sum(c_i * feature_i), c_i >= 0",
+  "fit_method": "weighted Lawson-Hanson NNLS + forward selection with a 0.95 absolute-correlation guard and a 0.002 relative-improvement floor (in-sample only)",
+  "fit_weights_alpha": 1.5,
+  "fit_max_terms": 6,
+  "fit_improvement_tol": 0.002,
+  "fit_corr_threshold": 0.95,
+  "feature_names": [
+    "L",
+    "bucket_worst_32k16",
+    "mean_warp_lines",
+    "tail_lanes_gt0",
+    "stride_gt_line",
+    "iters_per_thread"
+  ],
+  "intercept": 46.33239820599517,
+  "coefficients": [
+    2.1245772650979724,
+    0.32514088067564634,
+    1.509008683230588,
+    116.26690302929035,
+    12.342597255404751,
+    61.60141957055415
+  ],
+  "n_rows": 320,
+  "training_ranges": {
+    "block": [
+      4,
+      2048
+    ],
+    "stride": [
+      3,
+      255
+    ],
+    "num_warps": [
+      32
+    ],
+    "n_blocks": 10,
+    "n_strides": 37
+  },
+  "selection_history": [
+    {
+      "candidate": "L",
+      "objective": 121.81779455381155,
+      "relative_improvement": 0.9688235776281154,
+      "n_candidates": 19
+    },
+    {
+      "candidate": "bucket_worst_32k16",
+      "objective": 73.55839618898113,
+      "relative_improvement": 0.3961604997167504,
+      "n_candidates": 18
+    },
+    {
+      "candidate": "mean_warp_lines",
+      "objective": 63.84396794682846,
+      "relative_improvement": 0.1320641659613546,
+      "n_candidates": 17
+    },
+    {
+      "candidate": "tail_lanes_gt0",
+      "objective": 60.18265572633438,
+      "relative_improvement": 0.0573478174718612,
+      "n_candidates": 14
+    },
+    {
+      "candidate": "stride_gt_line",
+      "objective": 59.195286270451895,
+      "relative_improvement": 0.016406212786160567,
+      "n_candidates": 13
+    },
+    {
+      "candidate": "iters_per_thread",
+      "objective": 58.6019870919248,
+      "relative_improvement": 0.010022743632261986,
+      "n_candidates": 12
+    }
+  ],
+  "metrics": {
+    "n": 320,
+    "mape_pct": 6.85170742925988,
+    "p50_pct": 5.630197328794134,
+    "p90_pct": 15.650697379228118,
+    "p95_pct": 18.450520082210915,
+    "max_pct": 28.823443572901475,
+    "bias_pct": -0.4775818372588898,
+    "rmse_pct": 8.753412710805526,
+    "rmse_ns": 85.36892748585784,
+    "tag": "in_sample"
+  },
+  "coefficients_nonnegative": true
+}
