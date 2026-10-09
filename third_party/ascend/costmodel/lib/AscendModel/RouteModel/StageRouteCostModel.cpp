@@ -484,8 +484,25 @@ static int64_t wholeSimtRegisterBudgetPerThread(int64_t activeWarps) {
 }
 
 /// Predicted private-stack bytes per thread for one whole-kernel factor.
-/// This is the complete general model: it uses only the TTIR live-value
-/// observation and the active-warp register-quota table.
+///
+/// Semantic derivation:
+///   weightedLive is an estimate of the machine GPR demand per thread.  The
+///   three weights correct the raw SSA live-value proxy: tensor values are
+///   often vectorized/reused (0.43), scalar/control values expand into masks,
+///   indices, induction and unrolled copies (1.46), and pointers are usually
+///   rematerializable from a base+offset (0.35).
+///   alpha expands the remaining SSA proxy into allocator live ranges, while
+///   reserveUnits is scheduling/rematerialization slack that does not need a
+///   dedicated register.  If the resulting pressure exceeds the active-warp
+///   register quota, the overflow is interpreted as private-stack words:
+///   one live unit -> one 32-bit word -> bytes = overflow * 4.
+///   freeOverflowUnits is the route-selection deadband for spill traffic that
+///   the scheduler can hide.
+///
+/// This model uses only the TTIR live-value observation and the hardware
+/// register-quota table.  It consults no kernel name, shape, offline table,
+/// or lowering artifact.  ``wholeSimtSpillModelEnabled`` is the safety valve
+/// controlled by the Python frontend allowlist.
 static double predictedWholeSimtStackBytesPerThread(
     const StageCostTable &costTable, int64_t factor) {
   if (!costTable.wholeSimtSpillModelEnabled)
@@ -526,6 +543,17 @@ static bool wholeSimtPeakFitsRegisterBudget(const StageCostTable &costTable,
          wholeSimtRegisterBudgetPerThread(activeWarps);
 }
 
+/// Convert predicted per-thread private-stack bytes into route-score cycles:
+///   wordsPerThread = ceil(bytes / 4)          // 32-bit stack words per lane
+///   * activeWarps                            // warp-level STK/LDK instructions
+///   * accessesPerWord                        // effective STK+LDK per word
+///   / spillTransactionsPerSystemCycle        // transactions -> score cycles
+///
+/// The activeWarps factor is the lane-to-warp conversion: a warp-level STK/LDK
+/// instruction moves one word for each of its 32 lanes, so
+/// (wordsPerThread * activeWarps * 32 lanes) / 32 lanes = wordsPerThread *
+/// activeWarps transactions.  accessesPerWord is 2 for a mandatory store plus
+/// reload; the calibrated value (<2) models dead/rematerialized words.
 static double computeWholeSimtSpillPenaltyCycles(
     const StageCostTable &costTable, int64_t factor,
     double stackBytesPerThread) {
@@ -534,8 +562,6 @@ static double computeWholeSimtSpillPenaltyCycles(
     return 0.0;
   const int64_t activeWarps = std::max<int64_t>(1, costTable.baseWarpCount) *
                               std::max<int64_t>(1, factor);
-  // Each warp-level STK/LDK transaction handles one 32-bit word per lane, so
-  // the transaction count is words-per-thread * active warps.
   const double wordsPerThread = std::ceil(stackBytesPerThread / 4.0);
   return wordsPerThread * static_cast<double>(activeWarps) *
          costTable.wholeSimtSpillAccessesPerWord /
