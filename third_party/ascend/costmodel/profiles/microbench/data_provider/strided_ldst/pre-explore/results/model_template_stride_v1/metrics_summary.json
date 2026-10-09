@@ -1,0 +1,58 @@
+{
+  "triton_stride_load": {
+    "model_file": "model_template_stride_load_v1.json",
+    "n_rows": 92,
+    "n_train": 92,
+    "n_holdout": 36,
+    "feature_names": [
+      "L",
+      "bucket_worst_32k16",
+      "mean_warp_lines",
+      "tail_elems"
+    ],
+    "intercept": 206.85234071175296,
+    "coefficients": [
+      1.6533579909232292,
+      0.38271090710133876,
+      8.080546375311002,
+      0.3575781156891659
+    ],
+    "alpha": 1.5,
+    "in_sample_mape_pct": 8.403203439449012,
+    "holdout_mape_pct": 9.112788253857003,
+    "holdout_p50_pct": 5.846840581998569,
+    "holdout_max_pct": 33.34548639164885,
+    "cv_by_block_mape_pct": 9.112788253857003,
+    "cv_by_block_max_pct": 33.34548639164885,
+    "cv_by_stride_mape_pct": 7.814043651098715,
+    "cv_by_stride_max_pct": 28.11241481185065
+  },
+  "triton_stride_store": {
+    "model_file": "model_template_stride_store_v1.json",
+    "n_rows": 90,
+    "n_train": 90,
+    "n_holdout": 37,
+    "feature_names": [
+      "L",
+      "bucket_worst_32k16",
+      "mean_warp_lines",
+      "iters_per_thread"
+    ],
+    "intercept": 92.14510394931294,
+    "coefficients": [
+      1.9172070208211838,
+      0.2364962757650297,
+      6.255117244454225,
+      111.9271567782345
+    ],
+    "alpha": 1.5,
+    "in_sample_mape_pct": 9.25634851690875,
+    "holdout_mape_pct": 11.970736489487676,
+    "holdout_p50_pct": 10.721084873339004,
+    "holdout_max_pct": 39.697027817697176,
+    "cv_by_block_mape_pct": 11.970736489487676,
+    "cv_by_block_max_pct": 39.697027817697176,
+    "cv_by_stride_mape_pct": 10.375494294103714,
+    "cv_by_stride_max_pct": 38.14104054076301
+  }
+}

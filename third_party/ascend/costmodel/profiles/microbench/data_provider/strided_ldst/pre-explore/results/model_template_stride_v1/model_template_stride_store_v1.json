@@ -1,0 +1,131 @@
+{
+  "model_version": "template_stride_v1",
+  "path": "triton_stride_store",
+  "target": "ns/iteration",
+  "target_definition": "torch.npu.Event slope over a 2000/8000-iteration rotate loop; min event per point across reps/passes",
+  "compile_mode": "simd_simt_template",
+  "ir_evidence": "results/model_template_stride_v1/ir_evidence/",
+  "form": "T = intercept + sum(c_i * feature_i), c_i >= 0",
+  "fit_method": "weighted non-negative least squares + forward selection",
+  "selection_scope": "all",
+  "fit_weights_alpha": 1.5,
+  "feature_names": [
+    "L",
+    "bucket_worst_32k16",
+    "mean_warp_lines",
+    "iters_per_thread"
+  ],
+  "intercept": 92.14510394931294,
+  "coefficients": [
+    1.9172070208211838,
+    0.2364962757650297,
+    6.255117244454225,
+    111.9271567782345
+  ],
+  "n_rows": 90,
+  "n_train": 90,
+  "n_holdout": 37,
+  "training_ranges": {
+    "block": [
+      16,
+      2048
+    ],
+    "stride": [
+      3,
+      255
+    ],
+    "num_warps": [
+      1
+    ],
+    "holdout_blocks": [
+      64,
+      1024
+    ]
+  },
+  "selection_history": [
+    {
+      "candidate": "L",
+      "objective": 73.47358649643448,
+      "relative_improvement": 0.9477393417948442
+    },
+    {
+      "candidate": "bucket_worst_32k16",
+      "objective": 54.40448604972224,
+      "relative_improvement": 0.25953681256103683
+    },
+    {
+      "candidate": "mean_warp_lines",
+      "objective": 35.30595400914803,
+      "relative_improvement": 0.3510470078353348
+    },
+    {
+      "candidate": "iters_per_thread",
+      "objective": 34.269972905284696,
+      "relative_improvement": 0.02934295738319109
+    }
+  ],
+  "metrics": {
+    "n": 90,
+    "mape_pct": 9.25634851690875,
+    "p50_pct": 6.2677972995462845,
+    "p90_pct": 21.889926091140318,
+    "p95_pct": 27.470542468559316,
+    "max_pct": 37.42489085196469,
+    "bias_pct": -0.8458778774419232,
+    "rmse_pct": 9.076054428870375,
+    "rmse_ns": 117.60405601713461,
+    "tag": "in_sample"
+  },
+  "holdout_metrics": {
+    "n": 37,
+    "mape_pct": 11.970736489487676,
+    "p50_pct": 10.721084873339004,
+    "p90_pct": 23.695270780273763,
+    "p95_pct": 29.74079462629218,
+    "max_pct": 39.697027817697176,
+    "bias_pct": -0.23375918168862184,
+    "rmse_pct": 11.154578438362488,
+    "rmse_ns": 119.28664819708148,
+    "tag": "cv_by_block"
+  },
+  "cv_by_block": {
+    "n": 37,
+    "mape_pct": 11.970736489487676,
+    "p50_pct": 10.721084873339004,
+    "p90_pct": 23.695270780273763,
+    "p95_pct": 29.74079462629218,
+    "max_pct": 39.697027817697176,
+    "bias_pct": -0.23375918168862184,
+    "rmse_pct": 11.154578438362488,
+    "rmse_ns": 119.28664819708148,
+    "tag": "cv_by_block"
+  },
+  "cv_by_stride": {
+    "n": 29,
+    "mape_pct": 10.375494294103714,
+    "p50_pct": 6.417753733275444,
+    "p90_pct": 22.941374817411596,
+    "p95_pct": 30.249799934221045,
+    "max_pct": 38.14104054076301,
+    "bias_pct": -2.1024687781938534,
+    "rmse_pct": 10.567113718606771,
+    "rmse_ns": 142.10441803187467,
+    "tag": "cv_by_stride"
+  },
+  "cv_by_stride_values": [
+    5,
+    11,
+    21,
+    48,
+    129,
+    255
+  ],
+  "coefficients_nonnegative": true,
+  "selected_max_terms": 4,
+  "max_terms_candidates": [
+    4,
+    5,
+    6,
+    8
+  ]
+}

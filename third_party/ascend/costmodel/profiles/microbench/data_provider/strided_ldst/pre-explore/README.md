@@ -728,7 +728,6 @@ scripts/fit_strided_store_v1.py
 scripts/predict_strided_store_v1.py
 scripts/make_store_plots.py
 ```
-
 ## 4. v8 到 profile / C++ 的最终集成状态
 
 > 本节记录 `feature/strided-load-store-costmodel-v4` 在服务器上完成 route-level
@@ -847,3 +846,315 @@ A/B 结论：
   本轮新增板卡测量（任务禁止重跑测量）。
 - route 变化（b8/s256 W2/W3、b512/s256 W1/W2）是基于 v8 校准结果的预期
   修正，但仍建议后续用 in-domain 板卡数据复查这些边界。
+
+---
+
+---
+
+## 5. Template strided load/store calibration（`triton_stride_load/store`）
+
+### 5.1 模板路径怎么触发
+
+后端源码：`StridedLoadStoreRewrite.cpp` / `TritonToLinalgPass.cpp`。
+
+关键条件：
+
+1. 只在 `compile_on_910_95=true` 的 950PR 目标上运行；
+2. `simd_simt_template` 的 legacy 全局强制路径，或 `simd_simt` Route Model
+   选中的 local SIMT `scope.scope`（`shouldUseSimtTemplate(op, false)`）；
+3. rank 1..3、静态 shape、静态 last-axis stride：
+   - `stride == 1` bail；
+   - `stride == 2` bail（走 deinterleave）；
+   - power-of-two `stride >= 4` bail（走 strided DMA）；
+   - dynamic stride bail；
+   - 只有 **静态非 2 次幂 stride >= 3** 进入
+     `ascend.stride_load/store`，最终生成
+     `call @triton_stride_load` / `call @triton_stride_store`。
+
+**Python backend 的一个实测坑**：在本分支里只传
+`compile_mode="simd_simt_template"` 时，`parallel_mode` 仍是默认 `"simd"`，
+TTAdapter 最终落回 `memref.copy`。必须同时传：
+
+```python
+compile_mode = "simd_simt_template"
+parallel_mode = "mix_simd_simt"
+compile_on_910_95 = True
+auto_simt_scope_mode = "off"
+enable_auto_blockify = False
+superblock_factor = 1
+```
+
+才能稳定复现 `call @triton_stride_load/store`。这与
+`third_party/ascend/unittest/Conversion/950PR/TritonToLinalg/indirect_load_rewrite.mlir`
+里 `triton-opt` 的 `force-simt-template=true` 路径等价。
+
+IR 证据（compile-only，不 launch）：
+
+- 脚本：`scripts/template_stride_path_check.py`
+- 结果：`results/model_template_stride_v1/ir_evidence/template_stride_path_check.json`
+- TTAdapter 片段：`results/model_template_stride_v1/ir_evidence/path_check_asm/*.ttadapter`
+- 实测 case 的 TTAdapter：`results/model_template_stride_v1/ir_evidence/measure_asm/*.ttadapter`
+
+关键校验（0 mismatch）：
+
+- `stride=3/5/7/255`：包含 `call @triton_stride_load/store`；
+- `stride=1/2/4/8/16/32/64/128/256`：不包含模板调用（保留 structured
+  / `memref.copy` / deinterleave 路径）。
+
+### 5.2 半白盒特征从哪里来
+
+1D 模板源码：`SIMTStrideLoad.cpp` / `SIMTStrideStore.cpp`。
+
+```text
+STRIDE_LOAD_THREAD_NUM = STRIDE_STORE_THREAD_NUM = 1024
+
+for (i0 = threadIdx.x; i0 < size; i0 += blockDim.x)
+  load:  dst[i0 * dstStride0] = src[loadLower + i0 * stride]
+  store: dst[storeLower + i0 * stride] = src[i0 * srcStride0]
+```
+
+在本轮 rank1、无 mask、`numel == BLOCK` 的探针里：
+
+- `iters_per_thread = ceil(BLOCK / 1024)`；
+- `active_threads = min(BLOCK, 1024)`，`active_warps = ceil(active_threads/32)`；
+- 每个元素一次 scalar GM 访问，地址 `i * stride_bytes`（offset=0，base 对齐）；
+- `loadSize == BLOCK`，不会跑 `simtStridePad1D`；
+- 模板内部线程数固定 1024，与 Triton `num_warps` 无关（实测见 §4.4）。
+
+`scripts/template_stride_features.py` 实现的候选特征：
+
+| 特征 | 来源 |
+|---|---|
+| `L` | strided tile 覆盖的 distinct 128B line 数 |
+| `line_elems_max/min` | 每个 128B line 内有效元素数 |
+| `mean/min/max_warp_lines` | 一个 32-thread warp 访问涉及的 line 数 |
+| `tail_elems` = `BLOCK % 1024` | 模板 1024-thread 循环尾部 |
+| `stride_bytes` | `stride * 4` |
+| `page_cross` | `floor(((BLOCK-1)*stride_bytes)/4096)` |
+| `bucket_pairs_2k8` / `bucket_worst_2k8` | 2KB/8-bank 桶冲突 pair / worst |
+| `bucket_worst_32k16` | 32KB/16 桶的最拥塞计数 |
+| `num_warps_minus1` | control，验证模板线程数是否受外层影响 |
+
+### 5.3 实测协议
+
+脚本：
+
+- `scripts/template_stride_load_probe.py`
+- `scripts/template_stride_store_probe.py`
+- `scripts/run_template_stride_measure_load.sh`
+- `scripts/run_template_stride_measure_store.sh`
+
+协议：
+
+```text
+rotate loop 一次 shaped strided load/store，
+iters ∈ {2000, 8000}，每点重复 reps 次取最小 Event；
+target = 对 (iters, min_event_ns) 做线性斜率 [ns/iteration]；
+每次 measured launch 前跑 ALU busy burst 保持 boost；
+case 后做 ALU witness；case 前后用 npu-smi 检查 Aicore Freq；
+witness 不达标或 spread 过大的 attempt 标记 invalid。
+```
+
+矩阵（主拟合）：
+
+- BLOCK：16、64、256、1024、2048（`tl.arange` 为 2 的幂）；
+- STRIDE：3、5、6、7、9、11、13、15、17、21、25、31、40、48、63、96、
+  129、192、255；
+- 不含 stride=1/2/pow2（这些不会进入模板，只出现在 §4.1 的 boundary check）；
+- load/store 分开测量；
+- 每个 case 2 个 pass（reps=2/attempts=2 与 reps=3/attempts=1 各一轮），
+  再加一批 CV 最差点的定向 rerun；dataset builder 对同一
+  `(block,stride,num_warps)` 取所有 pass 中 valid+correct 的 **最小 target**。
+
+`num_warps` control：
+
+| path | block | stride | W=1 | W=2 | W=4 | W=8 | spread |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| load | 32 | 3 | 251.4 | 254.2 | 251.2 | 252.7 | 1.2% |
+| load | 32 | 17 | 300.3 | 302.8 | 301.4 | 304.7 | 1.5% |
+| load | 1024 | 17 | 1478.2 | 1496.3 | 1487.7 | 1509.7 | 2.1% |
+| load | 1024 | 255 | 2032.6 | 2053.7 | 2037.5 | 2115.9 | 4.1% |
+| store | 32 | 3 | 225.0 | 226.9 | 222.3 | 223.3 | 2.1% |
+| store | 1024 | 17 | 1522.4 | 1526.6 | 1500.8 | 1498.5 | 1.9% |
+| store | 1024 | 255 | 2124.8 | 2116.1 | 2114.2 | 2121.5 | 0.5% |
+
+结论：template target 与 `num_warps` 基本无关，模板内部 1024 threads 固定；
+profile 拟合不需要 `num_warps` 项。
+
+### 5.4 模型
+
+模型文件：
+
+- `results/model_template_stride_v1/model_template_stride_load_v1.json`
+- `results/model_template_stride_v1/model_template_stride_store_v1.json`
+
+形式：
+
+```text
+T = intercept + Σ c_i * f_i,   c_i >= 0
+target = ns/iteration (rotate-loop Event slope，min-of-reps/passes)
+```
+
+#### Load template
+
+```text
+T_load = 206.8523
+       + 1.65336 * L
+       + 0.38271 * bucket_worst_32k16
+       + 8.08055 * mean_warp_lines
+       + 0.35758 * tail_elems
+```
+
+| 项 | 物理含义 |
+|---|---|
+| intercept 206.9 ns | 单个 rotate iteration 内 template 调用固定开销 |
+| `L` | distinct 128B line 工作量；每多一条 line 约 1.65 ns |
+| `bucket_worst_32k16` | 32KB/16-bucket 最拥塞程度，捕捉地址 bank/region 热点 |
+| `mean_warp_lines` | 每个 warp 的 line 数，捕捉 warp 级分散访问 |
+| `tail_elems` | BLOCK 不是 1024 倍数时的尾线程/尾 wave |
+
+#### Store template
+
+```text
+T_store = 92.1451
+        + 1.91721 * L
+        + 0.23650 * bucket_worst_32k16
+        + 6.25512 * mean_warp_lines
+        + 111.92716 * iters_per_thread
+```
+
+| 项 | 物理含义 |
+|---|---|
+| intercept 92.1 ns | template store 调用固定开销 |
+| `L` | 写向 distinct 128B line 数 |
+| `bucket_worst_32k16` | 32KB/16-bucket 写热点 |
+| `mean_warp_lines` | warp 级写分散度 |
+| `iters_per_thread` = `ceil(BLOCK/1024)` | 1024-thread 模板的内部 loop 次数；store 对该项最敏感 |
+
+所有系数非负；无 log、无 x²/x³、无减法项。predictor：
+
+```bash
+python3 scripts/predict_template_stride_v1.py --verify
+python3 scripts/predict_template_stride_v1.py load 256 3
+python3 scripts/predict_template_stride_v1.py store 256 3
+```
+
+### 5.5 误差
+
+In-sample 与 out-of-sample（按 block/stride 做 leave-group-out，重新拟合系数）：
+
+| path | split | n | MAPE | p50 | p90 | p95 | max | bias | RMSE |
+|---|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| load | in-sample | 92 | 8.40% | 6.15% | 18.47% | 27.33% | 36.58% | -0.71% | 7.01% |
+| load | CV by block | 36 | 9.11% | 5.85% | 22.00% | 27.59% | 33.35% | +2.93% | 7.33% |
+| load | CV by stride | 28 | 7.81% | 4.93% | 18.99% | 21.96% | 28.11% | -1.58% | 6.09% |
+| store | in-sample | 90 | 9.26% | 6.27% | 21.89% | 27.47% | 37.42% | -0.85% | 9.08% |
+| store | CV by block | 37 | 11.97% | 10.72% | 23.70% | 29.74% | 39.70% | -0.23% | 11.15% |
+| store | CV by stride | 29 | 10.38% | 6.42% | 22.94% | 30.25% | 38.14% | -2.10% | 10.57% |
+
+逐点误差：
+
+```text
+results/model_template_stride_v1/errors_load.csv
+results/model_template_stride_v1/errors_store.csv
+results/model_template_stride_v1/errors_cv_block_{load,store}.csv
+results/model_template_stride_v1/errors_cv_stride_{load,store}.csv
+```
+
+图：
+
+```text
+results/model_template_stride_v1/plots/parity_loglog.png
+results/model_template_stride_v1/plots/error_hist.png
+results/model_template_stride_v1/plots/error_vs_stride.png
+results/model_template_stride_v1/plots/error_vs_block.png
+```
+
+结论：load 满足 <10%–15% 目标；store 的 block CV 12.0%，stride CV 10.4%，
+略高于 10%，但仍在“可先 keep v1 + 后续加板卡重复”的范围内。max 误差主要来自
+少数 small-block outlier 和共享板卡噪声，未被少量非负特征完全吸收。
+
+### 5.6 与 pure SIMT 路径的差异
+
+同一 `(block, stride, num_warps)` 上，分别调用现有 pure SIMT model 和 template v1：
+
+```text
+results/model_template_stride_v1/template_vs_pure_simt.csv
+```
+
+比较（template / pure-SIMT）：
+
+| path | n | median ratio | mean ratio | min | max |
+|---|---:|---:|---:|---:|---:|
+| load | 92 | 1.89× | 2.78× | 1.17× | 7.84× |
+| store | 90 | 3.26× | 5.15× | 1.73× | 11.69× |
+
+按 block 看中位 ratio：
+
+| block | load ratio | store ratio |
+|---:|---:|---:|
+| 16 | 1.80× | 10.63× |
+| 64 | 1.40× | 6.33× |
+| 256 | 1.82× | 2.88× |
+| 1024 | 3.26× | 1.99× |
+| 2048 | 5.48× | 1.82× |
+
+结论：template 路径与 pure-SIMT **不能共用**系数，尤其 store 小 block
+差一个数量级；load 在 1.2×–7.8× 内，也值得独立建模。
+
+### 5.7 集成建议
+
+本轮不改 C++，下一轮建议：
+
+1. 在 `StageWorkload`/`MemoryAccessFacts` 中显式标记：
+   ```text
+   strided_template_load_elements
+   strided_template_store_elements
+   strided_template_rank
+   strided_template_stride
+   strided_template_is_static_nonpow2
+   strided_template_path_eligible   # rank1..3 + local SIMT/fixed trigger + mask 条件
+   ```
+2. `mapWorkload()` 增加 `StridedLoweringPath`/`localScope` 维度：
+   - `implementation.mode == SIMT && implementation.localScope` 且该 memory op
+     满足静态非 2 次幂 stride 才用 template 公式；
+   - mixed 的 `localScope=true` 不要落回现有 `simtLoad*/simtStore*` 公式；
+   - whole-kernel `simt_only` 仍用 pure SIMT 公式。
+3. profile 新增 `stage_resources.template_strided_memory` 字段（单位仍是
+   SYS_CNT cycle，写入时用 profile 已有的 `nanoseconds_to_system_cycles` 乘 ns）：
+   ```text
+   simt_stride_template_load_intercept_ns
+   simt_stride_template_load_L_ns
+   simt_stride_template_load_bucket_worst_32k16_ns
+   simt_stride_template_load_mean_warp_lines_ns
+   simt_stride_template_load_tail_elems_ns
+
+   simt_stride_template_store_intercept_ns
+   simt_stride_template_store_L_ns
+   simt_stride_template_store_bucket_worst_32k16_ns
+   simt_stride_template_store_mean_warp_lines_ns
+   simt_stride_template_store_iters_per_thread_ns
+   ```
+4. 测试：
+   - synthetic `StageWorkload` + `StageImplementation{localScope=true}` 断言选
+     template 系数；
+   - mixed route + local SIMT scope + rank1 static stride=3 的 IR 测试断言
+     `call @triton_stride_load/store`；
+   - route report 中 pure-SIMT 与 template-SIMT 两条实现 cycle 可区分。
+
+### 5.8 剩余风险
+
+1. 实测在共享 NPU 上进行，witness 只锁 Aicore 频率，无法完全排除其他进程
+   的 BIU/L2/HBM 干扰；已用多 pass + min target 抑制，但 store block CV
+   max 仍有 39.7%。
+2. 本轮触发使用 `simd_simt_template` legacy 全局路径（没有 `scope.scope`）。
+   真实 `simd_simt` mixed local scope 会额外包含 scope handoff/transition；
+   该部分应由现有 scope transition cost 承担，template 公式只负责 loop 内
+   per-iteration 模板体。
+3. 只标定 rank1、unmasked、static non-pow2、aligned base；rank2/3、mask、
+   dynamic stride、misalignment 未覆盖。
+4. `iters_per_thread` 对 store 的系数来自当前 1 program 数据；多 program/多核
+   SuperBlock 形态需要正交验证。
+5. 若后续把 `parallel_mode=mix_simd_simt` 依赖改为 backend 自动设置，需重新
+   确认 TTAdapter 仍含 `call @triton_stride_load/store`，否则本轮测量会静默
+   退化成 SIMD memref.copy。
