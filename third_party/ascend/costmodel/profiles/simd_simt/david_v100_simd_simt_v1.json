@@ -437,6 +437,20 @@
         "simt_store_warp_instruction_ns": 0.6508156379586657,
         "simt_store_line_ns": 1.2342412476531825,
         "simt_store_line_request_size_ns": 0.1518112854753173
+      },
+      "template_strided_memory": {
+        "description": "Board-Event calibrated local-SIMT triton_stride_load/store template path. This object is consumed only when the mixed Route Model selects a rank1 static non-power-of-two stride>=3 access inside a local SIMT scope; whole-kernel simt_only/all_simt_only continue to use strided_memory.simt_* v8 fields. Coefficients are raw ns per dynamic access and share strided_memory.nanoseconds_to_system_cycles.",
+        "source": "data_provider/strided_ldst/pre-explore/results/model_template_stride_v1",
+        "simt_stride_template_load_intercept_ns": 211.3874357686902,
+        "simt_stride_template_load_l_ns": 1.6495154689720701,
+        "simt_stride_template_load_bucket_worst_32k16_ns": 0.3844188104592256,
+        "simt_stride_template_load_mean_warp_lines_ns": 7.919750697217851,
+        "simt_stride_template_load_tail_elems_ns": 0.3946322601050462,
+        "simt_stride_template_store_intercept_ns": 92.14510394931294,
+        "simt_stride_template_store_l_ns": 1.9172070208211838,
+        "simt_stride_template_store_bucket_worst_32k16_ns": 0.2364962757650297,
+        "simt_stride_template_store_mean_warp_lines_ns": 6.255117244454225,
+        "simt_stride_template_store_iters_per_thread_ns": 111.9271567782345
       }
     },
     "mixed_setup_fallback": {

@@ -166,6 +166,23 @@ struct StridedMemoryProfile {
   double simtStoreWarpInstructionNs = 0.0;
   double simtStoreLineNs = 0.0;
   double simtStoreLineRequestSizeNs = 0.0;
+  /// Local-SIMT ``triton_stride_load/store`` template path.  This is a
+  /// separate lowering from both the SIMD MTE path and the pure-SIMT LSU
+  /// path: rank1 static non-power-of-two stride >= 3 enters the template and
+  /// runs a fixed 1024-thread scalar loop.  Coefficients are raw ns/iteration
+  /// from results/model_template_stride_v1 and are converted with the same
+  /// nanoseconds_to_system_cycles conversion as the v8 strided model.
+  bool templateEnabled = false;
+  double simtStrideTemplateLoadInterceptNs = 0.0;
+  double simtStrideTemplateLoadLNs = 0.0;
+  double simtStrideTemplateLoadBucketWorst32k16Ns = 0.0;
+  double simtStrideTemplateLoadMeanWarpLinesNs = 0.0;
+  double simtStrideTemplateLoadTailElemsNs = 0.0;
+  double simtStrideTemplateStoreInterceptNs = 0.0;
+  double simtStrideTemplateStoreLNs = 0.0;
+  double simtStrideTemplateStoreBucketWorst32k16Ns = 0.0;
+  double simtStrideTemplateStoreMeanWarpLinesNs = 0.0;
+  double simtStrideTemplateStoreItersPerThreadNs = 0.0;
 
   bool isValid() const;
 };

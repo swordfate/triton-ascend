@@ -142,6 +142,24 @@ struct StridedMemoryAccess {
   /// is deliberately not recorded by detectStridedMemoryAccess(), but remains
   /// valid here so unit tests can drive the formula directly.
   int64_t strideElements = 1;
+  /// Rank of the shaped load/store result/value.  The v8 strided formula and
+  /// the template lowering share the same detection fact, but the template
+  /// path only accepts ranks 1..3.
+  int64_t rank = 1;
+  /// True when the shaped result/value has a fully static shape.  Dynamic
+  /// shapes stay on the structured SIMD path.
+  bool hasStaticShape = false;
+  /// True when the load/store has a mask operand.  The board calibration
+  /// domain for the triton_stride_load/store template is unmasked.
+  bool isMasked = false;
+  /// Static, positive, non-power-of-two element stride >= 3, i.e. the
+  /// dispatch condition that sends a local SIMT access to the template path
+  /// instead of deinterleave/strided-DMA.
+  bool staticNonPowerOfTwoStride = false;
+  /// True when this access would be eligible for ``triton_stride_load/store``
+  /// if it were materialized as a local SIMT scope.  Local-scope ownership is
+  /// an implementation fact and is checked separately in mapWorkload().
+  bool templateEligible = false;
 
   bool isValid() const;
   llvm::json::Object toJSON() const;

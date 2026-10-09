@@ -1219,3 +1219,109 @@ results/model_template_stride_v1/template_vs_pure_simt.csv
 5. 若后续把 `parallel_mode=mix_simd_simt` 依赖改为 backend 自动设置，需重新
    确认 TTAdapter 仍含 `call @triton_stride_load/store`，否则本轮测量会静默
    退化成 SIMD memref.copy。
+
+---
+
+## 6. CostModel 接入状态（本轮实现）
+
+> 本节记录 template v1 公式真正接入 `feature/strided-load-store-costmodel`
+> v8 版本后的字段、判定和测试状态。
+
+### 6.1 lowering path facts
+
+`StridedMemoryAccess` 现在同时携带 template 判定和 v8 判定所需事实：
+
+```text
+rank
+has_static_shape
+masked
+static_non_power_of_two_stride
+strided_template_path_eligible
+```
+
+`detectStridedMemoryAccess()` 在原有 `base + arange * const_stride` 识别基础上：
+
+- 从 shaped result/value 读取 rank 和 static shape；
+- 识别 mask operand（load operand 1 / store operand 2）；
+- 只有 `rank 1..3`、`hasStaticShape`、`unmasked`、4B element、
+  static non-power-of-two `stride >= 3` 才置
+  `strided_template_path_eligible=true`；
+- v8 的 `elements/elementBytes/strideElements` 语义不变，pow2 / stride2
+  继续走 v8；rank2/3 虽可被后端模板识别，但本轮公式未标定，因此当前
+  `mapWorkload` 只在 rank1 时消费 template 公式，其余回退 v8。
+
+### 6.2 mapWorkload 分支
+
+`mapWorkload()` 现在接收 `implementation.localScope`：
+
+| implementation | path |
+|---|---|
+| `mode=simd` | SIMD v8 structured/gather 公式 |
+| `mode=simt` + `localScope=false` | v8 pure-SIMT 公式 |
+| `mode=simt` + `localScope=true` + template eligible rank1 | template v1 公式 |
+| `mode=simt` + `localScope=true` + 非 eligible | 回退 v8 pure-SIMT |
+
+template 公式使用的特征在 C++ 中按与 Python 标定脚本相同的定义计算：
+
+```text
+L                  = distinct 128B line 数
+mean_warp_lines    = 1024-thread 模板中每个 32-thread warp 平均 line 数
+bucket_worst_32k16 = addr/32KB mod 16 后的最拥塞计数
+tail_elems         = elements mod 1024
+iters_per_thread   = ceil(elements/1024)
+```
+
+### 6.3 profile 字段
+
+`simt.stage_resources.template_strided_memory` 新增 10 个系数（raw ns，
+共用 `strided_memory.nanoseconds_to_system_cycles`）：
+
+```text
+simt_stride_template_load_intercept_ns
+simt_stride_template_load_l_ns
+simt_stride_template_load_bucket_worst_32k16_ns
+simt_stride_template_load_mean_warp_lines_ns
+simt_stride_template_load_tail_elems_ns
+simt_stride_template_store_intercept_ns
+simt_stride_template_store_l_ns
+simt_stride_template_store_bucket_worst_32k16_ns
+simt_stride_template_store_mean_warp_lines_ns
+simt_stride_template_store_iters_per_thread_ns
+```
+
+字段在 `SimdSimtCostModel.cpp::readStageResources()` 中解析；
+`StridedMemoryProfile::templateEnabled` 控制是否启用 template 分支。
+`StridedMemoryProfile::isValid()` 验证新系数非负、有限，且
+`templateEnabled` 必须建立在已启用的 `strided_memory` 转换系数上。
+
+### 6.4 测试
+
+- `scripts/predict_template_stride_v1.py --verify`：仍通过。
+- `SimdSimtCostModel` UT：
+  - `SimtLocalScopeUsesStrideTemplateLoad`
+  - `SimtLocalScopeUsesStrideTemplateStore`
+  - `SimtLocalScopeFallsBackForIneligibleStride`
+  - `StridedFactDetectionMarksTemplateEligible`
+  - `StridedTemplateProfileParserRejectsMissingField`
+- IR 测试：
+  `third_party/ascend/unittest/Conversion/General/TritonToLinalg/mixed_scope_stride_template.mlir`
+  - `stride=3` load/store 在 model-controlled local SIMT scope 下生成
+    `call @triton_stride_load/store`；
+  - `stride=1/2/4/8/256` 控制不生成模板调用。
+
+
+### 6.5 真实 route 观测
+
+`scripts/mixed_route_stride_probe.py` 用真实 Python backend
+（`compile_mode="simd_simt"`, `auto_simt_scope_mode="auto"`）跑 stride=3 的
+单 load/sum kernel：
+
+- CostModel 选择 `all_simt_only`；
+- `mixed_simd_simt` 不 legal（该 kernel 没有 `tt.scan` / gather / atomic /
+  triangular-solve 等 local SIMT anchor），所以不会进入 local SIMT scope；
+- 因此该简单 kernel 正确走 v8 pure-SIMT，不产生 template 调用。
+
+这与设计一致：template 只属于 mixed route 下的 local SIMT scope。
+混合 route 的后端 lowering 由 §6.4 的 model-controlled IR 测试覆盖
+（`ascend.simt_costmodel.effective="mixed_simd_simt"` + `scope.scope<simt>`）。
+

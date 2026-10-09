@@ -200,7 +200,10 @@ llvm::json::Object AtomicWorkload::toJSON() const {
 
 bool StridedMemoryAccess::isValid() const {
   return std::isfinite(elements) && elements >= 0.0 && elementBytes > 0 &&
-         strideElements >= 1;
+         strideElements >= 1 && rank >= 1 &&
+         (!templateEligible ||
+          (hasStaticShape && !isMasked && strideElements >= 3 &&
+           staticNonPowerOfTwoStride && elementBytes == 4));
 }
 
 llvm::json::Object StridedMemoryAccess::toJSON() const {
@@ -209,7 +212,12 @@ llvm::json::Object StridedMemoryAccess::toJSON() const {
       {"elements_per_iteration", elements},
       {"element_bytes", static_cast<int64_t>(elementBytes)},
       {"stride_elements", static_cast<int64_t>(strideElements)},
-      {"stride_bytes", static_cast<double>(elementBytes * strideElements)}};
+      {"stride_bytes", static_cast<double>(elementBytes * strideElements)},
+      {"rank", static_cast<int64_t>(rank)},
+      {"has_static_shape", hasStaticShape},
+      {"masked", isMasked},
+      {"static_non_power_of_two_stride", staticNonPowerOfTwoStride},
+      {"strided_template_path_eligible", templateEligible}};
 }
 
 bool TensorOperationWorkload::isFiniteAndNonNegative() const {
