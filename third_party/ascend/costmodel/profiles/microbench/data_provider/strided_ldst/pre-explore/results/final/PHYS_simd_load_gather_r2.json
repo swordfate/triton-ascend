@@ -1,0 +1,94 @@
+{
+ "simd_load_gather_r2": {
+  "n": 678,
+  "mape": 13.175094329748308,
+  "n_terms": 8,
+  "formula": "T = 93.7579 + 0.53865*n + 40.637*B36 + 0.084423*P128 + 13.563*S1024 - 71.629*D128 + 1.328*C + 25.055*BR",
+  "terms": [
+   {
+    "name": "intercept",
+    "coef": 93.75787112109492,
+    "meaning": "fixed launch + first-byte latency (ns)"
+   },
+   {
+    "name": "n",
+    "coef": 0.5386522653482746,
+    "meaning": "one BIU command per element (CAModel white box: biu_send_count=n)"
+   },
+   {
+    "name": "B36",
+    "coef": 40.63694730998659,
+    "meaning": "under-filled 64B block fetches in the burst-short regime ([C*eb<32] x L@64B)"
+   },
+   {
+    "name": "P128",
+    "coef": 0.08442335206751517,
+    "meaning": "same-128B-line collision pairs sum(cnt*(cnt-1)) over the 2-D address set"
+   },
+   {
+    "name": "S1024",
+    "coef": 13.562960030534473,
+    "meaning": "row x block incidences minus distinct blocks at 1KB grain (share = Lrow-L)"
+   },
+   {
+    "name": "D128",
+    "coef": -71.62938622444828,
+    "meaning": "128B lines touched by >=2 rows, x[C*eb<32] (fitted coefficient is NEGATIVE: the same-fetch deduction)"
+   },
+   {
+    "name": "C",
+    "coef": 1.327965044260231,
+    "meaning": "explicit column count: per-row teeth (row-burst overhead / lane utilisation)"
+   },
+   {
+    "name": "BR",
+    "coef": 25.055489040301335,
+    "meaning": "row bursts issued in the burst-short regime ([C*eb<32] x R)"
+   }
+  ],
+  "derived": [
+   "addr(i,j) = i*OS + j*ISB  (bytes, base offset 0 / aligned buffer); R rows x C elements",
+   "L@B    = number of distinct B-byte blocks touched by the 2-D address set",
+   "Lrow@B = sum over rows of the number of B-byte blocks that row touches",
+   "share@B= Lrow@B - L@B   (blocks fetched once but touched by several rows)",
+   "multi@B= number of B-byte blocks touched by >= 2 different rows",
+   "pairs@B= sum over blocks of cnt*(cnt-1)  (same-block element collision pairs; = n-L when cnt=2)",
+   "w@B    = max over blocks of the element count (worst crowding)",
+   "burst_short = 1 if C*eb < 32 else 0   (MTE minimum burst is 32 B)",
+   "block-size scan: burst-short line penalty best at B=64 (15.81%) -> 32 (15.87) -> 128 (17.02) -> 256 (18.89); collision-pair term best at B=128 (15.81%) -> 64 (15.84) -> 32 (16.49) -> 256 (16.81)"
+  ],
+  "variants": {
+   "compact5": {
+    "n_terms": 5,
+    "mape": 15.805235379898614,
+    "formula": "T = 109.0103 + 0.6007*n + 49.722*B36 + 0.090108*P128 + 12.504*S1024",
+    "cv_mape": 15.96020144945058
+   },
+   "extended10": {
+    "n_terms": 10,
+    "mape": 12.696343731218837,
+    "formula": "T = 82.4360 + 0.61206*n + 39.182*B36 + 0.063602*P128 + 12.751*S1024 - 68.514*D128 + 1.1701*C + 27.214*BR + 3.3951*W128 - 40.68*S64",
+    "cv_mape": 13.038811170109145
+   }
+  },
+  "cv_mape_5fold": 13.455244735948941,
+  "cv_mape_5fold_all": {
+   "compact5": 15.96020144945058,
+   "primary8": 13.455244735948941,
+   "extended10": 13.038811170109145
+  },
+  "greedy_reference": "greedy union-pool (624 keys, unconstrained WLS, w=1/T) saturates at k=47 -> 13.57% in-sample, but its 5-fold CV (same term list refit per fold) is 17.57%; parent-reported 73-term greedy = 11.08% could not be reproduced on this exact 678-pt set (my reproductions: 614-key v11 pool k=35 -> 16.12%, same pool with R=1 kept (750 pt) k=53 -> 14.09%)",
+  "trajectory": [
+   "1 -> 51.76%",
+   "1+n -> 45.36%",
+   "1+[C*eb<32]*L@64 -> 29.95%",
+   "1+n+[C*eb<32]*L@64 -> 21.10%",
+   "+pairs@128 -> 16.84%",
+   "+share@1KB -> 15.81%",
+   "+deduction [C*eb<32]*multi@128 -> 14.88%",
+   "+C -> 13.97%",
+   "+[C*eb<32]*R -> 13.18% (primary8)"
+  ],
+  "notes": "2-D gather is the SAME one-BIU-command-per-element machine as gather_r1 (CAModel: biu_send_count = n), but the 256B crowding computed on the 1-D stride pattern is the WRONG block set for a comb tile: corr(w@256B, T) = 0.121 and corr(w@128B, T) = 0.149, and a 1+n model is 45.4%.  Two mechanisms dominate instead. (1) A REGIME SWITCH at C*eb = 32 B - the MTE minimum burst.  When the payload of one row is narrower than a single minimum burst the tile cannot be walked as row bursts, and each block fetch plus each row burst is paid separately: [C*eb<32]*L@64B (+40.6 ns per 64B block) and [C*eb<32]*R (+25.1 ns per row burst).  This one indicator takes 1+n from 45.4% to 21.1%; it is the same threshold the repo already recorded as 'SIMD 2-4x slower when C*eb < 32' (fit_v11_stepwise comment). (2) SAME-BLOCK CROWDING of the 2-D address set, but at 128 B rather than 256 B: pairs@128B = sum over blocks of cnt*(cnt-1) (elements colliding inside one 128B line), +0.0844 ns per colliding pair. The DEDUCTION asked for is real and measurable: when several rows land in the same 128B line the line is fetched once for all of them, so the model credits -71.6 * [C*eb<32] * multi@128B (multi = 128B lines touched by >= 2 rows); that single term is worth 0.93 MAPE points (15.81 -> 14.88).  In the equivalent parameterisation 49.9*[C*eb<32]*Lrow@64B - 77.0*[C*eb<32]*share@64B the credit (77.0) is 1.55x the price of one row-line incidence (49.9), i.e. sharing across rows is worth more than one full duplicate fetch.  By contrast share@1KB has a POSITIVE coefficient: rows that share a 1KB block are rows whose pitch is small - a comb with dense teeth - and that costs extra. Residuals are flat across dtype (11.4-15.1%), C (11.0-15.2%), regime (13.1/13.3%) and campaign (12.3/14.7%).  The data is intrinsically noisy: target_spread up to 1.51 and the two 2-D campaigns (v1_2d/v3_2d) differ by up to 2.6x on repeated configurations. COMPARISON WITH GREEDY: this 8-term physical form (13.18% in-sample, 13.46% 5-fold CV) beats a fully data-driven greedy over a 624-key pool, which saturates at k=47 -> 13.57% in-sample and 17.57% in CV (i.e. the physics generalises, the greedy overfits). greedy union-pool (624 keys, unconstrained WLS, w=1/T) saturates at k=47 -> 13.57% in-sample, but its 5-fold CV (same term list refit per fold) is 17.57%; parent-reported 73-term greedy = 11.08% could not be reproduced on this exact 678-pt set (my reproductions: 614-key v11 pool k=35 -> 16.12%, same pool with R=1 kept (750 pt) k=53 -> 14.09%)"
+ }
+}

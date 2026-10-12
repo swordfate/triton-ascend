@@ -1,0 +1,106 @@
+{
+ "simd_load_wide_r2": {
+  "n": 222,
+  "mape": 13.1,
+  "n_terms": 8,
+  "n_branches": 3,
+  "formula": "src = C*ISB ; [x]+ = max(0,x)\nA. src >= 32 B  (wide contiguous-block path)   : T = 67.41 + 2.980*R + 2.176*R*[eb-4]+      (n=157, MAPE 12.51%)\nB. src <  32 B and C >= 4 (short-row fallback) : T = 145.7 + 5.384*n + 0.4251*span         (n=33,  MAPE 11.06%)\nC. src <  32 B and C == 1 (degenerate column)  : T = 97.97 + 3.273*n                        (n=32,  MAPE 18.05%)",
+  "terms": [
+   {
+    "name": "A.const",
+    "coef": 67.41,
+    "meaning": "MTE2 fixed start-up / first-byte latency - reproduces the 65.34 ns constant of simd_load_wide_r1"
+   },
+   {
+    "name": "A.R",
+    "coef": 2.98,
+    "meaning": "per-row descriptor issue cost on the wide path (ns/row)"
+   },
+   {
+    "name": "A.R*[eb-4]+",
+    "coef": 2.176,
+    "meaning": "extra per-row cost for elements wider than 4 B (int64: +8.7 ns/row); the row is handled as more than one 4-B transaction"
+   },
+   {
+    "name": "B.const",
+    "coef": 145.7,
+    "meaning": "fixed cost of the fallback path for a real 2-D tile"
+   },
+   {
+    "name": "B.n",
+    "coef": 5.384,
+    "meaning": "per-ELEMENT command cost when a row is too short for a block transfer (ns/element)"
+   },
+   {
+    "name": "B.span",
+    "coef": 0.4251,
+    "meaning": "address-spread cost of the fallback walk (ns per byte of tile span)"
+   },
+   {
+    "name": "C.const",
+    "coef": 97.97,
+    "meaning": "fixed cost of a degenerate (R,1) column load"
+   },
+   {
+    "name": "C.n",
+    "coef": 3.273,
+    "meaning": "per-element cost of the degenerate 1-D column load (ns/element)"
+   }
+  ],
+  "derived": [
+   "R,C = tile rows/cols (R>=2; R==1 shapes are 1-D and dropped)",
+   "eb = element bytes (1,2,4,8)",
+   "ISB = inner stride bytes (2*eb for C>=2, eb for C==1)",
+   "rb = (C-1)*ISB + eb     = contiguous byte footprint of one row",
+   "src = C*ISB             = source bytes spanned by one row's strided pattern (= rb + eb when IS=2)",
+   "pitch = OS*eb           = row-to-row distance (bytes)",
+   "span = (R-1)*pitch + rb = total tile address footprint (bytes)",
+   "n = R*C = element count",
+   "GATE: src >= 32 B  <=>  a row's strided source covers at least one full 32-B memory sector"
+  ],
+  "residuals": {
+   "branch_A_mape": 12.51,
+   "branch_B_mape": 11.06,
+   "branch_C_mape": 18.05,
+   "mape_excl_C_eq_1": 12.26,
+   "median_abs_pct": 11.2,
+   "p90_abs_pct": 26.8,
+   "max_abs_pct": 69.0,
+   "by_dtype": {
+    "int8": 10.8,
+    "float16": 11.2,
+    "float32": 12.1,
+    "int64": 18.3
+   },
+   "by_C": {
+    "1": 18.1,
+    "4": 17.1,
+    "8": 12.3,
+    "16": 11.5,
+    "32": 10.2,
+    "64": 4.8
+   },
+   "worst10": [
+    "R=4 C=1 eb=4 src=4 rb=4 pitch=64 n=4 T=358.4 pred=111.1 err=-69%",
+    "R=8 C=4 eb=8 src=64 rb=56 pitch=256 n=32 T=104.2 pred=160.9 err=+54%",
+    "R=16 C=1 eb=1 src=1 rb=1 pitch=16 n=16 T=296.0 pred=150.3 err=-49%",
+    "R=4 C=8 eb=8 src=128 rb=120 pitch=1024 n=32 T=78.8 pred=114.1 err=+45%",
+    "R=16 C=1 eb=4 src=4 rb=4 pitch=8 n=16 T=265.5 pred=150.3 err=-43%",
+    "R=16 C=1 eb=8 src=8 rb=8 pitch=128 n=16 T=105.0 pred=150.3 err=+43%",
+    "R=8 C=4 eb=8 src=64 rb=56 pitch=128 n=32 T=112.4 pred=160.9 err=+43%",
+    "R=4 C=1 eb=4 src=4 rb=4 pitch=32 n=4 T=195.1 pred=111.1 err=-43%",
+    "R=4 C=1 eb=2 src=2 rb=2 pitch=32 n=4 T=192.1 pred=111.1 err=-42%",
+    "R=16 C=1 eb=2 src=2 rb=2 pitch=4 n=16 T=259.6 pred=150.3 err=-42%"
+   ]
+  },
+  "comparison": {
+   "user_greedy_17_terms": 17.1,
+   "our_greedy_76feat_17_terms": 12.39,
+   "our_greedy_76feat_20_terms": 12.12,
+   "this_model_8_coeffs": 13.1,
+   "two_branch_variant_8_coeffs": 15.68,
+   "three_branch_extended_15_coeffs": 12.27
+  },
+  "notes": "GATE (the key new finding). For every C>=2 row IS=2, hence src = C*ISB = rb + eb. The 222 points split EXACTLY at src = 32 B: 157 points with src>=32 have T in [70.7, 547.9]; 65 points with src<32 have T in [90.9, 2528.0]. src<32 means one row's strided source does not even cover a single 32-B memory sector, so the compiler cannot use the contiguous block-copy + extract_slice lowering (the one confirmed for the wide branch) and the load degenerates to a per-element strided-command path that costs 10-30x more per element. On this grid src>=32 is simultaneously equivalent to C*eb>=16 (>=16 B of payload per row) and to rb >= 32-eb; the data cannot separate these three readings, and no measured shape falls between rb=15 and rb=28. This is why forms such as T = a + b*R*max(32,row_bytes) stall at 26-28%: they model only branch A, and branch A is not byte-driven at all. BRANCH A physics: after the block path is available the cost is 67 ns of start-up plus ~3 ns per row descriptor, plus a large per-row penalty for 8-B elements. Bytes moved (R*rb) and element count n are nearly irrelevant inside A - (R=16,C=8,eb=4,rb=60)=110.9 ns and (R=16,C=16,eb=4,rb=124)=107.1 ns; at fixed R=16,eb=8 the whole C range 4..32 moves T only from 303 to 341 ns, while at fixed n=64 the R range 4..16 moves T from 120 to 303 ns - so branch A is descriptor/row driven, not byte driven. BRANCH B physics: per-element command cost (5.38 ns/elem) plus an address-spread term (0.43 ns per byte of span); same shape as simd_load_gather_r1 but with a far larger per-element constant. BRANCH C: C==1 tiles have no inner dimension, so ISB is meaningless - these 32 points are really 1-D strided loads that the slot rule put here because ISB=eb<=2*eb. They are internally inconsistent (for int8/int64 a larger pitch is FASTER, for float16/float32 SLOWER), so only a 2-term form is defensible; the 1-D formula simd_load_wide_r1 (65.34+0.008652*span) gives 50.5% on them and does NOT transfer. VERDICT: the 8-coefficient physical model (13.10%) BEATS the user's greedy (17.10%, 17 items) and comes within 0.7 pt of a 17-term greedy over a 76-feature library (12.39%); with 15 coefficients it matches it (12.27%). A 2-branch variant that folds C==1 into branch B (T = 77.22 + 8.979*n - 0.06528*span) gives 15.68%. REMAINING RESIDUAL (median 11.2%, p90 26.8%, max 69%) has no structure we could tie to a physical quantity: the worst points are R=4 int64 rows (block path, over-predicted because the int64 per-row penalty is not yet active at R=4) and C==1 columns. The slot also carries irreducible measurement noise (target_spread up to 0.97)."
+ }
+}

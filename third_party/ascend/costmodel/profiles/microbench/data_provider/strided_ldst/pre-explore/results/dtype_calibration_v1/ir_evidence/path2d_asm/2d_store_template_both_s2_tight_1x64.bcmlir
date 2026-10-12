@@ -1,0 +1,33 @@
+#loc = loc("/home/c00946898/strided-template-calibration-v2/scripts/stride2d_path_check.py":52:0)
+#loc2 = loc("/home/c00946898/strided-template-calibration-v2/scripts/stride2d_path_check.py":54:56)
+#map = affine_map<(d0) -> (d0)>
+#loc7 = loc("out_ptr"(#loc))
+#loc9 = loc("offs"(#loc2))
+module attributes {hacc.target = #hacc.target<"Ascend950PR_9579">, ssbuffer.insertionOptimization} {
+  func.func @check2d_store_kernel(%arg0: memref<?xi8> loc("/home/c00946898/strided-template-calibration-v2/scripts/stride2d_path_check.py":52:0), %arg1: memref<?xi8> loc("/home/c00946898/strided-template-calibration-v2/scripts/stride2d_path_check.py":52:0), %arg2: memref<?xf32> {tt.divisibility = 16 : i32, tt.tensor_kind = 1 : i32} loc("out_ptr"(#loc)), %arg3: i32 loc("/home/c00946898/strided-template-calibration-v2/scripts/stride2d_path_check.py":52:0), %arg4: i32 loc("/home/c00946898/strided-template-calibration-v2/scripts/stride2d_path_check.py":52:0), %arg5: i32 loc("/home/c00946898/strided-template-calibration-v2/scripts/stride2d_path_check.py":52:0), %arg6: i32 loc("/home/c00946898/strided-template-calibration-v2/scripts/stride2d_path_check.py":52:0), %arg7: i32 loc("/home/c00946898/strided-template-calibration-v2/scripts/stride2d_path_check.py":52:0), %arg8: i32 loc("/home/c00946898/strided-template-calibration-v2/scripts/stride2d_path_check.py":52:0)) attributes {SyncBlockLockArgIdx = 0 : i64, WorkspaceArgIdx = 1 : i64, global_kernel = "local", mix_mode = "aiv", parallel_mode = "simd"} {
+    %c7_i32 = arith.constant 7 : i32 loc(#loc8)
+    %0 = tensor.empty() : tensor<1x64xi32> loc(#loc8)
+    %1 = linalg.fill ins(%c7_i32 : i32) outs(%0 : tensor<1x64xi32>) -> tensor<1x64xi32> loc(#loc8)
+    %2 = tensor.empty() : tensor<64xi32> loc(#loc9)
+    %3 = linalg.generic {indexing_maps = [#map], iterator_types = ["parallel"]} outs(%2 : tensor<64xi32>) attrs =  {tt.from_make_range, tt.make_range_offset = 0 : index, tt.make_range_size = 64 : index} {
+    ^bb0(%out: i32 loc("offs"(#loc2))):
+      %6 = linalg.index 0 : index loc(#loc9)
+      %7 = arith.index_cast %6 : index to i32 loc(#loc9)
+      linalg.yield %7 : i32 loc(#loc9)
+    } -> tensor<64xi32> loc(#loc9)
+    %expanded = tensor.expand_shape %3 [[0, 1]] output_shape [1, 64] : tensor<64xi32> into tensor<1x64xi32> loc(#loc10)
+    %4 = arith.remsi %expanded, %1 : tensor<1x64xi32> loc(#loc8)
+    %reinterpret_cast = memref.reinterpret_cast %arg2 to offset: [0], sizes: [1, 64], strides: [64, 2] : memref<?xf32> to memref<1x64xf32, strided<[64, 2]>> loc(#loc4)
+    %5 = arith.sitofp %4 : tensor<1x64xi32> to tensor<1x64xf32> loc(#loc5)
+    bufferization.materialize_in_destination %5 in writable %reinterpret_cast : (tensor<1x64xf32>, memref<1x64xf32, strided<[64, 2]>>) -> () loc(#loc6)
+    return loc(#loc)
+  } loc(#loc)
+} loc(#loc)
+#loc1 = loc("/home/c00946898/strided-template-calibration-v2/scripts/stride2d_path_check.py":55:69)
+#loc3 = loc("/home/c00946898/strided-template-calibration-v2/scripts/stride2d_path_check.py":54:59)
+#loc4 = loc("/home/c00946898/strided-template-calibration-v2/scripts/stride2d_path_check.py":56:23)
+#loc5 = loc("/home/c00946898/strided-template-calibration-v2/scripts/stride2d_path_check.py":56:34)
+#loc6 = loc("/home/c00946898/strided-template-calibration-v2/scripts/stride2d_path_check.py":56:29)
+#loc8 = loc("v"(#loc1))
+#loc10 = loc("offs"(#loc3))
+

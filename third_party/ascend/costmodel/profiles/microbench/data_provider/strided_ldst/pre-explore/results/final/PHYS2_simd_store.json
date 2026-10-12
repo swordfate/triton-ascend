@@ -1,0 +1,179 @@
+{
+ "simd_store_r1": {
+  "n": 189,
+  "mape": 5.33,
+  "loo_mape": 5.55,
+  "n_terms": 5,
+  "formula": "T = 23.55 + 0.1858*nbytes + 85.46*mx128 + 0.4389*S64 + 0.05726*S512",
+  "terms": [
+   {
+    "name": "1",
+    "coef": 23.5488,
+    "meaning": "MTE3 固定启动 / 首字节延迟（ns）"
+   },
+   {
+    "name": "nbytes",
+    "coef": 0.1858,
+    "meaning": "写入总字节数 n*eb；stride 访问下每元素一条 BIU 写命令把数据推过写通道的等效字节代价（ns/byte）"
+   },
+   {
+    "name": "mx128",
+    "coef": 85.46,
+    "meaning": "最挤 128B line 内本 tile 的元素数 = 该 line 上 read-modify-write（RMW）串行链的长度（ns/元素），~85 ns 即一次 RMW 往返"
+   },
+   {
+    "name": "S64",
+    "coef": 0.4389,
+    "meaning": "对 64B 块求 k^2 之和 = 64B 粒度冲突对总和（RMW 引擎有限并发下的排队量）"
+   },
+   {
+    "name": "S512",
+    "coef": 0.0573,
+    "meaning": "对 512B 块求 k^2 之和 = 512B 粒度冲突对总和"
+   }
+  ],
+  "derived": [
+   "addr(i) = i*ISB（rank-1，基址 0 对齐）；用数据集自带的 f_L / f_line_elems_max 对全部 291 点逐点校验通过",
+   "kB = 落在同一 B 字节块内的元素数；mxB = max kB；SB = sum kB^2",
+   "nbytes = n * eb"
+  ],
+  "scope": {
+   "filters": [
+    "eb <= 4（int8/float16/float32）：真实算子主数据通路不用 int64 存储（int64 占本 slot 27%），且第一轮 eb=8 子群误差 14% 明显拉高整体",
+    "ISB <= 128：内层步长不超过一条 cache line；ISB>128 时每个元素独占一行，已不是 tile 访存而是纯散列（scatter）（占本 slot 8%）",
+    "ISB >= 2*eb（隐含，数据本身保证）：本 slot 无任何连续写形状；连续写走编译器宽路径（wide）/整块分支（实测 ~79 ns 与元素数无关），本公式不覆盖"
+   ],
+   "n_all": 291,
+   "n_kept": 189,
+   "keep_ratio": 0.6495,
+   "removed_reason_breakdown": {
+    "eb>4 (int64)": 78,
+    "ISB>128 (纯 scatter)": 24
+   },
+   "tested_but_not_applied": [
+    "n>=32：加上后保留 115 点、MAPE 反而升到 7.00%（无改善），按“无改善不加门槛”原则不加"
+   ]
+  },
+  "mape_full_slot": 8.81,
+  "round1_for_reference": {
+   "formula": "T = 10.75 + 0.4601*n + 87.05*mx128 + 2.977*mx32 + 0.4146*S32 + 0.08581*S512",
+   "mape_full_slot": 9.69,
+   "mape_on_new_scope": 5.69
+  },
+  "independent_validation": {
+   "source": "results/wide12/1d_store_simd_*.json（独立测量批次，1D simd store，stride=2 即 ISB=2*eb 的点）",
+   "n_points": 27,
+   "mape": 5.13,
+   "max_abs_err": 25.25,
+   "round1_mape_same_points": 4.92,
+   "n_points_block_le_512": 24,
+   "mape_block_le_512": 4.97,
+   "round1_mape_block_le_512": 4.67,
+   "note": "同一批 stride=1 的连续写点（不在 scope 内）本公式完全失效（预测放大数百倍），因为连续写走 wide 分支、代价与元素数几乎无关（实测恒 ~79 ns）"
+  },
+  "notes": "物理图像：stride>=2 的写每个元素只覆盖 128B line 的一小部分 -> 部分写 -> 该 line 需要 read-modify-write（RMW）；同一 line 上的 k 个写必须串行（line 是单一 RMW 资源），所以关键路径 = 最挤 line 的 k（系数 85.5 ns ≈ 一次 RMW 往返），这与“所有元素挤在一条 line 时 T ≈ 87-95 ns/元素”完全一致。S64/S512 描述 RMW 引擎并发度有限时，不同块之间的冲突对也要付费（S64 权重 0.44 是主项，S512 权重 0.057 是次项）。nbytes 是数据真正被搬过写通道的字节量。第一轮的 n / mx32 / S32 三项在本 scope 上被 nbytes / S64 取代：rank-1 里 n 与 n*eb 在固定 dtype 下共线，但跨 dtype 时 nbytes 明显更好（同为 4 项 9.83% -> 5.54%）；mx32 在 ISB>=2eb 时被 S64 吸收。独立验证（不同测量批次 results/wide12 的 1D simd store，stride=2 即 ISB=2*eb 的点，共 27 个）：本公式 MAPE 5.13%，第一轮公式 4.92%（两者相当；wide12 的 n 最大到 1024，超出本 slot 的 n<=512，属外推区）。限制到 block<=512 的 24 点：本公式 4.97% vs 第一轮 4.67%。局限：(1) 本 slot 无连续写形状，ISB==eb 的连续写走编译器宽路径（wide）/整块分支（实测恒 ~79 ns、与元素数几乎无关），本公式禁止外推；(2) 按 scope 剔除后只覆盖 eb<=4 且 ISB<=128。",
+  "contiguous_branch": {
+   "condition": "ISB == eb（连续写）",
+   "n": 36,
+   "mape": 4.11,
+   "formula": "T = 76.73 + 0.01125868 * nbytes   （nbytes = n * eb，写入字节数）",
+   "terms": [
+    {
+     "name": "const",
+     "coef": 76.73,
+     "meaning": "MTE3 固定启动 + 首字节延迟"
+    },
+    {
+     "name": "nbytes",
+     "coef": 0.01125868,
+     "meaning": "等效写带宽；1/系数 = 89 GB/s"
+    }
+   ],
+   "notes": "连续写走整块写路径：实测 4 个 dtype、nbytes 从 4 到 8192 字节，T 只从 ~79 ns 升到 ~220 ns，而同样数据量下 stride=2 的 strided 写要 401 倍。两者是完全不同的代价律，必须分开分支。实测来源：results/wide12（int8/float16/float32）与 results/dir23（int64）。注意：数据仅覆盖 nbytes <= 8192 的小 tile。"
+  }
+ },
+ "simd_store_r2": {
+  "n": 325,
+  "n_points_raw_before_R1_filter": 943,
+  "mape": 8.62,
+  "loo_mape": 8.73,
+  "n_terms": 4,
+  "formula": "T = 42.19 + 0.1661*nbytes + 74.23*mx128 + 0.3797*S128",
+  "terms": [
+   {
+    "name": "1",
+    "coef": 42.1909,
+    "meaning": "MTE3 固定启动 / 首字节延迟（ns）"
+   },
+   {
+    "name": "nbytes",
+    "coef": 0.1661,
+    "meaning": "写入总字节数 n*eb；每元素一条 BIU 写命令的等效字节吞吐代价（ns/byte）"
+   },
+   {
+    "name": "mx128",
+    "coef": 74.2261,
+    "meaning": "最挤 128B line 内的元素数 = 该 line 上 RMW 串行链的长度（关键路径），~74 ns ≈ 一次 RMW 往返"
+   },
+   {
+    "name": "S128",
+    "coef": 0.3797,
+    "meaning": "对 128B line 求 k^2 之和 = line 级冲突对总和（RMW 引擎有限并发下的聚合排队量）"
+   }
+  ],
+  "derived": [
+   "addr(r,c) = r*row_pitch_bytes + c*ISB（基址 0 对齐）；已用数据集自带的 f_L / f_line_elems_max 对全部 851 点逐点校验通过",
+   "kB = 落在同一 B 字节块内的元素数；mxB = max kB；SB = sum kB^2",
+   "nbytes = n*eb；C*eb = 一行的写入字节数"
+  ],
+  "scope": {
+   "filters": [
+    "C*eb >= 32（每行至少写满一个 32B sector beat）：本轮找到的关键结构性边界，见 notes；剔除 341 点（占本 slot 40.1%），全族 MAPE 从 27.0% 降到 10.2%，再加 eb<=4 后降到 8.6%",
+    "eb <= 4（int8/float16/float32）：真实算子主数据通路不用 int64 存储（int64 占本 slot 23%）",
+    "ISB >= 2*eb（隐含，数据本身保证）：无任何连续写形状；连续写走宽路径（wide）分支，本公式不覆盖"
+   ],
+   "n_all": 851,
+   "n_kept": 325,
+   "keep_ratio": 0.3819,
+   "removed_reason_breakdown": {
+    "C*eb<32 (行不足一个 32B sector beat)": 341,
+    "eb>4 (int64)": 185
+   },
+   "tested_but_not_applied": [
+    "n>=32：加上后 317 点 MAPE 8.65%（略差于 325 点 8.62%），无改善不加",
+    "ISB<=128：eb<=4 时数据最大 ISB=64，自动满足",
+    "R>32：数据最大 R=32，无此子集",
+    "pitch 上限：C*eb>=32 后 pitch 子群 MAPE 已在 4-14%，不再是主要误差来源，不加"
+   ]
+  },
+  "mape_full_slot": 27.0,
+  "round1_for_reference": {
+   "formula": "T = 0.2845*n + 85.72*mx128 + 29.65*mx32 + 1.193*S32 + 0.02079*S512",
+   "mape_full_slot": 25.26,
+   "mape_on_new_scope": 10.24
+  },
+  "notes": "物理图像与 r1 同族：stride>=2 的写是部分写 -> 128B line 需要 read-modify-write；同一 line 上的 k 个写串行，所以关键路径 = 最挤 line 的元素数 mx128（系数 74.2 ns ≈ 一次 RMW 往返，与 r1 的 85.5 一致）。区别只在冲突聚合的粒度：rank-2 的行分段让冲突集中在 line 级，故 S128（line 级冲突对）取代了 r1 的 S64/S512。第一轮的 rank-2 公式（mx32 系数 29.7、S32、S512）在本 scope 上仍有 11.9%，被本轮 4 项公式 8.62% 取代；LOO 8.73%，无过拟合迹象。残差已无明显结构：按 eb/ISB/C/Ceb/pitch 分组 MAPE 均 4-10%、bias 在 ±7% 内；仅两个小子群偏弱 —— R=32（23 点，MAPE 17%）与 pitch=128（14 点，MAPE 14%）。本轮找到的结构性边界是 C*eb>=32（每行至少写满一个 32B sector beat）。C*eb<32 时存在一个与拥挤度特征完全正交的额外代价：同一字节地址集合下 eb=1 比 eb=2 慢约 5 倍；eb=1,C=16,ISB=16,pitch=512,R=32 与 eb=1,C=32,ISB=16,pitch=1024,R=16 的 n/L/每线元素数/所有 SB 完全相同，T 却分别是 18943 与 2625 ns（7.2 倍）。该额外代价占总时间的中位数为 50%，要拟合它必须引入额外的 hinge 项（最好 3 项也只有 18.4%），会破坏公式的物理简洁性。真实算子 tile 的内维一次写入 >= 32B，故该子集不属于真实算子范围，予以剔除。局限：(1) 本 slot 无连续写形状，ISB==eb 禁止外推；(2) 只覆盖 eb<=4 且每行写入 >=32B。",
+  "contiguous_branch": {
+   "condition": "ISB == eb（连续写）",
+   "n": 36,
+   "mape": 4.11,
+   "formula": "T = 76.73 + 0.01125868 * nbytes   （nbytes = n * eb，写入字节数）",
+   "terms": [
+    {
+     "name": "const",
+     "coef": 76.73,
+     "meaning": "MTE3 固定启动 + 首字节延迟"
+    },
+    {
+     "name": "nbytes",
+     "coef": 0.01125868,
+     "meaning": "等效写带宽；1/系数 = 89 GB/s"
+    }
+   ],
+   "notes": "连续写走整块写路径：实测 4 个 dtype、nbytes 从 4 到 8192 字节，T 只从 ~79 ns 升到 ~220 ns，而同样数据量下 stride=2 的 strided 写要 401 倍。两者是完全不同的代价律，必须分开分支。实测来源：results/wide12（int8/float16/float32）与 results/dir23（int64）。注意：数据仅覆盖 nbytes <= 8192 的小 tile。"
+  }
+ },
+ "_meta": {
+  "contiguous_branch_added": "方向2：补测连续写（stride=1），4 dtype 共 36 点，MAPE 4.11%"
+ }
+}

@@ -1,0 +1,348 @@
+{
+ "simd_load_wide_r1": {
+  "n": 21,
+  "mape": 1.2232,
+  "n_terms": 3,
+  "n_branches": 2,
+  "formula": "span_bytes = (n-1)*ISB + eb     (tile 首字节到末字节的连续字节跨度；21 个保留点全部 ISB = 2*eb)\nT = 65.1033 + 0.00847947*span_bytes - 0.00478897*max(0, span_bytes - 1536)",
+  "terms": [
+   {
+    "name": "常数项",
+    "coef": 65.1033,
+    "meaning": "MTE2 宽路径（stride<=2 时编译器做连续块搬运 + extract_slice，extract 代价 ~0）的固定启动代价：descriptor 下发 + 第一个 burst 的响应延迟。"
+   },
+   {
+    "name": "0.00847947*span_bytes",
+    "coef": 0.00847947,
+    "meaning": "未饱和段（ramp）的**每字节时间开销**，其倒数 1/0.00847947 = 117.9 GB/s。搬运量还不足以填满 MTE2 的流水线时，字节只能以这个较低速率通过；它作用于整段 span_bytes（含 stride=2 跳过的空洞字节），因为宽路径是把整段连续字节搬回来再抽片。"
+   },
+   {
+    "name": "-0.00478897*max(0, span_bytes-1536)",
+    "coef": -0.00478897,
+    "meaning": "流水线饱和抵扣。字节跨度超过约 1.5 KB 后引擎进入稳态，**每字节时间开销**从 0.00847947 降到 0.00369050 ns/B（117.9 → 271 GB/s）；这个负 hinge 把 ramp 段多收的差价退还给超出部分，等价于硬件走两条通路里更快的那条：短拷贝填不满流水线（走 ramp），长拷贝摊薄填充代价（走稳态）。1536 B = 3 × 512 B，与 burst 粒度同量级。"
+   }
+  ],
+  "derived": [
+   "span_bytes = (n-1)*ISB + eb（首字节到末字节的连续跨度；全部保留点 ISB = 2*eb，即 stride=2）",
+   "饱和抵扣项 = -0.00478897*max(0, span_bytes - 1536)：span_bytes <= 1536 B 时不生效，超过后按超出部分退还",
+   "1536 B 是扫描出的机制交点（最优 1584 B，平台 1408-1664 B），取 3 × 512 B 作为物理圆整值",
+   "槽规则：path==simd, op==load, rank==1, ISB <= 2*eb；本槽内 ISB 恒等于 2*eb（全部 stride=2）"
+  ],
+  "notes": "【模型】宽路径把整段连续字节（含 stride=2 跳过的空洞）搬回来再做 extract_slice，extract 本身不花代价。\n搬运费率是分段线性的：短拷贝填不满 MTE2 流水线，走 ramp 段（117.9 GB/s）；超过约 1.5 KB 后进入稳态（271 GB/s）。\n等价的 min 形式说明硬件总是走两条通路里更快的那条。\n【限制】第二分支只由 3 个点（span = 2044 / 2046 / 4092 B）约束；交点 K 在留一法下 20/21 折稳定落在 1408–1664 B，\n但留出 span=4092 那一折会把 K 选到 2032 并外推出负斜率，因此 >4 KB 外推不可信。取 K∈{1024,2048} 时嵌套留一法仍为 1.77%。\n【数据退化】该槽 21 点全部 R=1、W=1、ISB=2*eb，因此 span=(2n−1)*eb 与 n*eb 完全共线（corr 0.99999931），\ndescriptor 数恒为 1，实际只有 2 个自由度（span、eb）。加 eb 或 n 的第三项只到 1.61%，说明代价是按字节计而不是按元素计。",
+  "scope": {
+   "filter_names": [
+    "eb<=4",
+    "spread<=0.2"
+   ],
+   "filters": [
+    "eb<=4 —— 8 字节（int64）元素在目标 AI 算子组合中很少见（matmul / softmax / layernorm / attention / elementwise 用的是 int8 / f16 / f32），而它们属于另一种硬件区制：对 int64 而言宽路径由 line 数和行数驱动，并带有一个明显的超线性拐点（相同行几何下 L = 2 / 8 / 16 / 32 的实测中位数为 79 / 181 / 330 / 540 ns），因此若不把项数翻倍，一个公式无法同时覆盖两种区制。",
+    "target_spread <= 0.2 —— 这是测量稳定性判据，而非算子真实性判据。target_spread 是同一配置重复 Event 采样值的相对离散度（(max-min)/mean 形式，0 = 完全可重复）。超过 0.2 意味着同一用例的两次重复测量之差超过其均值的 20%：该点处于已记录的双稳态区制，不是算子的固有属性。误差质量正集中在这条尾部：simt_load_r2 中 spread>0.2 的 66 个点（占该槽 5%）MAPE 为 32-47%，却贡献了总误差质量的 24%；simt_load_r1 同样如此（27 点，占误差质量 18%）。"
+   ],
+   "n_all": 32,
+   "n_kept": 21,
+   "keep_ratio": 0.656,
+   "removed_total": 11,
+   "removed_reason_breakdown": {
+    "eb<=4": 8,
+    "spread<=0.2": 3
+   }
+  },
+  "residuals": {
+   "mape": 1.2232,
+   "median_bias_pct": 0.05,
+   "p50_abs_pct": 1.0,
+   "p90_abs_pct": 2.8,
+   "max_abs_pct": 4.23,
+   "by_dtype": {
+    "float16": 1.04,
+    "float32": 1.24,
+    "int8": 1.49
+   },
+   "by_eb": {
+    "eb=1": 1.49,
+    "eb=2": 1.04,
+    "eb=4": 1.24
+   },
+   "by_ISB": {
+    "ISB=2": 1.49,
+    "ISB=4": 1.04,
+    "ISB=8": 1.24
+   },
+   "by_n": {
+    "n=128": 0.99,
+    "n=16": 1.65,
+    "n=256": 0.7,
+    "n=32": 0.87,
+    "n=4": 0.85,
+    "n=512": 0.06,
+    "n=64": 3.0,
+    "n=8": 1.11
+   },
+   "by_W": {
+    "W=1": 1.22
+   },
+   "worst6": [
+    "T=66.6 pred=69.4 err=+4% | n=64 eb=4 ISB=8 span=508 L=4 mwl=2.00 it=2 spread=0.000",
+    "T=67.3 pred=65.4 err=-3% | n=16 eb=1 ISB=2 span=31 L=1 mwl=1.00 it=1 spread=0.000",
+    "T=65.4 pred=67.3 err=+3% | n=64 eb=2 ISB=4 span=254 L=2 mwl=1.00 it=2 spread=0.000",
+    "T=67.1 pred=65.6 err=-2% | n=32 eb=1 ISB=2 span=63 L=1 mwl=1.00 it=1 spread=0.000",
+    "T=67.5 pred=66.2 err=-2% | n=64 eb=1 ISB=2 span=127 L=1 mwl=1.00 it=2 spread=0.000",
+    "T=64.9 pred=66.2 err=+2% | n=16 eb=4 ISB=8 span=124 L=1 mwl=1.00 it=1 spread=0.000"
+   ]
+  },
+  "comparison": {
+   "round1_model_full_slot": 4.11,
+   "round1_model_on_kept": 2.65,
+   "round2_model_2term_no128B": 1.7284,
+   "round2_model_2term_loo": 2.1256,
+   "this_model": 1.2232,
+   "this_model_loo": 1.3938,
+   "best_128B_feature_model_span_plus_conc1k": 1.3016,
+   "best_128B_feature_model_loo": 1.6427
+  },
+  "mte_128b_purge": {
+   "audit": "本公式（旧/新）都不含 128B 假设；128B 只出现在旧条目的调试字符串与 scope 之外的槽位",
+   "removed_or_banned_features": [
+    "f_L",
+    "f_mean_warp_lines",
+    "f_line_elems_max",
+    "f_line_elems_min",
+    "f_line_request_size",
+    "f_line_density",
+    "conc1k(max 128B lines per 1KB block)",
+    "L128",
+    "span(以 128B 为单位)",
+    "lines_per_elem",
+    "comb_lines",
+    "dup",
+    "gap_lines",
+    "row_lines",
+    "max_L_minus_32",
+    "dupL_minL_128",
+    "cross_minL_32",
+    "lowW_4_L"
+   ],
+   "kept_selfcomputed_128b_free": [
+    "L128",
+    "mx128",
+    "pairs128",
+    "S128",
+    "multi128",
+    "wrow128"
+   ],
+   "bucket_features_granularity_checked": {
+    "f_bucket_pairs_2k8 / f_bucket_worst_2k8": "粒度 2048 B，8 个桶（stride_feature_reference.py:312-318）-> 不含 128B，可用",
+    "f_bucket_pairs_32k16 / f_bucket_worst_32k16": "粒度 32768 B，16 个桶 -> 不含 128B，可用",
+    "note": "二者在本槽无贡献（2k8 版本在本槽近似 n-1），最终公式未使用"
+   },
+   "in_sample_before": 1.7284,
+   "in_sample_after": 1.2232,
+   "loo_before": 2.1256,
+   "loo_after": 1.3938,
+   "verdict": "去掉 128B 后不但不退化，反而更好：MTE 原生的'两机制交点'因子把 MAPE 从 1.7284% 降到 1.2232%"
+  },
+  "burst_scan": {
+   "note": "B=128 按要求跳过。pure = c0+c1*ceil(span/B)；+waste = 再加 c2*(ceil*B-span)；+mx = 再加最挤 B 块内元素数",
+   "pure": [
+    {
+     "B": 16,
+     "mape": 1.7316,
+     "loo": 2.1289
+    },
+    {
+     "B": 32,
+     "mape": 1.7262,
+     "loo": 2.1241
+    },
+    {
+     "B": 64,
+     "mape": 1.7411,
+     "loo": 2.1469
+    },
+    {
+     "B": 256,
+     "mape": 1.9549,
+     "loo": 2.4566
+    },
+    {
+     "B": 512,
+     "mape": 2.3479,
+     "loo": 3.0022
+    },
+    {
+     "B": 1024,
+     "mape": 3.2638,
+     "loo": 4.2615
+    },
+    {
+     "B": 2048,
+     "mape": 4.431,
+     "loo": 5.4481
+    },
+    {
+     "B": 4096,
+     "mape": 5.812,
+     "loo": 6.0717
+    },
+    {
+     "B": 8192,
+     "mape": 5.812,
+     "loo": 6.0717
+    }
+   ],
+   "plus_waste": [
+    {
+     "B": 16,
+     "mape": 1.6129,
+     "loo": 2.0797
+    },
+    {
+     "B": 32,
+     "mape": 1.7558,
+     "loo": 2.5584
+    },
+    {
+     "B": 64,
+     "mape": 1.747,
+     "loo": 2.2365
+    },
+    {
+     "B": 256,
+     "mape": 1.7537,
+     "loo": 2.3106
+    },
+    {
+     "B": 512,
+     "mape": 1.7194,
+     "loo": 2.3203
+    },
+    {
+     "B": 1024,
+     "mape": 1.3955,
+     "loo": 1.8039
+    },
+    {
+     "B": 2048,
+     "mape": 1.301,
+     "loo": 3.2564
+    },
+    {
+     "B": 4096,
+     "mape": 1.7284,
+     "loo": 2.1256
+    },
+    {
+     "B": 8192,
+     "mape": 1.7284,
+     "loo": 2.1256
+    }
+   ],
+   "plus_mx": [
+    {
+     "B": 16,
+     "mape": 1.5515,
+     "loo": 2.0068
+    },
+    {
+     "B": 32,
+     "mape": 1.5805,
+     "loo": 2.0335
+    },
+    {
+     "B": 64,
+     "mape": 1.6149,
+     "loo": 2.0641
+    },
+    {
+     "B": 256,
+     "mape": 1.7183,
+     "loo": 2.2741
+    },
+    {
+     "B": 512,
+     "mape": 1.8487,
+     "loo": 2.5932
+    },
+    {
+     "B": 1024,
+     "mape": 1.9942,
+     "loo": 2.7486
+    },
+    {
+     "B": 2048,
+     "mape": 2.141,
+     "loo": 3.4639
+    },
+    {
+     "B": 4096,
+     "mape": 2.4556,
+     "loo": 2.8324
+    },
+    {
+     "B": 8192,
+     "mape": 2.4556,
+     "loo": 2.8324
+    }
+   ],
+   "best_pure": "B=32 -> 1.7262%（与线性模型等价，细粒度下 ceil 与 span 成正比）",
+   "best_plus_waste": "B=1024 -> 1.3955%（但每块系数为负，非物理）",
+   "best_plus_mx": "B=16 -> 1.5515%",
+   "mechanism_crossing_B": "1536 B（扫描最优 1584 B，平台 1408-1664 B）"
+  },
+  "alternative_simpler": {
+   "formula": "span_bytes = (n-1)*ISB + eb ;  T = 65.7121 + 0.00617256*span_bytes",
+   "mape": 1.7284,
+   "loo": 2.1256,
+   "n_terms": 2,
+   "note": "这是旧公式，已确认不含 128B，仍是本槽最简物理形式（常数 + 单一字节费率）。若下游不接受 min/hinge 结构，保留它作为回退，代价是 MAPE 1.73% 而不是 1.22%。"
+  },
+  "checks": {
+   "span_vs_useful_bytes_corr": 0.99999931,
+   "distinct_R": [
+    1
+   ],
+   "distinct_W": [
+    1.0
+   ],
+   "distinct_ISB_over_eb": [
+    2.0
+   ],
+   "page_cross_all_zero": true,
+   "kink_equals_min_of_two_lines": true,
+   "span_plus_eb": {
+    "mape": 1.6129,
+    "loo": 2.0797
+   },
+   "span_plus_n": {
+    "mape": 1.6131,
+    "loo": 2.0831
+   },
+   "span_plus_conc1k_128B": {
+    "mape": 1.3016,
+    "loo": 1.6427
+   },
+   "pure32": {
+    "mape": 1.7262,
+    "loo": 2.1241
+   },
+   "add128_on_top_of_final": {
+    "conc1k": {
+     "mape": 1.2391,
+     "loo": 2.6456
+    },
+    "L": {
+     "mape": 1.1796,
+     "loo": 1.5295
+    },
+    "mwl": {
+     "mape": 1.2915,
+     "loo": 1.6058
+    },
+    "line_elems_max": {
+     "mape": 1.247,
+     "loo": 1.5257
+    }
+   }
+  }
+ }
+}

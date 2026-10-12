@@ -1,0 +1,511 @@
+{
+  "model_name": "stride2d_strided_v1",
+  "target": "ns/iteration (rotate-loop Event slope, min over valid passes)",
+  "scope": "rank-2 tiles with holes on BOTH axes; R == 1 rank-2 tiles included",
+  "feature_source": "scripts/stride_feature_reference.py",
+  "scheme_rule": "minimum pooled in-sample MAPE, D_per_class excluded",
+  "branches": {
+    "simd_load": {
+      "op": "load",
+      "path": "simd",
+      "n": 24,
+      "axis_classes": [
+        "both_strided",
+        "singleton_row_strided"
+      ],
+      "shapes": [
+        "16x32",
+        "1x256",
+        "1x64",
+        "8x16"
+      ],
+      "recommended_scheme": "W2_inner_split",
+      "candidates": {
+        "A_1d_transfer": {
+          "mape_pct": 460.9808112554301,
+          "p90_pct": 1550.082601837898,
+          "max_pct": 2266.570025956193,
+          "n": 24
+        },
+        "B_2d_refit": {
+          "mape_pct": 56.40098041108615,
+          "p90_pct": 81.82454002535661,
+          "max_pct": 85.22922611703113,
+          "n": 24
+        },
+        "C_2d_gap": {
+          "mape_pct": 41.14304741485416,
+          "p90_pct": 74.15019029651084,
+          "max_pct": 103.01200716385202,
+          "n": 24
+        },
+        "W_whitebox": {
+          "mape_pct": 41.56516309609171,
+          "p90_pct": 77.19623143131521,
+          "max_pct": 80.40258793150154,
+          "n": 24
+        },
+        "W2_inner_split": {
+          "mape_pct": 13.909458505640316,
+          "p90_pct": 26.16443960375967,
+          "max_pct": 31.551080047219614,
+          "n": 24
+        },
+        "D_per_class": {
+          "mape_pct": 51.736593442277886,
+          "p90_pct": 84.15593197419533,
+          "max_pct": 85.91397581110446,
+          "n": 24
+        }
+      },
+      "singleton_row_note": "A_1d_transfer_singleton_row is the R==1 subset scored with the 1-D coefficients; it is the consistency anchor between 1-D and 2-D",
+      "A_1d_transfer_singleton_row": {
+        "n": 12,
+        "metrics": {
+          "n": 12,
+          "mape_pct": 440.3475467231652,
+          "p50_pct": 100.98142864397647,
+          "p90_pct": 1525.1832326132458,
+          "p95_pct": 1616.60322578404,
+          "max_pct": 1617.5675438834553,
+          "bias_pct": 440.3475467231652,
+          "rmse_pct": 208.6830964746834,
+          "rmse_ns": 640.3895925016502
+        }
+      },
+      "kind": "inner_split",
+      "split_rule": "inner_stride_le_2",
+      "wide": {
+        "features": [
+          "intercept",
+          "elements"
+        ],
+        "coefficients": [
+          67.67580214317687,
+          0.0639836115088958
+        ]
+      },
+      "gather": {
+        "features": [
+          "intercept",
+          "elements",
+          "inner_stride_bytes"
+        ],
+        "coefficients": [
+          189.9139065643391,
+          1.367037660197172,
+          0.0
+        ]
+      },
+      "scale_by_dtype": null
+    },
+    "simd_store": {
+      "op": "store",
+      "path": "simd",
+      "n": 24,
+      "axis_classes": [
+        "both_strided",
+        "singleton_row_strided"
+      ],
+      "shapes": [
+        "16x32",
+        "1x256",
+        "1x64",
+        "8x16"
+      ],
+      "recommended_scheme": "B_2d_refit",
+      "candidates": {
+        "A_1d_transfer": {
+          "mape_pct": 6.117535126049688,
+          "p90_pct": 13.911472169382872,
+          "max_pct": 15.980722222167532,
+          "n": 24
+        },
+        "B_2d_refit": {
+          "mape_pct": 6.090530277435043,
+          "p90_pct": 14.754302767280919,
+          "max_pct": 16.166147499093107,
+          "n": 24
+        },
+        "C_2d_gap": {
+          "mape_pct": 6.090530277435043,
+          "p90_pct": 14.754302767280919,
+          "max_pct": 16.166147499093107,
+          "n": 24
+        },
+        "W_whitebox": {
+          "mape_pct": 31.148054559230616,
+          "p90_pct": 47.65704553744886,
+          "max_pct": 55.625845959547426,
+          "n": 24
+        },
+        "W2_inner_split": {
+          "mape_pct": 16.446879307573482,
+          "p90_pct": 31.26422847922395,
+          "max_pct": 31.498414753872282,
+          "n": 24
+        },
+        "D_per_class": {
+          "mape_pct": 3.365384900470022,
+          "p90_pct": 5.378286286624351,
+          "max_pct": 21.321760387766997,
+          "n": 24
+        }
+      },
+      "singleton_row_note": "A_1d_transfer_singleton_row is the R==1 subset scored with the 1-D coefficients; it is the consistency anchor between 1-D and 2-D",
+      "A_1d_transfer_singleton_row": {
+        "n": 12,
+        "metrics": {
+          "n": 12,
+          "mape_pct": 4.105928022019648,
+          "p50_pct": 2.69942104597215,
+          "p90_pct": 9.204091849470707,
+          "p95_pct": 9.376085506841052,
+          "max_pct": 9.415917282704244,
+          "bias_pct": -3.1245513811597525,
+          "rmse_pct": 5.859425947372557,
+          "rmse_ns": 105.23686991097006
+        }
+      },
+      "features": [
+        "intercept",
+        "line_request_size_2d",
+        "bucket_pairs_2k8",
+        "bucket_worst_32k16"
+      ],
+      "coefficients": [
+        0.0,
+        26.34673088268525,
+        0.04766411104268885,
+        0.5892251413960048
+      ],
+      "alpha": 0.0
+    },
+    "simt_only_load": {
+      "op": "load",
+      "path": "simt_only",
+      "n": 24,
+      "axis_classes": [
+        "both_strided",
+        "singleton_row_strided"
+      ],
+      "shapes": [
+        "16x32",
+        "1x256",
+        "1x64",
+        "8x16"
+      ],
+      "recommended_scheme": "B_2d_refit",
+      "candidates": {
+        "A_1d_transfer": {
+          "mape_pct": 32.773581082461774,
+          "p90_pct": 88.58762645066251,
+          "max_pct": 138.6681863558432,
+          "n": 24
+        },
+        "B_2d_refit": {
+          "mape_pct": 8.451671618857276,
+          "p90_pct": 16.10227445114902,
+          "max_pct": 22.933570309281492,
+          "n": 24
+        },
+        "C_2d_gap": {
+          "mape_pct": 8.451671618857276,
+          "p90_pct": 16.10227445114902,
+          "max_pct": 22.933570309281492,
+          "n": 24
+        },
+        "W_whitebox": {
+          "mape_pct": 9.441151063993363,
+          "p90_pct": 16.781203115433755,
+          "max_pct": 22.673787352893584,
+          "n": 24
+        },
+        "W2_inner_split": {
+          "mape_pct": 9.746569826918684,
+          "p90_pct": 17.295812729569036,
+          "max_pct": 27.314367449533616,
+          "n": 24
+        },
+        "D_per_class": {
+          "mape_pct": 4.0245934451176355,
+          "p90_pct": 7.373485556361563,
+          "max_pct": 17.626493742112448,
+          "n": 24
+        }
+      },
+      "singleton_row_note": "A_1d_transfer_singleton_row is the R==1 subset scored with the 1-D coefficients; it is the consistency anchor between 1-D and 2-D",
+      "A_1d_transfer_singleton_row": {
+        "n": 12,
+        "metrics": {
+          "n": 12,
+          "mape_pct": 30.324043361529057,
+          "p50_pct": 9.515084170784089,
+          "p90_pct": 124.25829886715051,
+          "p95_pct": 137.2426433654784,
+          "max_pct": 138.6681863558432,
+          "bias_pct": 25.32644824006645,
+          "rmse_pct": 67.840495895279,
+          "rmse_ns": 119.19311351492776
+        }
+      },
+      "features": [
+        "intercept",
+        "min_L_32",
+        "max_L_minus_32",
+        "dupL_minL_128",
+        "cross_minL_32",
+        "lowW_4_L"
+      ],
+      "coefficients": [
+        144.1686121366675,
+        2.121845456507602,
+        2.9596899126401284,
+        0.24051395197131575,
+        0.0,
+        0.0
+      ],
+      "alpha": 2.0
+    },
+    "simt_only_store": {
+      "op": "store",
+      "path": "simt_only",
+      "n": 24,
+      "axis_classes": [
+        "both_strided",
+        "singleton_row_strided"
+      ],
+      "shapes": [
+        "16x32",
+        "1x256",
+        "1x64",
+        "8x16"
+      ],
+      "recommended_scheme": "B_2d_refit",
+      "candidates": {
+        "A_1d_transfer": {
+          "mape_pct": 36.9870799516804,
+          "p90_pct": 74.55506955774445,
+          "max_pct": 81.52441842068261,
+          "n": 24
+        },
+        "B_2d_refit": {
+          "mape_pct": 32.35692315724421,
+          "p90_pct": 75.62203509887252,
+          "max_pct": 82.99393109019198,
+          "n": 24
+        },
+        "C_2d_gap": {
+          "mape_pct": 32.597009753276254,
+          "p90_pct": 75.92114947459204,
+          "max_pct": 83.12558486648032,
+          "n": 24
+        },
+        "W_whitebox": {
+          "mape_pct": 33.62095114969083,
+          "p90_pct": 70.14632085015798,
+          "max_pct": 84.0330615162564,
+          "n": 24
+        },
+        "W2_inner_split": {
+          "mape_pct": 36.45592616841993,
+          "p90_pct": 76.22813234353582,
+          "max_pct": 81.56728731437164,
+          "n": 24
+        },
+        "D_per_class": {
+          "mape_pct": 18.606133705315905,
+          "p90_pct": 37.72788894174999,
+          "max_pct": 47.74802183495355,
+          "n": 24
+        }
+      },
+      "singleton_row_note": "A_1d_transfer_singleton_row is the R==1 subset scored with the 1-D coefficients; it is the consistency anchor between 1-D and 2-D",
+      "A_1d_transfer_singleton_row": {
+        "n": 12,
+        "metrics": {
+          "n": 12,
+          "mape_pct": 28.714719646181123,
+          "p50_pct": 21.5059886878752,
+          "p90_pct": 60.26785252969007,
+          "p95_pct": 66.17626563196477,
+          "max_pct": 69.24553362105522,
+          "bias_pct": 28.714719646181123,
+          "rmse_pct": 32.37331858213825,
+          "rmse_ns": 11.078100341793851
+        }
+      },
+      "features": [
+        "intercept",
+        "K_2d",
+        "L",
+        "line_request_size_2d"
+      ],
+      "coefficients": [
+        4.946716656981262,
+        0.0,
+        1.461108252868939,
+        0.23208120425496204
+      ],
+      "alpha": 2.0
+    },
+    "template_load": {
+      "op": "load",
+      "path": "template",
+      "n": 16,
+      "axis_classes": [
+        "both_strided",
+        "singleton_row_strided"
+      ],
+      "shapes": [
+        "16x32",
+        "1x256",
+        "1x64",
+        "8x16"
+      ],
+      "recommended_scheme": "W_whitebox",
+      "candidates": {
+        "A_1d_transfer": {
+          "mape_pct": 23.051884419391662,
+          "p90_pct": 44.08705253536019,
+          "max_pct": 71.00205671466912,
+          "n": 16
+        },
+        "B_2d_refit": {
+          "mape_pct": 5.8077236897466875,
+          "p90_pct": 10.770763251888576,
+          "max_pct": 16.325786079391037,
+          "n": 16
+        },
+        "C_2d_gap": {
+          "mape_pct": 5.609150751471134,
+          "p90_pct": 11.156956111029526,
+          "max_pct": 14.797825682471078,
+          "n": 16
+        },
+        "W_whitebox": {
+          "mape_pct": 5.550352495816455,
+          "p90_pct": 11.369242291794507,
+          "max_pct": 16.907774393962395,
+          "n": 16
+        },
+        "D_per_class": {
+          "mape_pct": 2.8843971274069737,
+          "p90_pct": 8.59903064603288,
+          "max_pct": 12.046241989188456,
+          "n": 16
+        }
+      },
+      "singleton_row_note": "A_1d_transfer_singleton_row is the R==1 subset scored with the 1-D coefficients; it is the consistency anchor between 1-D and 2-D",
+      "A_1d_transfer_singleton_row": {
+        "n": 8,
+        "metrics": {
+          "n": 8,
+          "mape_pct": 18.916021317594904,
+          "p50_pct": 19.354616367520805,
+          "p90_pct": 36.16946593837418,
+          "p95_pct": 36.46827659989961,
+          "max_pct": 36.76708726142503,
+          "bias_pct": 18.864326996986875,
+          "rmse_pct": 27.022318734216327,
+          "rmse_ns": 88.3909384335067
+        }
+      },
+      "features": [
+        "intercept",
+        "elements",
+        "inner_stride_bytes",
+        "L"
+      ],
+      "coefficients": [
+        284.85171397108144,
+        0.0,
+        0.0,
+        2.783792110221299
+      ],
+      "alpha": 1.5,
+      "feature_set": "wb_lines"
+    },
+    "template_store": {
+      "op": "store",
+      "path": "template",
+      "n": 16,
+      "axis_classes": [
+        "both_strided",
+        "singleton_row_strided"
+      ],
+      "shapes": [
+        "16x32",
+        "1x256",
+        "1x64",
+        "8x16"
+      ],
+      "recommended_scheme": "W_whitebox",
+      "candidates": {
+        "A_1d_transfer": {
+          "mape_pct": 37.063658632525126,
+          "p90_pct": 54.009672273186936,
+          "max_pct": 64.51213335705887,
+          "n": 16
+        },
+        "B_2d_refit": {
+          "mape_pct": 3.0134156330952977,
+          "p90_pct": 4.772301234446058,
+          "max_pct": 7.251970446473899,
+          "n": 16
+        },
+        "C_2d_gap": {
+          "mape_pct": 2.790368081290028,
+          "p90_pct": 4.378052955522205,
+          "max_pct": 6.50559086335154,
+          "n": 16
+        },
+        "W_whitebox": {
+          "mape_pct": 2.7151510296258814,
+          "p90_pct": 4.956006565954491,
+          "max_pct": 6.670601828036327,
+          "n": 16
+        },
+        "D_per_class": {
+          "mape_pct": 1.5379504357405003,
+          "p90_pct": 4.0171515930038755,
+          "max_pct": 5.1319892213390395,
+          "n": 16
+        }
+      },
+      "singleton_row_note": "A_1d_transfer_singleton_row is the R==1 subset scored with the 1-D coefficients; it is the consistency anchor between 1-D and 2-D",
+      "A_1d_transfer_singleton_row": {
+        "n": 8,
+        "metrics": {
+          "n": 8,
+          "mape_pct": 30.97133883646511,
+          "p50_pct": 29.98205584435578,
+          "p90_pct": 45.52996974050503,
+          "p95_pct": 45.71584151405227,
+          "max_pct": 45.90171328759951,
+          "bias_pct": 30.97133883646511,
+          "rmse_pct": 35.26293380366517,
+          "rmse_ns": 84.7340166550142
+        }
+      },
+      "features": [
+        "intercept",
+        "elements",
+        "inner_stride_bytes",
+        "L",
+        "page_cross",
+        "row_gap_bytes"
+      ],
+      "coefficients": [
+        198.82607208803387,
+        0.08205476256380692,
+        0.25097668143366797,
+        0.7810079339747132,
+        11.22520611484282,
+        0.25894194753492045
+      ],
+      "alpha": 2.0,
+      "feature_set": "wb_full"
+    }
+  }
+}

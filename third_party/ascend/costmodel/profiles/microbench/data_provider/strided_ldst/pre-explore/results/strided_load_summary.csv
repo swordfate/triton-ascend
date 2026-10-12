@@ -1,0 +1,7 @@
+run,mode,block,stride,useful_bytes,span_bytes,unique_lines_128_aligned,task_cycles,instr_active_cycles,pre_load_cycles,load_active_cycles,post_load_cycles,issue_to_first_biu,biu_fill_span,biu_to_retire,load_instr_count,load_engine,biu_send_count,biu_send_bytes,biu_send_sizes,biu_recv_count,biu_recv_bytes,biu_fill_span_raw,biu_unique_128B_lines,dc_read_requests,dc_read_bytes,dc_read_sizes,dc_unique_lines,dc_tag_rst
+block32_s3,simd,32,3,128,376,3,2183,1593,425,571,597,20,529,22,1,mte2:MOV_SRC_TO_DST_ALIGNv2,32,128,4:32,32,128,529,3,,,,,
+block32_s3,simt_only,32,3,128,376,3,2720,2276,1105,546,625,23,491,32,1,SIMT_LDG,3,384,128:3,3,384,491,3,3,128,"40:1,44:2",3,MISS:3
+block64_s3,simd,64,3,256,760,6,2192,1602,425,618,559,20,569,29,1,mte2:MOV_SRC_TO_DST_ALIGNv2,64,256,4:64,64,256,569,6,,,,,
+block64_s3,simt_only,64,3,256,760,6,2759,2216,1190,464,562,23,407,34,2,SIMT_LDG,6,768,128:6,6,768,407,6,6,256,"40:2,44:4",6,MISS:6
+block128_s3,simd,128,3,512,1528,12,2383,1793,425,682,686,20,635,27,1,mte2:MOV_SRC_TO_DST_ALIGNv2,128,512,4:128,128,512,635,12,,,,,
+block128_s3,simt_only,128,3,512,1528,12,2851,2312,1174,571,567,23,515,33,4,SIMT_LDG,12,1536,128:12,12,1536,515,12,12,512,"40:4,44:8",12,MISS:12

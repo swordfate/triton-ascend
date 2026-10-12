@@ -1,0 +1,109 @@
+{
+  "probe": "strided_load_probe",
+  "block": 32,
+  "grid": 1,
+  "num_warps": 1,
+  "cases": [
+    {
+      "order": 0,
+      "mode": "simd",
+      "stride": 3,
+      "block": 32,
+      "grid": 1,
+      "num_warps": 1,
+      "options": {
+        "num_warps": 1,
+        "superblock_factor": 1,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd",
+        "enable_auto_blockify": false
+      },
+      "kernel_symbol": "strided_load_kernel",
+      "launched": true,
+      "host_launch_seconds": 5.308481454849243,
+      "x_ptr": "0x164b8d800",
+      "out_ptr": "0x164b91a00",
+      "x_bytes": 16768,
+      "out_bytes": 4,
+      "used_bytes": 384
+    },
+    {
+      "order": 1,
+      "mode": "simt_only",
+      "stride": 3,
+      "block": 32,
+      "grid": 1,
+      "num_warps": 1,
+      "options": {
+        "num_warps": 1,
+        "superblock_factor": 1,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simt_only",
+        "enable_auto_blockify": true
+      },
+      "kernel_symbol": "strided_load_kernel",
+      "launched": true,
+      "host_launch_seconds": 6.210796117782593,
+      "x_ptr": "0x164b91c00",
+      "out_ptr": "0x164b8d800",
+      "x_bytes": 16768,
+      "out_bytes": 4,
+      "used_bytes": 384
+    }
+  ],
+  "asm_index": {
+    "simd_b32_s3": [
+      {
+        "key": "source",
+        "path": "simd_b32_s3.source",
+        "bytes": 6599
+      },
+      {
+        "key": "ttir",
+        "path": "simd_b32_s3.ttir",
+        "bytes": 3198
+      },
+      {
+        "key": "ttadapter",
+        "path": "simd_b32_s3.ttadapter",
+        "bytes": 4229
+      },
+      {
+        "key": "mlirbc",
+        "path": "simd_b32_s3.mlirbc",
+        "bytes": 1520
+      },
+      {
+        "key": "bcmlir",
+        "path": "simd_b32_s3.bcmlir",
+        "bytes": 4234
+      },
+      {
+        "key": "npubin",
+        "path": "simd_b32_s3.npubin",
+        "bytes": 218840
+      }
+    ],
+    "simt_only_b32_s3": [
+      {
+        "key": "source",
+        "path": "simt_only_b32_s3.source",
+        "bytes": 6599
+      },
+      {
+        "key": "ttir",
+        "path": "simt_only_b32_s3.ttir",
+        "bytes": 3198
+      },
+      {
+        "key": "npubin",
+        "path": "simt_only_b32_s3.npubin",
+        "bytes": 221528
+      }
+    ]
+  }
+}

@@ -1,0 +1,240 @@
+{
+ "simd_load_wide": {
+  "n": 136,
+  "mape": 17.167,
+  "base_features": [
+   "rowseg",
+   "ebL",
+   "rsdivg",
+   "cross_minL_32",
+   "nhe32",
+   "mean_warp_lines",
+   "combover",
+   "LperPitch",
+   "hP4",
+   "rank"
+  ],
+  "n_terms": 5,
+  "terms": [
+   {
+    "feature": "intercept",
+    "coef": 36.0166
+   },
+   {
+    "feature": "nhe32|eb=8",
+    "coef": 7.0561
+   },
+   {
+    "feature": "LperPitch|eb=2",
+    "coef": 0.3316
+   },
+   {
+    "feature": "hP4|eb=4",
+    "coef": 0.1891
+   },
+   {
+    "feature": "rank|eb=8",
+    "coef": 0.1488
+   }
+  ],
+  "per_dtype": {
+   "int8": 33.81,
+   "float16": 16.49,
+   "float32": 6.71,
+   "int64": 10.74
+  }
+ },
+ "simd_load_gather": {
+  "n": 796,
+  "mape": 26.264,
+  "base_features": [
+   "hepl_n32",
+   "cols",
+   "cmd",
+   "line_elems_max",
+   "mse64",
+   "bucket_pairs_32k16",
+   "minL64",
+   "rowsshare"
+  ],
+  "n_terms": 6,
+  "terms": [
+   {
+    "feature": "intercept",
+    "coef": 31.6575
+   },
+   {
+    "feature": "hepl_n32",
+    "coef": 0.0133
+   },
+   {
+    "feature": "cols|eb=1",
+    "coef": 0.1781
+   },
+   {
+    "feature": "cmd|eb=2",
+    "coef": 0.0483
+   },
+   {
+    "feature": "line_elems_max|eb=4",
+    "coef": 0.0149
+   },
+   {
+    "feature": "rowsshare|eb=2",
+    "coef": 0.5073
+   }
+  ],
+  "per_dtype": {
+   "int8": 34.04,
+   "float16": 35.34,
+   "float32": 19.59,
+   "int64": 12.61
+  }
+ },
+ "simd_store": {
+  "n": 847,
+  "mape": 18.272,
+  "base_features": [
+   "line_elems_max",
+   "nEpl1",
+   "minL128",
+   "bucket_pairs_32k16",
+   "cmd",
+   "n2L",
+   "nhe4",
+   "minL64",
+   "ebn",
+   "minLeb8"
+  ],
+  "n_terms": 6,
+  "terms": [
+   {
+    "feature": "intercept",
+    "coef": 0.0
+   },
+   {
+    "feature": "line_elems_max",
+    "coef": 81.4574
+   },
+   {
+    "feature": "minL128|eb=2",
+    "coef": 18.3911
+   },
+   {
+    "feature": "bucket_pairs_32k16|eb=4",
+    "coef": 12.62
+   },
+   {
+    "feature": "cmd|eb=8",
+    "coef": 8.6866
+   },
+   {
+    "feature": "nhe4|eb=1",
+    "coef": 0.4301
+   }
+  ],
+  "per_dtype": {
+   "int8": 28.71,
+   "float16": 20.82,
+   "float32": 12.21,
+   "int64": 11.2
+  }
+ },
+ "simt_load": {
+  "n": 2177,
+  "mape": 13.853,
+  "base_features": [
+   "minL128",
+   "mse128",
+   "dupL_minL_128",
+   "Lperthread",
+   "ebL",
+   "iters",
+   "max_warp_lines",
+   "rowsshareL",
+   "eb",
+   "minLeb8"
+  ],
+  "n_terms": 5,
+  "terms": [
+   {
+    "feature": "intercept",
+    "coef": 111.2778
+   },
+   {
+    "feature": "dupL_minL_128|eb=2",
+    "coef": 0.0757
+   },
+   {
+    "feature": "max_warp_lines|eb=1",
+    "coef": 0.0366
+   },
+   {
+    "feature": "rowsshareL|eb=2",
+    "coef": 0.0827
+   },
+   {
+    "feature": "eb|eb=4",
+    "coef": 0.1214
+   }
+  ],
+  "per_dtype": {
+   "int8": 8.06,
+   "float16": 12.47,
+   "float32": 18.36,
+   "int64": 17.57
+  }
+ },
+ "simt_store": {
+  "n": 2083,
+  "mape": 17.416,
+  "base_features": [
+   "hLeb1",
+   "cmd",
+   "itersW",
+   "R2",
+   "hLeb4",
+   "iters",
+   "hseD512",
+   "nhe8W",
+   "LperR",
+   "dup"
+  ],
+  "n_terms": 6,
+  "terms": [
+   {
+    "feature": "intercept",
+    "coef": 0.0
+   },
+   {
+    "feature": "hLeb4|eb=8",
+    "coef": 4.2063
+   },
+   {
+    "feature": "iters",
+    "coef": 5.7567
+   },
+   {
+    "feature": "hseD512|eb=1",
+    "coef": 4.687
+   },
+   {
+    "feature": "LperR|eb=4",
+    "coef": 9.259
+   },
+   {
+    "feature": "dup|eb=8",
+    "coef": 9.1304
+   }
+  ],
+  "per_dtype": {
+   "int8": 20.23,
+   "float16": 19.25,
+   "float32": 17.06,
+   "int64": 13.1
+  }
+ },
+ "_overall": 17.412,
+ "_note": "one formula per slot; each base feature is multiplied by a dtype indicator (eb in 1/2/4/8), so element width enters as a factor. ALL coefficients are non-negative -> every term is a cost.",
+ "_protocol": "weighted LS with weights 1/T (minimises relative error); in-sample; no logs/powers."
+}

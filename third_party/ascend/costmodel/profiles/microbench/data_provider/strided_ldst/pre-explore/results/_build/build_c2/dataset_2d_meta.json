@@ -1,0 +1,103 @@
+{
+  "kind": "stride2d_dataset",
+  "raw_files": [
+    "2d_load_simt_only_float16_W1_A_rs.json",
+    "2d_load_simt_only_float32_W1_A_rs.json",
+    "2d_load_simt_only_int64_W1_A_rs.json",
+    "2d_load_simt_only_int8_W1_A_rs.json",
+    "2d_store_simt_only_float16_W16_B_ws.json",
+    "2d_store_simt_only_float16_W1_A_rs.json",
+    "2d_store_simt_only_float16_W2_B_ws.json",
+    "2d_store_simt_only_float16_W32_B_ws.json",
+    "2d_store_simt_only_float16_W4_A_rs.json",
+    "2d_store_simt_only_float16_W64_B_ws.json",
+    "2d_store_simt_only_float16_W8_B_ws.json",
+    "2d_store_simt_only_float32_W1_A_rs.json",
+    "2d_store_simt_only_float32_W4_A_rs.json",
+    "2d_store_simt_only_int64_W1_A_rs.json",
+    "2d_store_simt_only_int64_W4_A_rs.json",
+    "2d_store_simt_only_int8_W16_B_ws.json",
+    "2d_store_simt_only_int8_W1_A_rs.json",
+    "2d_store_simt_only_int8_W2_B_ws.json",
+    "2d_store_simt_only_int8_W32_B_ws.json",
+    "2d_store_simt_only_int8_W4_A_rs.json",
+    "2d_store_simt_only_int8_W64_B_ws.json",
+    "2d_store_simt_only_int8_W8_B_ws.json"
+  ],
+  "total_cases": 1952,
+  "valid_cases": 1915,
+  "invalid_cases": 37,
+  "invalid_by_bucket": {},
+  "scope": "rank-2 tiles with holes on BOTH axes; R == 1 rank-2 tiles are included as singleton_row_strided",
+  "feature_source": "scripts/stride_feature_reference.py",
+  "coverage": {
+    "load|simt_only|both_strided": {
+      "n": 384,
+      "forms": [
+        "rs2_cs16",
+        "rs2_cs2",
+        "rs2_cs4",
+        "rs4_cs16",
+        "rs4_cs2",
+        "rs4_cs4"
+      ],
+      "shapes": [
+        "16x1",
+        "16x2",
+        "2x128",
+        "2x16",
+        "2x64",
+        "2x8",
+        "32x1",
+        "32x2",
+        "4x64",
+        "64x1",
+        "64x2",
+        "64x4",
+        "64x8",
+        "8x2",
+        "8x4",
+        "8x64"
+      ]
+    },
+    "store|simt_only|both_strided": {
+      "n": 1568,
+      "forms": [
+        "rs2_cs16",
+        "rs2_cs2",
+        "rs2_cs4",
+        "rs2_cs8",
+        "rs4_cs16",
+        "rs4_cs2",
+        "rs4_cs4",
+        "rs4_cs8"
+      ],
+      "shapes": [
+        "16x1",
+        "16x16",
+        "16x2",
+        "16x4",
+        "16x8",
+        "2x128",
+        "2x16",
+        "2x64",
+        "2x8",
+        "32x1",
+        "32x2",
+        "4x16",
+        "4x4",
+        "4x64",
+        "4x8",
+        "64x1",
+        "64x2",
+        "64x4",
+        "64x8",
+        "8x16",
+        "8x2",
+        "8x4",
+        "8x64",
+        "8x8"
+      ]
+    }
+  }
+}

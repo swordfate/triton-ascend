@@ -1,0 +1,92 @@
+{
+ "simd_store_r1": {
+  "n": 291,
+  "mape": 9.69,
+  "n_terms": 6,
+  "formula": "T = 10.75 + 0.4601*n + 87.05*mx128 + 2.977*mx32 + 0.4146*S32 + 0.08581*S512",
+  "terms": [
+   {
+    "name": "1",
+    "coef": 10.7547,
+    "meaning": "MTE3 固定启动/首字节延迟 (ns)"
+   },
+   {
+    "name": "n",
+    "coef": 0.4601,
+    "meaning": "BIU 写命令数 = 元素数 (CAModel: biu_send_count=n)，每元素一条命令"
+   },
+   {
+    "name": "mx128",
+    "coef": 87.0517,
+    "meaning": "最挤 128B line 内元素数 = 该 line 上 read-modify-write 串行链长度 (ns/元素)"
+   },
+   {
+    "name": "mx32",
+    "coef": 2.9766,
+    "meaning": "最挤 32B sector 内元素数 (次级 RMW 串行链)"
+   },
+   {
+    "name": "S32",
+    "coef": 0.4146,
+    "meaning": "sum over 32B sectors of k^2 = 32B 写扇区级冲突对总和 (ns/对)"
+   },
+   {
+    "name": "S512",
+    "coef": 0.0858,
+    "meaning": "sum over 512B blocks of k^2 = 大块级冲突对总和 (ns/对)"
+   }
+  ],
+  "derived": [
+   "addr(i) = i*ISB                        # rank-1，基址对齐（用 f_L / f_line_elems_max 全量校验通过）",
+   "addr(r,c) = r*row_pitch_bytes + c*ISB  # rank-2",
+   "kB = 落在同一 B 字节块内的元素数",
+   "mxB  = max kB        (B=32,128)",
+   "SB   = sum kB^2"
+  ],
+  "notes": "仿真域: 291 点全部 rank-1，ISB 从 2*eb 到 2048B。物理图像: 每元素一条 BIU 写命令；stride>=2 时每个元素的写只覆盖 128B line 的一小部分 -> 部分写 -> 该 line 需要 read-modify-write；同一 line 上的 k 个写必须串行（line 是单一 RMW 资源），因此关键路径 ~ 最挤 line 的 k (系数 87 ns ≈ 一次 RMW 往返)，这与 r1 中 L=1（所有元素挤在一条 line）时 T ≈ 87-95 ns/元素 完全一致。剩余项 S32/S512 描述 RMW 引擎并发度有限时，不同块之间的冲突对也要付费。独立验证: 用户 1D float16 store stride=2 block=4 -> 实测 374.3 ns，公式 380.7 (+1.7%); block=8 -> 实测 768.4，公式 766.7 (-0.2%)。slot-tuned 变体 one+mx128+S32+S512 (4 项) = 9.84%。数据局限: 本 slot 最小 ISB = 2*eb，**没有任何 ISB==eb 的连续写形状**；连续写会走编译器 wide/整块分支（用户实测 ~79 ns，与 stride=2 的 374/768 ns 差 4.7x/9.8x），该分支本公式不覆盖，禁止外推。"
+ },
+ "simd_store_r2": {
+  "n": 851,
+  "n_points_raw_before_R1_filter": 943,
+  "mape": 25.262,
+  "n_terms": 5,
+  "formula": "T = 0 + 0.2845*n + 85.72*mx128 + 29.65*mx32 + 1.193*S32 + 0.02079*S512",
+  "terms": [
+   {
+    "name": "1",
+    "coef": 0.0,
+    "meaning": "固定项（NNLS 归零：启动延迟已被 mx 项吸收）"
+   },
+   {
+    "name": "n",
+    "coef": 0.2845,
+    "meaning": "BIU 写命令数 = 元素数"
+   },
+   {
+    "name": "mx128",
+    "coef": 85.7206,
+    "meaning": "最挤 128B line 内元素数 = RMW 串行链长度"
+   },
+   {
+    "name": "mx32",
+    "coef": 29.6514,
+    "meaning": "最挤 32B sector 内元素数（rank-2 里同一 sector 常被多行共享，权重显著上升）"
+   },
+   {
+    "name": "S32",
+    "coef": 1.1929,
+    "meaning": "32B 扇区级冲突对总和"
+   },
+   {
+    "name": "S512",
+    "coef": 0.0208,
+    "meaning": "512B 块级冲突对总和"
+   }
+  ],
+  "derived": [
+   "addr(r,c) = r*row_pitch_bytes + c*ISB  (基址对齐, base=0)",
+   "全部 851 点的 block 统计已与数据集自带 f_L / f_line_elems_max 逐点核对一致"
+  ],
+  "notes": "拟合域: 原始 943 点，剔除 92 个 R=1（实为 1D）形状后 851 点，4 dtype、R in {2..32}、C in {1..64}。物理同 r1（每元素一条写命令 + 部分写 RMW），但 rank-2 的 **行分段** 让 RMW 串行链更重：mx128 系数与 r1 相同 (~86)，而 mx32 系数从 r1 的 3.0 涨到 29.7 —— 同一 32B 扇区被同一行的多个元素共享，行内元素间距 ISB 越小、扇区内越挤，RMW 串行链越长。已知结构性局限（残差不是噪声）: 存在字节级地址集合几乎相同、但 T 差 7.2 倍的两点 —— eb=1,C=16,ISB=16,pitch=512,R=32 与 eb=1,C=32,ISB=16,pitch=1024,R=16，两者 n=512、L=64、每线 8 元素、B<=256 的所有 S_B 完全相同，T 却分别为 18943 与 2625 ns；另外在同一地址集合下 eb=1 与 eb=2 也能差 ~2x（r1 完全没有这种 eb 依赖）。这说明 rank-2 还存在一个与 **行分段/发射顺序** 相关的代价分量，纯静态占用统计无法表达，因此 25% 是本特征族的下限。残差偏向: 系统性低估 11.5%，R=32 子群误差 43%。"
+ }
+}

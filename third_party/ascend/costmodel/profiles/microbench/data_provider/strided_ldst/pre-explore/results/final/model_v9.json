@@ -1,0 +1,225 @@
+{
+ "_note": "relative-weighted (1/T) non-negative linear fit; in-sample; no log/exp/powers",
+ "_dataset": "results/final/dataset_new_only.csv (5918 rows)",
+ "simd_load_wide": {
+  "n": 132,
+  "mape": 23.876,
+  "terms": [
+   {
+    "feature": "1",
+    "meaning": "1",
+    "coef": 38.902229
+   },
+   {
+    "feature": "linv",
+    "meaning": "linv",
+    "coef": 3.592124
+   },
+   {
+    "feature": "lpe",
+    "meaning": "L/n",
+    "coef": 63.368343
+   },
+   {
+    "feature": "cross",
+    "meaning": "cross",
+    "coef": 14.820797
+   },
+   {
+    "feature": "epl",
+    "meaning": "epl",
+    "coef": 0.557623
+   },
+   {
+    "feature": "hP4",
+    "meaning": "hP4",
+    "coef": 36.745149
+   },
+   {
+    "feature": "eb",
+    "meaning": "element_bytes",
+    "coef": 2.938339
+   }
+  ],
+  "per_dtype": {
+   "int8": 40.39,
+   "float16": 21.06,
+   "float32": 12.57,
+   "int64": 20.97
+  }
+ },
+ "simd_load_gather": {
+  "n": 779,
+  "mape": 34.178,
+  "terms": [
+   {
+    "feature": "1",
+    "meaning": "1",
+    "coef": 74.287099
+   },
+   {
+    "feature": "n",
+    "meaning": "elements",
+    "coef": 0.854902
+   },
+   {
+    "feature": "perline",
+    "meaning": "n/L",
+    "coef": 11.93178
+   },
+   {
+    "feature": "cmd",
+    "meaning": "ceil(L/floor(128/eb))",
+    "coef": 0.520599
+   },
+   {
+    "feature": "expline",
+    "meaning": "128/eb",
+    "coef": 0.129524
+   },
+   {
+    "feature": "ebn",
+    "meaning": "eb*n",
+    "coef": 0.018119
+   },
+   {
+    "feature": "strideL",
+    "meaning": "ISB/128",
+    "coef": 0.472921
+   }
+  ],
+  "per_dtype": {
+   "int8": 51.7,
+   "float16": 39.99,
+   "float32": 24.43,
+   "int64": 17.07
+  }
+ },
+ "simd_store": {
+  "n": 827,
+  "mape": 26.821,
+  "terms": [
+   {
+    "feature": "1",
+    "meaning": "1",
+    "coef": 0.0
+   },
+   {
+    "feature": "perline",
+    "meaning": "n/L",
+    "coef": 111.578111
+   },
+   {
+    "feature": "n",
+    "meaning": "elements",
+    "coef": 1.293367
+   },
+   {
+    "feature": "ebn",
+    "meaning": "eb*n",
+    "coef": 0.026748
+   }
+  ],
+  "per_dtype": {
+   "int8": 40.1,
+   "float16": 25.31,
+   "float32": 20.37,
+   "int64": 21.35
+  }
+ },
+ "simt_load": {
+  "n": 2137,
+  "mape": 16.702,
+  "terms": [
+   {
+    "feature": "1",
+    "meaning": "1",
+    "coef": 136.527147
+   },
+   {
+    "feature": "minL128",
+    "meaning": "min(L,128)",
+    "coef": 0.160925
+   },
+   {
+    "feature": "nW",
+    "meaning": "n/W",
+    "coef": 0.319271
+   },
+   {
+    "feature": "ebL",
+    "meaning": "eb*L",
+    "coef": 0.132752
+   },
+   {
+    "feature": "lpe",
+    "meaning": "L/n",
+    "coef": 51.651787
+   },
+   {
+    "feature": "Wl",
+    "meaning": "Wl",
+    "coef": 0.0578
+   },
+   {
+    "feature": "itersL",
+    "meaning": "iters*min(L,32)",
+    "coef": 0.34216
+   }
+  ],
+  "per_dtype": {
+   "int8": 11.08,
+   "float16": 15.84,
+   "float32": 20.44,
+   "int64": 20.48
+  }
+ },
+ "simt_store": {
+  "n": 2043,
+  "mape": 25.178,
+  "terms": [
+   {
+    "feature": "1",
+    "meaning": "1",
+    "coef": 0.0
+   },
+   {
+    "feature": "LdivEb",
+    "meaning": "LdivEb",
+    "coef": 3.325939
+   },
+   {
+    "feature": "cmd",
+    "meaning": "ceil(L/floor(128/eb))",
+    "coef": 12.036734
+   },
+   {
+    "feature": "itersW",
+    "meaning": "itersW",
+    "coef": 1.18578
+   },
+   {
+    "feature": "itersL",
+    "meaning": "iters*min(L,32)",
+    "coef": 0.042603
+   },
+   {
+    "feature": "maxL32",
+    "meaning": "max(0,L-32)",
+    "coef": 0.46017
+   },
+   {
+    "feature": "iters",
+    "meaning": "ceil(n/(32W))",
+    "coef": 5.62244
+   }
+  ],
+  "per_dtype": {
+   "int8": 27.9,
+   "float16": 32.07,
+   "float32": 23.45,
+   "int64": 17.25
+  }
+ },
+ "_overall_mape": 23.503
+}

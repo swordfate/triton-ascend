@@ -1,0 +1,394 @@
+{
+ "simd_load_wide": {
+  "n": 133,
+  "mape": 16.15,
+  "n_terms": 13,
+  "per_dtype": {
+   "int8": 33.5,
+   "float16": 13.9,
+   "float32": 5.7,
+   "int64": 9.9
+  },
+  "formula": "72.16 + 4.04*rowseg + -0.02535*hse256 + 3.041*cross_minL_32 + 0.02306*seDEb + 11.25*LmR + -0.2222*rowspan + 11.42*rsdivg + 2.697*mean_warp_lines + -0.1747*minL32n + 12.71*hP4 + -9.195*LperR + 0.6896*dupL_minL_128",
+  "terms": [
+   {
+    "feature": "intercept",
+    "coef": 72.163801
+   },
+   {
+    "feature": "rowseg",
+    "meaning": "row segments",
+    "coef": 4.040063
+   },
+   {
+    "feature": "hse256",
+    "meaning": "max(0,span/eb-256)",
+    "coef": -0.025354
+   },
+   {
+    "feature": "cross_minL_32",
+    "meaning": "page_cross*min(L,32)",
+    "coef": 3.041208
+   },
+   {
+    "feature": "seDEb",
+    "meaning": "(span/eb)/eb",
+    "coef": 0.023064
+   },
+   {
+    "feature": "LmR",
+    "meaning": "max(0,L-R)",
+    "coef": 11.250736
+   },
+   {
+    "feature": "rowspan",
+    "meaning": "row_span_bytes/128",
+    "coef": -0.222154
+   },
+   {
+    "feature": "rsdivg",
+    "meaning": "row_span/row_gap",
+    "coef": 11.420865
+   },
+   {
+    "feature": "mean_warp_lines",
+    "meaning": "mean lines per warp wave",
+    "coef": 2.696542
+   },
+   {
+    "feature": "minL32n",
+    "meaning": "min(L,32)*eb",
+    "coef": -0.174702
+   },
+   {
+    "feature": "hP4",
+    "meaning": "max(0,span/4096-4)",
+    "coef": 12.712279
+   },
+   {
+    "feature": "LperR",
+    "meaning": "?",
+    "coef": -9.194894
+   },
+   {
+    "feature": "dupL_minL_128",
+    "meaning": "dup*L*min(L,128)",
+    "coef": 0.689575
+   }
+  ]
+ },
+ "simd_load_gather": {
+  "n": 748,
+  "mape": 20.3,
+  "n_terms": 13,
+  "per_dtype": {
+   "int8": 21.1,
+   "float16": 25.1,
+   "float32": 18.6,
+   "int64": 14.6
+  },
+  "formula": "151.5 + -0.03471*hepl_n32 + 0.02071*cbytes + 9.381*cshortN + -0.03524*nhe16 + 0.1594*n2L + -10.88*dup + -3.541*minL16 + 0.8575*n + -0.5436*R2 + 155.7*cshortL + -20*rowsshareL + -0.5361*hLeb16",
+  "terms": [
+   {
+    "feature": "intercept",
+    "coef": 151.47062
+   },
+   {
+    "feature": "hepl_n32",
+    "meaning": "n*min(128/ISB,32)",
+    "coef": -0.034712
+   },
+   {
+    "feature": "cbytes",
+    "meaning": "C*element_bytes",
+    "coef": 0.020707
+   },
+   {
+    "feature": "cshortN",
+    "meaning": "max(0,32-C*eb)*n/32",
+    "coef": 9.380786
+   },
+   {
+    "feature": "nhe16",
+    "meaning": "n*max(0,128/ISB-16)",
+    "coef": -0.035243
+   },
+   {
+    "feature": "n2L",
+    "meaning": "n^2/L",
+    "coef": 0.159421
+   },
+   {
+    "feature": "dup",
+    "meaning": "?",
+    "coef": -10.875716
+   },
+   {
+    "feature": "minL16",
+    "meaning": "min(L,16)",
+    "coef": -3.540712
+   },
+   {
+    "feature": "n",
+    "meaning": "elements (= BIU command count)",
+    "coef": 0.857494
+   },
+   {
+    "feature": "R2",
+    "meaning": "R^2",
+    "coef": -0.543632
+   },
+   {
+    "feature": "cshortL",
+    "meaning": "max(0,32-C*eb)*L/32",
+    "coef": 155.68739
+   },
+   {
+    "feature": "rowsshareL",
+    "meaning": "rows sharing a line * L",
+    "coef": -19.997728
+   },
+   {
+    "feature": "hLeb16",
+    "meaning": "max(0,L/eb-16)",
+    "coef": -0.536098
+   }
+  ]
+ },
+ "simd_store": {
+  "n": 782,
+  "mape": 12.15,
+  "n_terms": 13,
+  "per_dtype": {
+   "int8": 16.6,
+   "float16": 11.6,
+   "float32": 8.4,
+   "int64": 11.3
+  },
+  "formula": "51.45 + 67.22*line_elems_max + 0.1233*cbytes + 49.13*cshortN + -116.6*cshortL + 0.4718*n2L + -3.554*cshort + -0.8933*cshortR + 0.7615*line_request_size + 0.0018*bucket_pairs_32k16 + -1.565*strideL + -0.06247*dupL_minL_128 + -1.902*hP64",
+  "terms": [
+   {
+    "feature": "intercept",
+    "coef": 51.453159
+   },
+   {
+    "feature": "line_elems_max",
+    "meaning": "max elements in one line",
+    "coef": 67.221288
+   },
+   {
+    "feature": "cbytes",
+    "meaning": "C*element_bytes",
+    "coef": 0.123266
+   },
+   {
+    "feature": "cshortN",
+    "meaning": "max(0,32-C*eb)*n/32",
+    "coef": 49.132519
+   },
+   {
+    "feature": "cshortL",
+    "meaning": "max(0,32-C*eb)*L/32",
+    "coef": -116.595784
+   },
+   {
+    "feature": "n2L",
+    "meaning": "n^2/L",
+    "coef": 0.471798
+   },
+   {
+    "feature": "cshort",
+    "meaning": "max(0,32-C*eb)",
+    "coef": -3.554452
+   },
+   {
+    "feature": "cshortR",
+    "meaning": "?",
+    "coef": -0.893297
+   },
+   {
+    "feature": "line_request_size",
+    "meaning": "useful bytes per line",
+    "coef": 0.761508
+   },
+   {
+    "feature": "bucket_pairs_32k16",
+    "meaning": "?",
+    "coef": 0.0018
+   },
+   {
+    "feature": "strideL",
+    "meaning": "ISB/128",
+    "coef": -1.564899
+   },
+   {
+    "feature": "dupL_minL_128",
+    "meaning": "dup*L*min(L,128)",
+    "coef": -0.062466
+   },
+   {
+    "feature": "hP64",
+    "meaning": "max(0,span/4096-64)",
+    "coef": -1.90204
+   }
+  ]
+ },
+ "simt_load": {
+  "n": 1941,
+  "mape": 9.79,
+  "n_terms": 13,
+  "per_dtype": {
+   "int8": 7.9,
+   "float16": 8.7,
+   "float32": 8.2,
+   "int64": 14.8
+  },
+  "formula": "84.07 + 1.371*minL16 + 27.85*cmd + 0.008252*dupL_minL_128 + 16.6*iters + -0.144*RpitchL + 2.253*max_warp_lines + 1.516*rowsshareL + -0.06131*combover + 0.1808*mse128 + -0.5767*line_elems_min + -0.01795*spanOverL + 1.78*eb",
+  "terms": [
+   {
+    "feature": "intercept",
+    "coef": 84.07129
+   },
+   {
+    "feature": "minL16",
+    "meaning": "min(L,16)",
+    "coef": 1.371109
+   },
+   {
+    "feature": "cmd",
+    "meaning": "ceil(L/floor(128/element_bytes))",
+    "coef": 27.849066
+   },
+   {
+    "feature": "dupL_minL_128",
+    "meaning": "dup*L*min(L,128)",
+    "coef": 0.008252
+   },
+   {
+    "feature": "iters",
+    "meaning": "ceil(n/(32*num_warps)) = warp rounds",
+    "coef": 16.601743
+   },
+   {
+    "feature": "RpitchL",
+    "meaning": "R*row_pitch/128",
+    "coef": -0.144033
+   },
+   {
+    "feature": "max_warp_lines",
+    "meaning": "max lines per warp wave",
+    "coef": 2.252529
+   },
+   {
+    "feature": "rowsshareL",
+    "meaning": "rows sharing a line * L",
+    "coef": 1.516367
+   },
+   {
+    "feature": "combover",
+    "meaning": "R*lines_per_row - L",
+    "coef": -0.061311
+   },
+   {
+    "feature": "mse128",
+    "meaning": "min(span/eb,128)",
+    "coef": 0.180793
+   },
+   {
+    "feature": "line_elems_min",
+    "meaning": "min elements in one line",
+    "coef": -0.576719
+   },
+   {
+    "feature": "spanOverL",
+    "meaning": "span/L",
+    "coef": -0.017953
+   },
+   {
+    "feature": "eb",
+    "meaning": "element bytes",
+    "coef": 1.780356
+   }
+  ]
+ },
+ "simt_store": {
+  "n": 2082,
+  "mape": 18.67,
+  "n_terms": 13,
+  "per_dtype": {
+   "int8": 19.1,
+   "float16": 27.2,
+   "float32": 15.4,
+   "int64": 12.9
+  },
+  "formula": "20.72 + 0.6345*hLeb1 + 35.06*cmd + 1.167*itersW + 1.805*R2 + -40.23*rows + -0.1055*RL + 0.8174*tail_row_elems + 4.86*hLeb4 + 22.87*rowseg + -0.8546*maxL32 + 3.581*iters + 0.1022*cshortN",
+  "terms": [
+   {
+    "feature": "intercept",
+    "coef": 20.722532
+   },
+   {
+    "feature": "hLeb1",
+    "meaning": "max(0,L/eb-1)",
+    "coef": 0.634465
+   },
+   {
+    "feature": "cmd",
+    "meaning": "ceil(L/floor(128/element_bytes))",
+    "coef": 35.057957
+   },
+   {
+    "feature": "itersW",
+    "meaning": "?",
+    "coef": 1.166784
+   },
+   {
+    "feature": "R2",
+    "meaning": "R^2",
+    "coef": 1.804708
+   },
+   {
+    "feature": "rows",
+    "meaning": "?",
+    "coef": -40.232637
+   },
+   {
+    "feature": "RL",
+    "meaning": "R*L",
+    "coef": -0.105528
+   },
+   {
+    "feature": "tail_row_elems",
+    "meaning": "C (rank2)",
+    "coef": 0.8174
+   },
+   {
+    "feature": "hLeb4",
+    "meaning": "max(0,L/eb-4)",
+    "coef": 4.859643
+   },
+   {
+    "feature": "rowseg",
+    "meaning": "row segments",
+    "coef": 22.869101
+   },
+   {
+    "feature": "maxL32",
+    "meaning": "?",
+    "coef": -0.854562
+   },
+   {
+    "feature": "iters",
+    "meaning": "ceil(n/(32*num_warps)) = warp rounds",
+    "coef": 3.581404
+   },
+   {
+    "feature": "cshortN",
+    "meaning": "max(0,32-C*eb)*n/32",
+    "coef": 0.102247
+   }
+  ]
+ },
+ "_overall": 14.9,
+ "_note": "12-term-per-slot compact model. Weighted LS with weights 1/T -> minimises RELATIVE error (MAPE). One formula per slot. In-sample, fitted on the 5686 probe-valid points."
+}

@@ -1,0 +1,228 @@
+{
+ "simd_store_r1": {
+  "n": 189,
+  "mape": 5.33,
+  "loo_mape": 5.55,
+  "n_terms": 5,
+  "formula": "T = 23.5488 + 0.185763*nbytes + 85.459976*mx128 + 0.438898*S64 + 0.057264*S512",
+  "terms": [
+   {
+    "name": "1",
+    "coef": 23.5488,
+    "meaning": "MTE3 固定启动 / 首字节延迟（ns）"
+   },
+   {
+    "name": "nbytes",
+    "coef": 0.185763,
+    "meaning": "每个元素一条 BIU 写命令推过写通道的等效字节代价；nbytes = n*eb"
+   },
+   {
+    "name": "mx128",
+    "coef": 85.459976,
+    "meaning": "【L2 写分配行粒度的 RMW 串行链】最挤的 128B 写分配行(WRITE-ALLOCATE LINE)内的元素数。物理身份不是 SIMT cacheline —— CAModel 白盒显示 SIMD/MTE3 路径 stride>=2 时每个元素发一条 4B 写命令（aw_cnt=n, wr_len=4），根本不做 cacheline 粒度访问；但 4B 部分写进入 L2 后按写分配行做 read-modify-write，同一条写分配行上的多个元素串行化。~85.5 ns/元素 ≈ 一次 RMW 往返。窗口大小由数据定：把窗口当连续参数细扫 16..264B，MAPE 全局最小恰在 128B（120B→5.59%，64B→18.9%，256B→18.0%）。"
+   },
+   {
+    "name": "S64",
+    "coef": 0.438898,
+    "meaning": "64B 写 beat 的 Σk² 冲突对排队量（64B = 2 个 32B memory sector）"
+   },
+   {
+    "name": "S512",
+    "coef": 0.057264,
+    "meaning": "512B 块的 Σk² 冲突对排队量（更粗粒度的聚合排队）"
+   }
+  ],
+  "derived": [
+   "nbytes = n*eb；mxB = 同一 B 字节块内最多元素数；SB = Σ kB^2（kB = 落在同一 B 块内的元素数）",
+   "写分配行粒度 = 128B（由窗口扫描确定，不是假设）",
+   "连续写分支独立成式：T = 76.73 + 0.01125868*nbytes（36 点，MAPE 4.11%），连续写走整块写路径，禁止与本式互相外推"
+  ],
+  "scope": {
+   "filters": [
+    "eb <= 4（int8/float16/float32）：真实算子主数据通路不用 int64 存储（int64 占本 slot 27%），且第一轮 eb=8 子群误差 14% 明显拉高整体",
+    "ISB <= 128：内层步长不超过一条 cache line；ISB>128 时每个元素独占一行，已不是 tile 访存而是纯散列（scatter）（占本 slot 8%）",
+    "ISB >= 2*eb（隐含，数据本身保证）：本 slot 无任何连续写形状；连续写走编译器宽路径（wide）/整块分支（实测 ~79 ns 与元素数无关），本公式不覆盖"
+   ],
+   "n_all": 291,
+   "n_kept": 189,
+   "keep_ratio": 0.6495,
+   "removed_reason_breakdown": {
+    "eb>4 (int64)": 78,
+    "ISB>128 (纯 scatter)": 24
+   },
+   "tested_but_not_applied": [
+    "n>=32：加上后保留 115 点、MAPE 反而升到 7.00%（无改善），按“无改善不加门槛”原则不加"
+   ]
+  },
+  "mape_full_slot": 11.207,
+  "with_128B_reference": {
+   "status": "本轮按用户要求把 mx128 从公式中彻底删除；该字段只作对照，不参与最终公式",
+   "formula": "T = 23.5488 + 0.185763*nbytes + 85.459976*mx128 + 0.438898*S64 + 0.057264*S512",
+   "n_terms": 5,
+   "mape": 5.3255,
+   "loo_mape": 5.5483,
+   "mape_full_slot": 8.809,
+   "terms": [
+    {
+     "name": "1",
+     "coef": 23.5488
+    },
+    {
+     "name": "nbytes",
+     "coef": 0.185763
+    },
+    {
+     "name": "mx128",
+     "coef": 85.46
+    },
+    {
+     "name": "S64",
+     "coef": 0.4389
+    },
+    {
+     "name": "S512",
+     "coef": 0.05726
+    }
+   ],
+   "note": "同一 scope、同一拟合口径（1/T 加权 NNLS）下的 189 点结果"
+  },
+  "burst_scan": {
+   "口径": "把 mx128 换成 mx(B)（或 S(B)）后重拟合 1 + nbytes + mx(B) + S64 + S512，189 点 in-sample MAPE；B 全部跳过 128",
+   "single_scale_mx": {
+    "B=16": 33.05,
+    "B=32": 28.0,
+    "B=64": 18.88,
+    "B=256": 18.04,
+    "B=512": 28.31,
+    "B=1024": 35.17,
+    "B=2048": 38.43,
+    "B=4096": 38.58,
+    "B=8192": 38.58
+   },
+   "single_scale_S": {
+    "B=16": 41.73,
+    "B=32": 41.62,
+    "B=64": 38.58,
+    "B=256": 39.53,
+    "B=512": 41.73,
+    "B=1024": 41.73,
+    "B=2048": 41.73
+   },
+   "best_single_B": "256（mx256，18.04%；次优 64，18.88%）",
+   "two_scale_mx": {
+    "mx64+mx256": 9.08,
+    "mx32+mx256": 11.9,
+    "mx64+mx512": 12.95,
+    "mx16+mx256": 14.79,
+    "mx64+mx1024": 15.88
+   },
+   "best_two_scale": "mx64 + mx256（64B 写 beat 与 256B 冲突组两级串行链），9.08%",
+   "best_six_term": "1 + nbytes + mx64 + mx256 + S64 + S512 = 8.93%",
+   "with_underfill_hinge": "1 + nbytes + mx256 + S64 + underfill256 = 7.67%（本公式）；再加 S512 = 7.51%",
+   "explicit_2x64B": "1 + nbytes + min(2*mx64, mx256) + S64 + S512 = 11.24%，说明即便用两个 64B 块拼出 128B 窗口也无法复原 mx128（对齐/部分块效应不同）"
+  },
+  "window_scan_evidence": {
+   "口径": "把 mx(B) 的 B 当作连续参数细扫（B=16..264 步长 8，再加 512/768/1024），其余项固定为 nbytes/S64/S512，B=128 也一并列出仅作证据",
+   "mape": {
+    "64": 18.88,
+    "72": 13.92,
+    "80": 12.21,
+    "88": 10.57,
+    "96": 9.9,
+    "104": 7.33,
+    "112": 6.52,
+    "120": 5.59,
+    "128": 5.33,
+    "136": 11.23,
+    "144": 11.13,
+    "152": 10.79,
+    "160": 11.12,
+    "168": 12.06,
+    "176": 12.42,
+    "184": 13.12,
+    "192": 13.43,
+    "200": 15.01,
+    "224": 16.14,
+    "256": 18.04
+   },
+   "finding": "最小点在 W=128（5.33%），W=120 为 5.59%，W=64 为 18.9%，W=256 为 18.0%。即本 slot 的串行化窗口经验最优值就是 128 字节，而不是 64/256"
+  },
+  "whitebox_evidence": {
+   "source": "results/store_camodel_b32|b64|b128/parsed.csv（CAModel 白盒 dump：core0.biu.bwif.log.dump 的 send_aw_cmd wr_len 字段，由 analyze_strided_store_camodel.py 解析）",
+   "simd_path": "store_engine = mte3:MOV_SRC_TO_DST_ALIGNv2，store_instr_count = 1（整个 tile 一条 MTE3 指令 = 一个 descriptor）；stride>=2 时 biu_send_aw_count = n、send_aw_sizes = {eb: n}，即【每元素一条 BIU 写命令，长度 = 元素字节数】，没有 burst 合并；stride==1（连续）时才合并成 1 条 512B/256B/128B 命令",
+   "simt_path": "同样 stride>=2 时 biu_send_aw_sizes = {128: n}，即【每元素写一整条 128B line】—— 128B 的“整行写放大”确实只属于 SIMT/LSU 路径",
+   "store_active_cycles": "MTE3 路径与 stride 几乎无关（b128：stride 1/2/4/…/256 → 981/1082/1166/1136/1220/1184/1095/1227/1119 cycles），即 CAModel 的 MTE3 时序模型里没有 stride 相关代价；实测 T 却随 stride 变化 20 倍以上，说明这段代价发生在 CAModel 未建模的 BIU/L2 写处理内部",
+   "conclusion": "用户的前提只说对了一半：128B 的【整行写放大】确实只属于 SIMT（wr_len=128），但 MTE3 的 4B 写命令进入 L2 后仍受 128B 粒度支配（写分配/RMW 行缓冲），这正是 mx128 在本 slot 上不可替代的原因"
+  },
+  "independent_validation": {
+   "source": "results/wide12/1d_store_simd_*.json（独立测量批次，1D simd store，stride=2 即 ISB=2*eb 的点）",
+   "n_points": 27,
+   "mape": 7.757,
+   "with_128B_mape_same_points": 5.135,
+   "n_points_block_le_512": 24,
+   "mape_block_le_512": 7.883,
+   "with_128B_mape_block_le_512": 4.975,
+   "note": "独立批次上 128B-free 版本同样比含 128B 版本差（7.76% vs 5.13%），差距与主集一致，不是过拟合"
+  },
+  "variant_6term": {
+   "formula": "T = 20.4478 + 0.201919*nbytes + 41.358615*mx256 + 0.539765*S64 + 0.047814*S512 + 57.087728*underfill256",
+   "mape": 7.5084,
+   "loo_mape": 7.8015,
+   "mape_full_slot": 10.937,
+   "note": "把 S512 加回来（6 项），MAPE 只从 7.672% 降到 7.508%，收益很小；主条目保持 5 项以便与含 128B 的 5 项版本同口径对比"
+  },
+  "residual_groups": {
+   "by_eb": {
+    "1": 7.6,
+    "2": 7.3,
+    "4": 8.3
+   },
+   "by_ISB": {
+    "2": 11.6,
+    "3": 5.1,
+    "4": 6.2,
+    "5": 3.5,
+    "6": 4.9,
+    "8": 5.5,
+    "10": 6.9,
+    "12": 5.4,
+    "16": 6.7,
+    "24": 9.3,
+    "32": 10.9,
+    "64": 11.4,
+    "128": 9.6
+   },
+   "by_n": {
+    "4": 9.1,
+    "8": 7.9,
+    "16": 8.1,
+    "32": 5.3,
+    "64": 4.2,
+    "128": 10.9,
+    "256": 7.6,
+    "512": 8.9
+   },
+   "note": "残差仍与 ISB 有结构（ISB=2 与 ISB=64 偏差最大），这正是被删掉的 128B 窗口项所携带的信息"
+  },
+  "contiguous_branch": {
+   "condition": "ISB == eb（连续写）",
+   "n": 36,
+   "mape": 4.11,
+   "formula": "T = 76.73 + 0.01125868 * nbytes   （nbytes = n * eb，写入字节数）",
+   "terms": [
+    {
+     "name": "const",
+     "coef": 76.73,
+     "meaning": "MTE3 固定启动 + 首字节延迟"
+    },
+    {
+     "name": "nbytes",
+     "coef": 0.01125868,
+     "meaning": "等效写带宽；1/系数 = 89 GB/s"
+    }
+   ],
+   "notes": "连续写走整块写路径：实测 4 个 dtype、nbytes 从 4 到 8192 字节，T 只从 ~79 ns 升到 ~220 ns，而同样数据量下 stride=2 的 strided 写要 401 倍。两者是完全不同的代价律，必须分开分支。实测来源：results/wide12（int8/float16/float32）与 results/dir23（int64）。注意：数据仅覆盖 nbytes <= 8192 的小 tile。"
+  },
+  "notes": "【机制】CAModel 白盒显示 SIMD/MTE3 路径 stride>=2 时每个元素发一条 4 B 写命令（aw_cnt = n, wr_len = 4），不做 cacheline 粒度访问。\n但部分写进入 L2 后按【写分配行】做 read-modify-write，同一条写分配行上的多个元素串行化，\n这就是 mx128 项（~85.5 ns/元素 ≈ 一次 RMW 往返）的来源。写分配行的大小不是假设：\n把窗口当连续参数细扫 16..264 B，MAPE 全局最小恰在 128 B（120 B → 5.59%，64 B → 18.9%，256 B → 18.0%）。\n【旁证】对 27 个独立测量的 stride=2 点，本式 5.13%；全槽 291 点为 8.81%。\n【限制】本式只覆盖 ISB >= 2*eb 的 strided 区间。连续写走整块写路径，是完全不同的代价律\n（实测 nbytes 从 4 到 8192 字节时 T 只从 ~79 ns 升到 ~220 ns，而同样数据量的 stride=2 要贵 401 倍），\n因此连续写单独成式，两者禁止互相外推。"
+ }
+}

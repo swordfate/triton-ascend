@@ -1,0 +1,155 @@
+{
+  "branches": {
+    "simd_gather": {
+      "coefficients_ns": [
+        27.019501937434047,
+        0.04555529468293926,
+        0.45431488913039236
+      ],
+      "feature_notes": {
+        "bank_pairs": "pairs of tile elements landing in the same 2KB/8-bank bucket",
+        "line_request_size": "useful bytes carried by one 128B line (4..128B)",
+        "worst_G32768": "max tile elements in one 32KB region minus 1"
+      },
+      "features": [
+        "line_request_size",
+        "bank_pairs",
+        "worst_G32768"
+      ],
+      "intercept_ns": 4.943185514808522,
+      "metrics": {
+        "bias_pct": 0.32800431226264065,
+        "mape_pct": 10.781426978717636,
+        "max_pct": 40.204386920346714,
+        "n": 88,
+        "p50_pct": 7.137637244700573,
+        "p90_pct": 26.15965942626262,
+        "p95_pct": 30.55499179784948,
+        "rmse_ns": 74.1982285345372,
+        "rmse_pct": 13.206583397984536
+      },
+      "n": 88
+    },
+    "simd_wide": {
+      "coefficients_ns": [
+        0.02730131919756032
+      ],
+      "feature_notes": {
+        "block": "logical f32 elements in the tile; wide MTE3 transaction payload"
+      },
+      "features": [
+        "block"
+      ],
+      "intercept_ns": 83.62537807473618,
+      "metrics": {
+        "bias_pct": 0.16120844469139084,
+        "mape_pct": 3.4381902757055194,
+        "max_pct": 7.462175159074203,
+        "n": 12,
+        "p50_pct": 3.1024422052875367,
+        "p90_pct": 5.95525765480937,
+        "p95_pct": 6.7136260851868785,
+        "rmse_ns": 3.484638504792371,
+        "rmse_pct": 3.9765554514025503
+      },
+      "n": 12
+    },
+    "simt": {
+      "coefficients_ns": [
+        0.6508156379586657,
+        1.2342412476531825,
+        0.1518112854753173
+      ],
+      "feature_notes": {
+        "K_stg": "SIMT warp-level STG instruction count per program",
+        "L": "distinct 128B lines touched by the strided tile",
+        "line_request_size": "useful bytes carried by one 128B line (4..128B)"
+      },
+      "features": [
+        "K_stg",
+        "L",
+        "line_request_size"
+      ],
+      "intercept_ns": 12.6818070592419,
+      "metrics": {
+        "bias_pct": 0.5264432616898538,
+        "mape_pct": 13.677141849526581,
+        "max_pct": 64.55549741623324,
+        "n": 644,
+        "p50_pct": 10.355303598593824,
+        "p90_pct": 30.77157739671817,
+        "p95_pct": 35.8544098504814,
+        "rmse_ns": 14.827426000199083,
+        "rmse_pct": 13.839861214272108
+      },
+      "n": 644
+    }
+  },
+  "dataset": "/Users/weijianchen/Documents/2026/triton-ascend-worktrees/strided-pre-explore/third_party/ascend/costmodel/profiles/microbench/data_provider/strided_ldst/pre-explore/results/model_store_v1/dataset.csv",
+  "feature_notes": {
+    "K_stg": "SIMT warp-level STG instruction count per program",
+    "L": "distinct 128B lines touched by the strided tile",
+    "bank_pairs": "pairs of tile elements landing in the same 2KB/8-bank bucket",
+    "block": "logical f32 elements in the tile; wide MTE3 transaction payload",
+    "line_request_size": "useful bytes carried by one 128B line (4..128B)",
+    "worst_G32768": "max tile elements in one 32KB region minus 1"
+  },
+  "metrics": {
+    "branch_order": [
+      "simd_wide",
+      "simd_gather",
+      "simt"
+    ],
+    "branches": {
+      "simd_gather": {
+        "bias_pct": 0.32800431226264065,
+        "mape_pct": 10.781426978717636,
+        "max_pct": 40.204386920346714,
+        "n": 88,
+        "p50_pct": 7.137637244700573,
+        "p90_pct": 26.15965942626262,
+        "p95_pct": 30.55499179784948,
+        "rmse_ns": 74.1982285345372,
+        "rmse_pct": 13.206583397984536
+      },
+      "simd_wide": {
+        "bias_pct": 0.16120844469139084,
+        "mape_pct": 3.4381902757055194,
+        "max_pct": 7.462175159074203,
+        "n": 12,
+        "p50_pct": 3.1024422052875367,
+        "p90_pct": 5.95525765480937,
+        "p95_pct": 6.7136260851868785,
+        "rmse_ns": 3.484638504792371,
+        "rmse_pct": 3.9765554514025503
+      },
+      "simt": {
+        "bias_pct": 0.5264432616898538,
+        "mape_pct": 13.677141849526581,
+        "max_pct": 64.55549741623324,
+        "n": 644,
+        "p50_pct": 10.355303598593824,
+        "p90_pct": 30.77157739671817,
+        "p95_pct": 35.8544098504814,
+        "rmse_ns": 14.827426000199083,
+        "rmse_pct": 13.839861214272108
+      }
+    },
+    "cycle_domain": "board Event ns",
+    "overall": {
+      "bias_pct": 0.49708110395655214,
+      "mape_pct": 13.16949355985314,
+      "max_pct": 64.55549741623324,
+      "n": 744,
+      "p50_pct": 9.706929412576182,
+      "p90_pct": 29.815465854779553,
+      "p95_pct": 35.24787645128599,
+      "rmse_ns": 29.01158344426814,
+      "rmse_pct": 18.064294549220786
+    },
+    "target_definition": "min observed Event time per iteration in a 2000/8000-iteration rotate loop, ns/iteration"
+  },
+  "model_name": "strided_store_v1",
+  "target_definition": "min observed Event time per iteration in a 2000/8000-iteration rotate loop, ns/iteration",
+  "target_kind": "store_rotate_min_observed_ns_per_iter"
+}

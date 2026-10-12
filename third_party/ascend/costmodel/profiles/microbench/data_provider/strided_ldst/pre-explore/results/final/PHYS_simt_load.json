@@ -1,0 +1,126 @@
+{
+ "simt_load_r1": {
+  "n": 855,
+  "mape": 10.22,
+  "n_terms": 8,
+  "formula": "T = max( 2.327*W , 101.6 + 9.515*min(mwl,4) + 0.4993*L + 19.20*iters + 0.7775*mwl*eb , 0.7780*W*mwl , 0.1652*W*mwl*eb )",
+  "terms": [
+   {
+    "name": "2.327*W",
+    "coef": 2.327,
+    "meaning": "warp 发射/调度开销：每个 warp 每轮循环一次 load 指令，k≈2.33 ns/warp（与已知 k≈2.18 一致）"
+   },
+   {
+    "name": "101.6",
+    "coef": 101.6,
+    "meaning": "固定启动：首次 128B line 取回的 DCache/DRAM 暴露延迟"
+   },
+   {
+    "name": "9.515*min(mwl,4)",
+    "coef": 9.515,
+    "meaning": "每个 warp 波次前若干个 line 请求串行进入 DCache 流水线（饱和在 4 个未完成请求）"
+   },
+   {
+    "name": "0.4993*L",
+    "coef": 0.4993,
+    "meaning": "本 tile 触及的 128B line 总数的吞吐代价"
+   },
+   {
+    "name": "19.20*iters",
+    "coef": 19.2,
+    "meaning": "每个 warp 的第 2..iters 条 load 指令的串行暴露延迟（iters=ceil(n/(32W))）"
+   },
+   {
+    "name": "0.7775*mwl*eb",
+    "coef": 0.7775,
+    "meaning": "波次载荷字节数（mwl*eb = 一次 warp 波次搬到的有效字节）的搬运代价"
+   },
+   {
+    "name": "0.7780*W*mwl",
+    "coef": 0.778,
+    "meaning": "全网关 line 请求吞吐：W 个 warp 各产生 mwl 条 line 请求（≈1.29 GB/s/请求 等效）"
+   },
+   {
+    "name": "0.1652*W*mwl*eb",
+    "coef": 0.1652,
+    "meaning": "按字节计价的同一请求吞吐（eb>=5 时即 int64 占主导）"
+   }
+  ],
+  "derived": [
+   "mwl = f_mean_warp_lines = 一个 32 线程 warp 波次触及的不同 128B line 数（按行主序展平元素、每 32 个元素一波）",
+   "L = 整个 tile 触及的 128B line 数",
+   "iters = ceil(n/(32*W)) = 每个 warp 在一个 tl.load 里要发的 load 指令数",
+   "eb = 元素字节数；W = num_warps"
+  ],
+  "notes": "双瓶颈：max(warp 发射 k*W, 访存代价, line 请求吞吐 c*W*mwl)。实测 W>=16 且 mwl<=1 时 T 与元素数无关(134-162ns, n=4..256)，印证 k*W 分支。W*mwl 分支解释了 W=64 时 int64 大 mwl 的跳升（实测 T≈1.2*W*mwl）。贪心 89 项=7.50% 为对照。残余偏差：int64 仍偏低约 -5%。"
+ },
+ "simt_load_r2": {
+  "n": 1666,
+  "mape": 10.79,
+  "n_terms": 9,
+  "formula": "T = max( 2.425*W , 109.6 + 1.233*min(mwl,8) + 4.539*min(mwl,4) + 0.8335*L + 10.20*iters + 6.111*conc1k , 0.6423*W*mwl , 0.1737*W*mwl*eb )",
+  "terms": [
+   {
+    "name": "2.425*W",
+    "coef": 2.425,
+    "meaning": "warp 发射/调度开销 k≈2.43 ns/warp（rank-2 与 rank-1 同量级）"
+   },
+   {
+    "name": "109.6",
+    "coef": 109.6,
+    "meaning": "固定启动：首次 line 取回延迟（真 2D 略高于 1D）"
+   },
+   {
+    "name": "1.233*min(mwl,8)",
+    "coef": 1.233,
+    "meaning": "warp 波次 line 请求的线性部分（小 mwl 段）"
+   },
+   {
+    "name": "4.539*min(mwl,4)",
+    "coef": 4.539,
+    "meaning": "warp 波次前 4 条 line 请求的串行进入成本（DCache 流水线未满）"
+   },
+   {
+    "name": "0.8335*L",
+    "coef": 0.8335,
+    "meaning": "触及 128B line 总数的吞吐代价"
+   },
+   {
+    "name": "10.20*iters",
+    "coef": 10.2,
+    "meaning": "第 2..iters 条 load 指令的串行暴露延迟"
+   },
+   {
+    "name": "6.111*conc1k",
+    "coef": 6.111,
+    "meaning": "同 1KB 块内的 line 冲突深度（=最挤 1KB 块里被触及的 128B line 数）：comb/2D 结构的 bank 串行化"
+   },
+   {
+    "name": "0.6423*W*mwl",
+    "coef": 0.6423,
+    "meaning": "line 请求吞吐：W 个 warp 各 mwl 条请求"
+   },
+   {
+    "name": "0.1737*W*mwl*eb",
+    "coef": 0.1737,
+    "meaning": "按字节计价的请求吞吐（int64 主导）"
+   }
+  ],
+  "derived": [
+   "mwl = f_mean_warp_lines（对 rank-2：把 R*C 个元素按行主序展平后每 32 个一波，取各波不同 128B line 数的均值）",
+   "L = tile 触及的 128B line 数；iters = ceil(n/(32*W))；n = R*C",
+   "conc1k = max over 1KB 块 of （该块内被 tile 触及的 128B line 数）"
+  ],
+  "notes": "剔除 R=1（1x16/1x32/1x64 本就是 1D 形状）；R=1 的 96 点用同公式外推 MAPE 仅 +2 个点。C<32 跳变：63 对受控配对的 T 比值中位数 1.42（p25=1.10,p75=1.97），而同样配对的 mean_warp_lines 比值中位数=2.00 —— 说明『一个 warp 跨多行』的惩罚已经被 mwl 特征本身编码，额外加 C / 32-C 惩罚项只能再改善 <0.1 个点。贪心 81 项=7.24% 为对照。残余偏差：int64 偏低约 -10%。"
+ },
+ "_meta": {
+  "dataset": "results/final/dataset_new_only_v5.csv (valid=1)",
+  "fit": "加权最小二乘/坐标下降，权重=1/T（即 MAPE）；max 结构用交替分配+加权最小二乘迭代，多随机重启取最优",
+  "greedy_reference": {
+   "simt_load_r1": "89 terms = 7.50%",
+   "simt_load_r2": "81 terms = 7.24%",
+   "source": "results/final/REPORT_v1_modsel.md"
+  },
+  "overall_mape": 10.6
+ }
+}

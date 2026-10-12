@@ -1,0 +1,2197 @@
+{
+  "path": "triton_stride_load",
+  "compile_mode": "simd_simt_template",
+  "cases": [
+    {
+      "path": "triton_stride_load",
+      "mode": "simd_simt_template",
+      "block": 32,
+      "stride": 3,
+      "num_warps": 1,
+      "target_ns": 251.37516856193542,
+      "target_kind": "template_load_rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "step": 8192,
+      "mask": 16383,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 2,
+      "options": {
+        "num_warps": 1,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd_simt_template",
+        "parallel_mode": "mix_simd_simt",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "load_b32_s3_w1.source",
+          "bytes": 8717
+        },
+        {
+          "key": "ttir",
+          "path": "load_b32_s3_w1.ttir",
+          "bytes": 4477
+        },
+        {
+          "key": "ttadapter",
+          "path": "load_b32_s3_w1.ttadapter",
+          "bytes": 5364
+        },
+        {
+          "key": "mlirbc",
+          "path": "load_b32_s3_w1.mlirbc",
+          "bytes": 1755
+        },
+        {
+          "key": "bcmlir",
+          "path": "load_b32_s3_w1.bcmlir",
+          "bytes": 5301
+        },
+        {
+          "key": "npubin",
+          "path": "load_b32_s3_w1.npubin",
+          "bytes": 223264
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 530327.9757499695,
+              "event_ns_median": 720454.9908638,
+              "event_ns_all": [
+                910582.0059776306,
+                530327.9757499695
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 2038578.987121582,
+              "event_ns_median": 2548848.509788513,
+              "event_ns_all": [
+                3059118.0324554443,
+                2038578.987121582
+              ]
+            }
+          ],
+          "target_ns": 251.37516856193542,
+          "post_witness_ns": 7584438.800811768,
+          "witness_ok": true,
+          "spread": 0.040583620453732094,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "triton_stride_load",
+      "mode": "simd_simt_template",
+      "block": 32,
+      "stride": 3,
+      "num_warps": 2,
+      "target_ns": 254.21682993570963,
+      "target_kind": "template_load_rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "step": 8192,
+      "mask": 16383,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 2,
+      "options": {
+        "num_warps": 2,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd_simt_template",
+        "parallel_mode": "mix_simd_simt",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "load_b32_s3_w2.source",
+          "bytes": 8717
+        },
+        {
+          "key": "ttir",
+          "path": "load_b32_s3_w2.ttir",
+          "bytes": 4477
+        },
+        {
+          "key": "ttadapter",
+          "path": "load_b32_s3_w2.ttadapter",
+          "bytes": 5364
+        },
+        {
+          "key": "mlirbc",
+          "path": "load_b32_s3_w2.mlirbc",
+          "bytes": 1755
+        },
+        {
+          "key": "bcmlir",
+          "path": "load_b32_s3_w2.bcmlir",
+          "bytes": 5301
+        },
+        {
+          "key": "npubin",
+          "path": "load_b32_s3_w2.npubin",
+          "bytes": 223264
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 523854.01725769043,
+              "event_ns_median": 532824.5162963867,
+              "event_ns_all": [
+                541795.015335083,
+                523854.01725769043
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 2049154.9968719482,
+              "event_ns_median": 2052378.535270691,
+              "event_ns_all": [
+                2055602.0736694336,
+                2049154.9968719482
+              ]
+            }
+          ],
+          "target_ns": 254.21682993570963,
+          "post_witness_ns": 7579593.181610107,
+          "witness_ok": true,
+          "spread": 0.022575682283395536,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "triton_stride_load",
+      "mode": "simd_simt_template",
+      "block": 32,
+      "stride": 3,
+      "num_warps": 4,
+      "target_ns": 251.2361705303192,
+      "target_kind": "template_load_rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "step": 8192,
+      "mask": 16383,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 2,
+      "options": {
+        "num_warps": 4,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd_simt_template",
+        "parallel_mode": "mix_simd_simt",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "load_b32_s3_w4.source",
+          "bytes": 8717
+        },
+        {
+          "key": "ttir",
+          "path": "load_b32_s3_w4.ttir",
+          "bytes": 4477
+        },
+        {
+          "key": "ttadapter",
+          "path": "load_b32_s3_w4.ttadapter",
+          "bytes": 5364
+        },
+        {
+          "key": "mlirbc",
+          "path": "load_b32_s3_w4.mlirbc",
+          "bytes": 1755
+        },
+        {
+          "key": "bcmlir",
+          "path": "load_b32_s3_w4.bcmlir",
+          "bytes": 5301
+        },
+        {
+          "key": "npubin",
+          "path": "load_b32_s3_w4.npubin",
+          "bytes": 223264
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 532622.9929924011,
+              "event_ns_median": 537002.5038719177,
+              "event_ns_all": [
+                541382.0147514343,
+                532622.9929924011
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 2040040.0161743164,
+              "event_ns_median": 2043193.4595108032,
+              "event_ns_all": [
+                2046346.90284729,
+                2040040.0161743164
+              ]
+            }
+          ],
+          "target_ns": 251.2361705303192,
+          "post_witness_ns": 7577723.026275635,
+          "witness_ok": true,
+          "spread": 0.04433832428685026,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "triton_stride_load",
+      "mode": "simd_simt_template",
+      "block": 32,
+      "stride": 3,
+      "num_warps": 8,
+      "target_ns": 252.72433956464133,
+      "target_kind": "template_load_rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "step": 8192,
+      "mask": 16383,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 2,
+      "options": {
+        "num_warps": 8,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd_simt_template",
+        "parallel_mode": "mix_simd_simt",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "load_b32_s3_w8.source",
+          "bytes": 8717
+        },
+        {
+          "key": "ttir",
+          "path": "load_b32_s3_w8.ttir",
+          "bytes": 4477
+        },
+        {
+          "key": "ttadapter",
+          "path": "load_b32_s3_w8.ttadapter",
+          "bytes": 5364
+        },
+        {
+          "key": "mlirbc",
+          "path": "load_b32_s3_w8.mlirbc",
+          "bytes": 1755
+        },
+        {
+          "key": "bcmlir",
+          "path": "load_b32_s3_w8.bcmlir",
+          "bytes": 5301
+        },
+        {
+          "key": "npubin",
+          "path": "load_b32_s3_w8.npubin",
+          "bytes": 223264
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 535031.0206413269,
+              "event_ns_median": 546287.5068187714,
+              "event_ns_all": [
+                557543.9929962158,
+                535031.0206413269
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 2051377.0580291748,
+              "event_ns_median": 2066660.0465774536,
+              "event_ns_all": [
+                2081943.0351257324,
+                2051377.0580291748
+              ]
+            }
+          ],
+          "target_ns": 252.72433956464133,
+          "post_witness_ns": 7578950.881958008,
+          "witness_ok": true,
+          "spread": 0.043262170739783445,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "triton_stride_load",
+      "mode": "simd_simt_template",
+      "block": 32,
+      "stride": 17,
+      "num_warps": 1,
+      "target_ns": 300.2871771653493,
+      "target_kind": "template_load_rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "step": 8192,
+      "mask": 16383,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 2,
+      "options": {
+        "num_warps": 1,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd_simt_template",
+        "parallel_mode": "mix_simd_simt",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "load_b32_s17_w1.source",
+          "bytes": 8720
+        },
+        {
+          "key": "ttir",
+          "path": "load_b32_s17_w1.ttir",
+          "bytes": 4478
+        },
+        {
+          "key": "ttadapter",
+          "path": "load_b32_s17_w1.ttadapter",
+          "bytes": 5365
+        },
+        {
+          "key": "mlirbc",
+          "path": "load_b32_s17_w1.mlirbc",
+          "bytes": 1755
+        },
+        {
+          "key": "bcmlir",
+          "path": "load_b32_s17_w1.bcmlir",
+          "bytes": 5304
+        },
+        {
+          "key": "npubin",
+          "path": "load_b32_s17_w1.npubin",
+          "bytes": 223264
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 661009.0136528015,
+              "event_ns_median": 903454.5123577118,
+              "event_ns_all": [
+                1145900.011062622,
+                661009.0136528015
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 2462732.0766448975,
+              "event_ns_median": 3183871.030807495,
+              "event_ns_all": [
+                3905009.984970093,
+                2462732.0766448975
+              ]
+            }
+          ],
+          "target_ns": 300.2871771653493,
+          "post_witness_ns": 7594594.0017700195,
+          "witness_ok": true,
+          "spread": 0.0736190427231971,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "triton_stride_load",
+      "mode": "simd_simt_template",
+      "block": 32,
+      "stride": 17,
+      "num_warps": 2,
+      "target_ns": 302.8294841448466,
+      "target_kind": "template_load_rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "step": 8192,
+      "mask": 16383,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 2,
+      "options": {
+        "num_warps": 2,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd_simt_template",
+        "parallel_mode": "mix_simd_simt",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "load_b32_s17_w2.source",
+          "bytes": 8720
+        },
+        {
+          "key": "ttir",
+          "path": "load_b32_s17_w2.ttir",
+          "bytes": 4478
+        },
+        {
+          "key": "ttadapter",
+          "path": "load_b32_s17_w2.ttadapter",
+          "bytes": 5365
+        },
+        {
+          "key": "mlirbc",
+          "path": "load_b32_s17_w2.mlirbc",
+          "bytes": 1755
+        },
+        {
+          "key": "bcmlir",
+          "path": "load_b32_s17_w2.bcmlir",
+          "bytes": 5304
+        },
+        {
+          "key": "npubin",
+          "path": "load_b32_s17_w2.npubin",
+          "bytes": 223264
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 630607.008934021,
+              "event_ns_median": 635336.9951248169,
+              "event_ns_all": [
+                640066.9813156128,
+                630607.008934021
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 2447583.9138031006,
+              "event_ns_median": 2450369.0004348755,
+              "event_ns_all": [
+                2453154.0870666504,
+                2447583.9138031006
+              ]
+            }
+          ],
+          "target_ns": 302.8294841448466,
+          "post_witness_ns": 7584296.226501465,
+          "witness_ok": true,
+          "spread": 0.03057877669112853,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "triton_stride_load",
+      "mode": "simd_simt_template",
+      "block": 32,
+      "stride": 17,
+      "num_warps": 4,
+      "target_ns": 301.3881742954254,
+      "target_kind": "template_load_rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "step": 8192,
+      "mask": 16383,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 2,
+      "options": {
+        "num_warps": 4,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd_simt_template",
+        "parallel_mode": "mix_simd_simt",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "load_b32_s17_w4.source",
+          "bytes": 8720
+        },
+        {
+          "key": "ttir",
+          "path": "load_b32_s17_w4.ttir",
+          "bytes": 4478
+        },
+        {
+          "key": "ttadapter",
+          "path": "load_b32_s17_w4.ttadapter",
+          "bytes": 5365
+        },
+        {
+          "key": "mlirbc",
+          "path": "load_b32_s17_w4.mlirbc",
+          "bytes": 1755
+        },
+        {
+          "key": "bcmlir",
+          "path": "load_b32_s17_w4.bcmlir",
+          "bytes": 5304
+        },
+        {
+          "key": "npubin",
+          "path": "load_b32_s17_w4.npubin",
+          "bytes": 223264
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 641382.9922676086,
+              "event_ns_median": 649529.0100574493,
+              "event_ns_all": [
+                657675.02784729,
+                641382.9922676086
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 2449712.038040161,
+              "event_ns_median": 2453629.0168762207,
+              "event_ns_all": [
+                2457545.9957122803,
+                2449712.038040161
+              ]
+            }
+          ],
+          "target_ns": 301.3881742954254,
+          "post_witness_ns": 7590500.831604004,
+          "witness_ok": true,
+          "spread": 0.04727899819724634,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "triton_stride_load",
+      "mode": "simd_simt_template",
+      "block": 32,
+      "stride": 17,
+      "num_warps": 8,
+      "target_ns": 304.6544889609019,
+      "target_kind": "template_load_rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "step": 8192,
+      "mask": 16383,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 2,
+      "options": {
+        "num_warps": 8,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd_simt_template",
+        "parallel_mode": "mix_simd_simt",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "load_b32_s17_w8.source",
+          "bytes": 8720
+        },
+        {
+          "key": "ttir",
+          "path": "load_b32_s17_w8.ttir",
+          "bytes": 4478
+        },
+        {
+          "key": "ttadapter",
+          "path": "load_b32_s17_w8.ttadapter",
+          "bytes": 5365
+        },
+        {
+          "key": "mlirbc",
+          "path": "load_b32_s17_w8.mlirbc",
+          "bytes": 1755
+        },
+        {
+          "key": "bcmlir",
+          "path": "load_b32_s17_w8.bcmlir",
+          "bytes": 5304
+        },
+        {
+          "key": "npubin",
+          "path": "load_b32_s17_w8.npubin",
+          "bytes": 223264
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 626552.9990196228,
+              "event_ns_median": 635931.4918518066,
+              "event_ns_all": [
+                645309.9846839905,
+                626552.9990196228
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 2454479.932785034,
+              "event_ns_median": 2471107.4829101562,
+              "event_ns_all": [
+                2487735.0330352783,
+                2454479.932785034
+              ]
+            }
+          ],
+          "target_ns": 304.6544889609019,
+          "post_witness_ns": 7579757.213592529,
+          "witness_ok": true,
+          "spread": 0.021076588405739383,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "triton_stride_load",
+      "mode": "simd_simt_template",
+      "block": 32,
+      "stride": 255,
+      "num_warps": 1,
+      "target_ns": 539.5229856173197,
+      "target_kind": "template_load_rotate_loop_min_event_slope_ns_per_iter",
+      "valid": false,
+      "correctness_ok": true,
+      "step": 8192,
+      "mask": 16383,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 2,
+      "options": {
+        "num_warps": 1,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd_simt_template",
+        "parallel_mode": "mix_simd_simt",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "load_b32_s255_w1.source",
+          "bytes": 8723
+        },
+        {
+          "key": "ttir",
+          "path": "load_b32_s255_w1.ttir",
+          "bytes": 4479
+        },
+        {
+          "key": "ttadapter",
+          "path": "load_b32_s255_w1.ttadapter",
+          "bytes": 5366
+        },
+        {
+          "key": "mlirbc",
+          "path": "load_b32_s255_w1.mlirbc",
+          "bytes": 1756
+        },
+        {
+          "key": "bcmlir",
+          "path": "load_b32_s255_w1.bcmlir",
+          "bytes": 5307
+        },
+        {
+          "key": "npubin",
+          "path": "load_b32_s255_w1.npubin",
+          "bytes": 223264
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 585837.0065689087,
+              "event_ns_median": 813279.5095443726,
+              "event_ns_all": [
+                1040722.0125198364,
+                585837.0065689087
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 3822974.920272827,
+              "event_ns_median": 4062404.0365219116,
+              "event_ns_all": [
+                3822974.920272827,
+                4301833.152770996
+              ]
+            }
+          ],
+          "target_ns": 539.5229856173197,
+          "post_witness_ns": 7574811.935424805,
+          "witness_ok": true,
+          "spread": 0.6314157681259217,
+          "stable_ok": false
+        }
+      ]
+    },
+    {
+      "path": "triton_stride_load",
+      "mode": "simd_simt_template",
+      "block": 32,
+      "stride": 255,
+      "num_warps": 2,
+      "target_ns": 538.114329179128,
+      "target_kind": "template_load_rotate_loop_min_event_slope_ns_per_iter",
+      "valid": false,
+      "correctness_ok": true,
+      "step": 8192,
+      "mask": 16383,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 2,
+      "options": {
+        "num_warps": 2,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd_simt_template",
+        "parallel_mode": "mix_simd_simt",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "load_b32_s255_w2.source",
+          "bytes": 8723
+        },
+        {
+          "key": "ttir",
+          "path": "load_b32_s255_w2.ttir",
+          "bytes": 4479
+        },
+        {
+          "key": "ttadapter",
+          "path": "load_b32_s255_w2.ttadapter",
+          "bytes": 5366
+        },
+        {
+          "key": "mlirbc",
+          "path": "load_b32_s255_w2.mlirbc",
+          "bytes": 1756
+        },
+        {
+          "key": "bcmlir",
+          "path": "load_b32_s255_w2.bcmlir",
+          "bytes": 5307
+        },
+        {
+          "key": "npubin",
+          "path": "load_b32_s255_w2.npubin",
+          "bytes": 223264
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 590870.9764480591,
+              "event_ns_median": 847741.0078048706,
+              "event_ns_all": [
+                1104611.0391616821,
+                590870.9764480591
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 3819556.951522827,
+              "event_ns_median": 4065169.4536209106,
+              "event_ns_all": [
+                3819556.951522827,
+                4310781.955718994
+              ]
+            }
+          ],
+          "target_ns": 538.114329179128,
+          "post_witness_ns": 7573205.947875977,
+          "witness_ok": true,
+          "spread": 0.6160706413790947,
+          "stable_ok": false
+        }
+      ]
+    },
+    {
+      "path": "triton_stride_load",
+      "mode": "simd_simt_template",
+      "block": 32,
+      "stride": 255,
+      "num_warps": 4,
+      "target_ns": 537.2516512870789,
+      "target_kind": "template_load_rotate_loop_min_event_slope_ns_per_iter",
+      "valid": false,
+      "correctness_ok": true,
+      "step": 8192,
+      "mask": 16383,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 2,
+      "options": {
+        "num_warps": 4,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd_simt_template",
+        "parallel_mode": "mix_simd_simt",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "load_b32_s255_w4.source",
+          "bytes": 8723
+        },
+        {
+          "key": "ttir",
+          "path": "load_b32_s255_w4.ttir",
+          "bytes": 4479
+        },
+        {
+          "key": "ttadapter",
+          "path": "load_b32_s255_w4.ttadapter",
+          "bytes": 5366
+        },
+        {
+          "key": "mlirbc",
+          "path": "load_b32_s255_w4.mlirbc",
+          "bytes": 1756
+        },
+        {
+          "key": "bcmlir",
+          "path": "load_b32_s255_w4.bcmlir",
+          "bytes": 5307
+        },
+        {
+          "key": "npubin",
+          "path": "load_b32_s255_w4.npubin",
+          "bytes": 223264
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 592594.9811935425,
+              "event_ns_median": 854822.9932785034,
+              "event_ns_all": [
+                1117051.0053634644,
+                592594.9811935425
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 3816104.8889160156,
+              "event_ns_median": 4066429.853439331,
+              "event_ns_all": [
+                3816104.8889160156,
+                4316754.8179626465
+              ]
+            }
+          ],
+          "target_ns": 537.2516512870789,
+          "post_witness_ns": 7575111.865997314,
+          "witness_ok": true,
+          "spread": 0.6099127608328788,
+          "stable_ok": false
+        }
+      ]
+    },
+    {
+      "path": "triton_stride_load",
+      "mode": "simd_simt_template",
+      "block": 32,
+      "stride": 255,
+      "num_warps": 8,
+      "target_ns": 535.6188317139944,
+      "target_kind": "template_load_rotate_loop_min_event_slope_ns_per_iter",
+      "valid": false,
+      "correctness_ok": true,
+      "step": 8192,
+      "mask": 16383,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 2,
+      "options": {
+        "num_warps": 8,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd_simt_template",
+        "parallel_mode": "mix_simd_simt",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "load_b32_s255_w8.source",
+          "bytes": 8723
+        },
+        {
+          "key": "ttir",
+          "path": "load_b32_s255_w8.ttir",
+          "bytes": 4479
+        },
+        {
+          "key": "ttadapter",
+          "path": "load_b32_s255_w8.ttadapter",
+          "bytes": 5366
+        },
+        {
+          "key": "mlirbc",
+          "path": "load_b32_s255_w8.mlirbc",
+          "bytes": 1756
+        },
+        {
+          "key": "bcmlir",
+          "path": "load_b32_s255_w8.bcmlir",
+          "bytes": 5307
+        },
+        {
+          "key": "npubin",
+          "path": "load_b32_s255_w8.npubin",
+          "bytes": 223264
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 586749.017238617,
+              "event_ns_median": 849122.017621994,
+              "event_ns_all": [
+                1111495.018005371,
+                586749.017238617
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 3800462.007522583,
+              "event_ns_median": 4065979.5999526978,
+              "event_ns_all": [
+                3800462.007522583,
+                4331497.1923828125
+              ]
+            }
+          ],
+          "target_ns": 535.6188317139944,
+          "post_witness_ns": 7582881.927490234,
+          "witness_ok": true,
+          "spread": 0.6192877601263306,
+          "stable_ok": false
+        }
+      ]
+    },
+    {
+      "path": "triton_stride_load",
+      "mode": "simd_simt_template",
+      "block": 1024,
+      "stride": 3,
+      "num_warps": 1,
+      "target_ns": 732.7633301417032,
+      "target_kind": "template_load_rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "step": 8192,
+      "mask": 16383,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 2,
+      "options": {
+        "num_warps": 1,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd_simt_template",
+        "parallel_mode": "mix_simd_simt",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "load_b1024_s3_w1.source",
+          "bytes": 8785
+        },
+        {
+          "key": "ttir",
+          "path": "load_b1024_s3_w1.ttir",
+          "bytes": 4503
+        },
+        {
+          "key": "ttadapter",
+          "path": "load_b1024_s3_w1.ttadapter",
+          "bytes": 5384
+        },
+        {
+          "key": "mlirbc",
+          "path": "load_b1024_s3_w1.mlirbc",
+          "bytes": 1757
+        },
+        {
+          "key": "bcmlir",
+          "path": "load_b1024_s3_w1.bcmlir",
+          "bytes": 5325
+        },
+        {
+          "key": "npubin",
+          "path": "load_b1024_s3_w1.npubin",
+          "bytes": 223264
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 1104984.998703003,
+              "event_ns_median": 1317367.4941062927,
+              "event_ns_all": [
+                1529749.9895095825,
+                1104984.998703003
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 5501564.979553223,
+              "event_ns_median": 5596885.442733765,
+              "event_ns_all": [
+                5501564.979553223,
+                5692205.905914307
+              ]
+            }
+          ],
+          "target_ns": 732.7633301417032,
+          "post_witness_ns": 7576820.850372314,
+          "witness_ok": true,
+          "spread": 0.24471485721769723,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "triton_stride_load",
+      "mode": "simd_simt_template",
+      "block": 1024,
+      "stride": 3,
+      "num_warps": 2,
+      "target_ns": 665.8888260523478,
+      "target_kind": "template_load_rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "step": 8192,
+      "mask": 16383,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 2,
+      "options": {
+        "num_warps": 2,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd_simt_template",
+        "parallel_mode": "mix_simd_simt",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "load_b1024_s3_w2.source",
+          "bytes": 8785
+        },
+        {
+          "key": "ttir",
+          "path": "load_b1024_s3_w2.ttir",
+          "bytes": 4503
+        },
+        {
+          "key": "ttadapter",
+          "path": "load_b1024_s3_w2.ttadapter",
+          "bytes": 5384
+        },
+        {
+          "key": "mlirbc",
+          "path": "load_b1024_s3_w2.mlirbc",
+          "bytes": 1757
+        },
+        {
+          "key": "bcmlir",
+          "path": "load_b1024_s3_w2.bcmlir",
+          "bytes": 5325
+        },
+        {
+          "key": "npubin",
+          "path": "load_b1024_s3_w2.npubin",
+          "bytes": 223264
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 1017802.9537200928,
+              "event_ns_median": 1271887.481212616,
+              "event_ns_all": [
+                1525972.0087051392,
+                1017802.9537200928
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 5013135.91003418,
+              "event_ns_median": 5274225.473403931,
+              "event_ns_all": [
+                5013135.91003418,
+                5535315.036773682
+              ]
+            }
+          ],
+          "target_ns": 665.8888260523478,
+          "post_witness_ns": 7572251.796722412,
+          "witness_ok": true,
+          "spread": 0.23136209511650924,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "triton_stride_load",
+      "mode": "simd_simt_template",
+      "block": 1024,
+      "stride": 3,
+      "num_warps": 4,
+      "target_ns": 658.5223277409872,
+      "target_kind": "template_load_rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "step": 8192,
+      "mask": 16383,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 2,
+      "options": {
+        "num_warps": 4,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd_simt_template",
+        "parallel_mode": "mix_simd_simt",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "load_b1024_s3_w4.source",
+          "bytes": 8785
+        },
+        {
+          "key": "ttir",
+          "path": "load_b1024_s3_w4.ttir",
+          "bytes": 4503
+        },
+        {
+          "key": "ttadapter",
+          "path": "load_b1024_s3_w4.ttadapter",
+          "bytes": 5384
+        },
+        {
+          "key": "mlirbc",
+          "path": "load_b1024_s3_w4.mlirbc",
+          "bytes": 1757
+        },
+        {
+          "key": "bcmlir",
+          "path": "load_b1024_s3_w4.bcmlir",
+          "bytes": 5325
+        },
+        {
+          "key": "npubin",
+          "path": "load_b1024_s3_w4.npubin",
+          "bytes": 223264
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 1055207.9677581787,
+              "event_ns_median": 1303797.960281372,
+              "event_ns_all": [
+                1552387.9528045654,
+                1055207.9677581787
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 5006341.934204102,
+              "event_ns_median": 5265680.074691772,
+              "event_ns_all": [
+                5006341.934204102,
+                5525018.215179443
+              ]
+            }
+          ],
+          "target_ns": 658.5223277409872,
+          "post_witness_ns": 7571733.9515686035,
+          "witness_ok": true,
+          "spread": 0.18610313965886427,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "triton_stride_load",
+      "mode": "simd_simt_template",
+      "block": 1024,
+      "stride": 3,
+      "num_warps": 8,
+      "target_ns": 666.6966478029887,
+      "target_kind": "template_load_rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "step": 8192,
+      "mask": 16383,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 2,
+      "options": {
+        "num_warps": 8,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd_simt_template",
+        "parallel_mode": "mix_simd_simt",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "load_b1024_s3_w8.source",
+          "bytes": 8785
+        },
+        {
+          "key": "ttir",
+          "path": "load_b1024_s3_w8.ttir",
+          "bytes": 4503
+        },
+        {
+          "key": "ttadapter",
+          "path": "load_b1024_s3_w8.ttadapter",
+          "bytes": 5384
+        },
+        {
+          "key": "mlirbc",
+          "path": "load_b1024_s3_w8.mlirbc",
+          "bytes": 1757
+        },
+        {
+          "key": "bcmlir",
+          "path": "load_b1024_s3_w8.bcmlir",
+          "bytes": 5325
+        },
+        {
+          "key": "npubin",
+          "path": "load_b1024_s3_w8.npubin",
+          "bytes": 223264
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 1028128.0279159546,
+              "event_ns_median": 1284090.518951416,
+              "event_ns_all": [
+                1540053.0099868774,
+                1028128.0279159546
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 5028307.914733887,
+              "event_ns_median": 5285378.932952881,
+              "event_ns_all": [
+                5028307.914733887,
+                5542449.951171875
+              ]
+            }
+          ],
+          "target_ns": 666.6966478029887,
+          "post_witness_ns": 7602713.108062744,
+          "witness_ok": true,
+          "spread": 0.22268525373401526,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "triton_stride_load",
+      "mode": "simd_simt_template",
+      "block": 1024,
+      "stride": 17,
+      "num_warps": 1,
+      "target_ns": 1478.1610171000164,
+      "target_kind": "template_load_rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "step": 8192,
+      "mask": 16383,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 2,
+      "options": {
+        "num_warps": 1,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd_simt_template",
+        "parallel_mode": "mix_simd_simt",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "load_b1024_s17_w1.source",
+          "bytes": 8788
+        },
+        {
+          "key": "ttir",
+          "path": "load_b1024_s17_w1.ttir",
+          "bytes": 4504
+        },
+        {
+          "key": "ttadapter",
+          "path": "load_b1024_s17_w1.ttadapter",
+          "bytes": 5385
+        },
+        {
+          "key": "mlirbc",
+          "path": "load_b1024_s17_w1.mlirbc",
+          "bytes": 1757
+        },
+        {
+          "key": "bcmlir",
+          "path": "load_b1024_s17_w1.bcmlir",
+          "bytes": 5328
+        },
+        {
+          "key": "npubin",
+          "path": "load_b1024_s17_w1.npubin",
+          "bytes": 222832
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 2448573.112487793,
+              "event_ns_median": 2756075.5014419556,
+              "event_ns_all": [
+                3063577.890396118,
+                2448573.112487793
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 11317539.21508789,
+              "event_ns_median": 11696084.49935913,
+              "event_ns_all": [
+                11317539.21508789,
+                12074629.783630371
+              ]
+            }
+          ],
+          "target_ns": 1478.1610171000164,
+          "post_witness_ns": 7574757.099151611,
+          "witness_ok": true,
+          "spread": 0.1555239209897508,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "triton_stride_load",
+      "mode": "simd_simt_template",
+      "block": 1024,
+      "stride": 17,
+      "num_warps": 2,
+      "target_ns": 1496.3258504867554,
+      "target_kind": "template_load_rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "step": 8192,
+      "mask": 16383,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 2,
+      "options": {
+        "num_warps": 2,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd_simt_template",
+        "parallel_mode": "mix_simd_simt",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "load_b1024_s17_w2.source",
+          "bytes": 8788
+        },
+        {
+          "key": "ttir",
+          "path": "load_b1024_s17_w2.ttir",
+          "bytes": 4504
+        },
+        {
+          "key": "ttadapter",
+          "path": "load_b1024_s17_w2.ttadapter",
+          "bytes": 5385
+        },
+        {
+          "key": "mlirbc",
+          "path": "load_b1024_s17_w2.mlirbc",
+          "bytes": 1757
+        },
+        {
+          "key": "bcmlir",
+          "path": "load_b1024_s17_w2.bcmlir",
+          "bytes": 5328
+        },
+        {
+          "key": "npubin",
+          "path": "load_b1024_s17_w2.npubin",
+          "bytes": 222832
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 2364043.951034546,
+              "event_ns_median": 2714939.9518966675,
+              "event_ns_all": [
+                3065835.952758789,
+                2364043.951034546
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 11341999.053955078,
+              "event_ns_median": 11738492.012023926,
+              "event_ns_all": [
+                11341999.053955078,
+                12134984.970092773
+              ]
+            }
+          ],
+          "target_ns": 1496.3258504867554,
+          "post_witness_ns": 7573051.929473877,
+          "witness_ok": true,
+          "spread": 0.19942768502586702,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "triton_stride_load",
+      "mode": "simd_simt_template",
+      "block": 1024,
+      "stride": 17,
+      "num_warps": 4,
+      "target_ns": 1487.7354701360066,
+      "target_kind": "template_load_rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "step": 8192,
+      "mask": 16383,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 2,
+      "options": {
+        "num_warps": 4,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd_simt_template",
+        "parallel_mode": "mix_simd_simt",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "load_b1024_s17_w4.source",
+          "bytes": 8788
+        },
+        {
+          "key": "ttir",
+          "path": "load_b1024_s17_w4.ttir",
+          "bytes": 4504
+        },
+        {
+          "key": "ttadapter",
+          "path": "load_b1024_s17_w4.ttadapter",
+          "bytes": 5385
+        },
+        {
+          "key": "mlirbc",
+          "path": "load_b1024_s17_w4.mlirbc",
+          "bytes": 1757
+        },
+        {
+          "key": "bcmlir",
+          "path": "load_b1024_s17_w4.bcmlir",
+          "bytes": 5328
+        },
+        {
+          "key": "npubin",
+          "path": "load_b1024_s17_w4.npubin",
+          "bytes": 222832
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 2352514.9822235107,
+              "event_ns_median": 2696672.4395751953,
+              "event_ns_all": [
+                3040829.89692688,
+                2352514.9822235107
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 11278927.80303955,
+              "event_ns_median": 11669603.34777832,
+              "event_ns_all": [
+                11278927.80303955,
+                12060278.89251709
+              ]
+            }
+          ],
+          "target_ns": 1487.7354701360066,
+          "post_witness_ns": 7601974.964141846,
+          "witness_ok": true,
+          "spread": 0.19860318513031558,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "triton_stride_load",
+      "mode": "simd_simt_template",
+      "block": 1024,
+      "stride": 17,
+      "num_warps": 8,
+      "target_ns": 1509.7203652064006,
+      "target_kind": "template_load_rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "step": 8192,
+      "mask": 16383,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 2,
+      "options": {
+        "num_warps": 8,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd_simt_template",
+        "parallel_mode": "mix_simd_simt",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "load_b1024_s17_w8.source",
+          "bytes": 8788
+        },
+        {
+          "key": "ttir",
+          "path": "load_b1024_s17_w8.ttir",
+          "bytes": 4504
+        },
+        {
+          "key": "ttadapter",
+          "path": "load_b1024_s17_w8.ttadapter",
+          "bytes": 5385
+        },
+        {
+          "key": "mlirbc",
+          "path": "load_b1024_s17_w8.mlirbc",
+          "bytes": 1757
+        },
+        {
+          "key": "bcmlir",
+          "path": "load_b1024_s17_w8.bcmlir",
+          "bytes": 5328
+        },
+        {
+          "key": "npubin",
+          "path": "load_b1024_s17_w8.npubin",
+          "bytes": 222832
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 2390022.039413452,
+              "event_ns_median": 2753447.0558166504,
+              "event_ns_all": [
+                3116872.0722198486,
+                2390022.039413452
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 11448344.230651855,
+              "event_ns_median": 11868073.463439941,
+              "event_ns_all": [
+                11448344.230651855,
+                12287802.696228027
+              ]
+            }
+          ],
+          "target_ns": 1509.7203652064006,
+          "post_witness_ns": 7645668.983459473,
+          "witness_ok": true,
+          "spread": 0.1975145042450585,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "triton_stride_load",
+      "mode": "simd_simt_template",
+      "block": 1024,
+      "stride": 255,
+      "num_warps": 1,
+      "target_ns": 2032.6093037923176,
+      "target_kind": "template_load_rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "step": 8192,
+      "mask": 16383,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 2,
+      "options": {
+        "num_warps": 1,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd_simt_template",
+        "parallel_mode": "mix_simd_simt",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "load_b1024_s255_w1.source",
+          "bytes": 8791
+        },
+        {
+          "key": "ttir",
+          "path": "load_b1024_s255_w1.ttir",
+          "bytes": 4505
+        },
+        {
+          "key": "ttadapter",
+          "path": "load_b1024_s255_w1.ttadapter",
+          "bytes": 5386
+        },
+        {
+          "key": "mlirbc",
+          "path": "load_b1024_s255_w1.mlirbc",
+          "bytes": 1758
+        },
+        {
+          "key": "bcmlir",
+          "path": "load_b1024_s255_w1.bcmlir",
+          "bytes": 5331
+        },
+        {
+          "key": "npubin",
+          "path": "load_b1024_s255_w1.npubin",
+          "bytes": 222832
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 3681611.0610961914,
+              "event_ns_median": 3916513.442993164,
+              "event_ns_all": [
+                4151415.8248901367,
+                3681611.0610961914
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 15877266.883850098,
+              "event_ns_median": 16189304.828643799,
+              "event_ns_all": [
+                15877266.883850098,
+                16501342.7734375
+              ]
+            }
+          ],
+          "target_ns": 2032.6093037923176,
+          "post_witness_ns": 7572559.833526611,
+          "witness_ok": true,
+          "spread": 0.0781466741303926,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "triton_stride_load",
+      "mode": "simd_simt_template",
+      "block": 1024,
+      "stride": 255,
+      "num_warps": 2,
+      "target_ns": 2053.697625796,
+      "target_kind": "template_load_rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "step": 8192,
+      "mask": 16383,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 2,
+      "options": {
+        "num_warps": 2,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd_simt_template",
+        "parallel_mode": "mix_simd_simt",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "load_b1024_s255_w2.source",
+          "bytes": 8791
+        },
+        {
+          "key": "ttir",
+          "path": "load_b1024_s255_w2.ttir",
+          "bytes": 4505
+        },
+        {
+          "key": "ttadapter",
+          "path": "load_b1024_s255_w2.ttadapter",
+          "bytes": 5386
+        },
+        {
+          "key": "mlirbc",
+          "path": "load_b1024_s255_w2.mlirbc",
+          "bytes": 1758
+        },
+        {
+          "key": "bcmlir",
+          "path": "load_b1024_s255_w2.bcmlir",
+          "bytes": 5331
+        },
+        {
+          "key": "npubin",
+          "path": "load_b1024_s255_w2.npubin",
+          "bytes": 222832
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 3681112.051010132,
+              "event_ns_median": 3937404.51335907,
+              "event_ns_all": [
+                4193696.975708008,
+                3681112.051010132
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 16003297.805786133,
+              "event_ns_median": 16333258.628845215,
+              "event_ns_all": [
+                16003297.805786133,
+                16663219.451904297
+              ]
+            }
+          ],
+          "target_ns": 2053.697625796,
+          "post_witness_ns": 7575887.203216553,
+          "witness_ok": true,
+          "spread": 0.08685212403373303,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "triton_stride_load",
+      "mode": "simd_simt_template",
+      "block": 1024,
+      "stride": 255,
+      "num_warps": 4,
+      "target_ns": 2037.4788045883179,
+      "target_kind": "template_load_rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "step": 8192,
+      "mask": 16383,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 2,
+      "options": {
+        "num_warps": 4,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd_simt_template",
+        "parallel_mode": "mix_simd_simt",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "load_b1024_s255_w4.source",
+          "bytes": 8791
+        },
+        {
+          "key": "ttir",
+          "path": "load_b1024_s255_w4.ttir",
+          "bytes": 4505
+        },
+        {
+          "key": "ttadapter",
+          "path": "load_b1024_s255_w4.ttadapter",
+          "bytes": 5386
+        },
+        {
+          "key": "mlirbc",
+          "path": "load_b1024_s255_w4.mlirbc",
+          "bytes": 1758
+        },
+        {
+          "key": "bcmlir",
+          "path": "load_b1024_s255_w4.bcmlir",
+          "bytes": 5331
+        },
+        {
+          "key": "npubin",
+          "path": "load_b1024_s255_w4.npubin",
+          "bytes": 222832
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 3733506.917953491,
+              "event_ns_median": 3973943.35269928,
+              "event_ns_all": [
+                4214379.787445068,
+                3733506.917953491
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 15958379.745483398,
+              "event_ns_median": 16266131.401062012,
+              "event_ns_all": [
+                15958379.745483398,
+                16573883.056640625
+              ]
+            }
+          ],
+          "target_ns": 2037.4788045883179,
+          "post_witness_ns": 7621436.11907959,
+          "witness_ok": true,
+          "spread": 0.068591815696362,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "triton_stride_load",
+      "mode": "simd_simt_template",
+      "block": 1024,
+      "stride": 255,
+      "num_warps": 8,
+      "target_ns": 2115.8815224965415,
+      "target_kind": "template_load_rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "step": 8192,
+      "mask": 16383,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 2,
+      "options": {
+        "num_warps": 8,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd_simt_template",
+        "parallel_mode": "mix_simd_simt",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "load_b1024_s255_w8.source",
+          "bytes": 8791
+        },
+        {
+          "key": "ttir",
+          "path": "load_b1024_s255_w8.ttir",
+          "bytes": 4505
+        },
+        {
+          "key": "ttadapter",
+          "path": "load_b1024_s255_w8.ttadapter",
+          "bytes": 5386
+        },
+        {
+          "key": "mlirbc",
+          "path": "load_b1024_s255_w8.mlirbc",
+          "bytes": 1758
+        },
+        {
+          "key": "bcmlir",
+          "path": "load_b1024_s255_w8.bcmlir",
+          "bytes": 5331
+        },
+        {
+          "key": "npubin",
+          "path": "load_b1024_s255_w8.npubin",
+          "bytes": 222832
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 3811811.923980713,
+              "event_ns_median": 3984280.3478240967,
+              "event_ns_all": [
+                4156748.7716674805,
+                3811811.923980713
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 16507101.058959961,
+              "event_ns_median": 16538631.439208984,
+              "event_ns_all": [
+                16570161.819458008,
+                16507101.058959961
+              ]
+            }
+          ],
+          "target_ns": 2115.8815224965415,
+          "post_witness_ns": 7589523.792266846,
+          "witness_ok": true,
+          "spread": 0.0826282479410364,
+          "stable_ok": true
+        }
+      ]
+    }
+  ],
+  "frequency_check": {
+    "inflight_freq_mhz": 1650,
+    "query_seconds": 0.41206723800860345,
+    "reference_witness_ns": 7573005.199432373,
+    "witness_tolerance": 0.15
+  },
+  "elapsed_seconds": 192.51732426002854
+}

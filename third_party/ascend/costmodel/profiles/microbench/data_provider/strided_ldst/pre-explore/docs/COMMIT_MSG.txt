@@ -1,0 +1,42 @@
+strided ld/st: final measured dataset for the SIMD/SIMT cost model
+
+Measurement campaign, scripts and results.
+
+Grid (5992 points, 100% coverage of the target config, 0 wrong results):
+
+  1D   shape = elements x stride
+       elements {4,8,16,32,64,128,256,512} x strides {2,3,4,6,8,16,32,64,128,256}
+       = 80 cells per (op, path, dtype, W)
+  2D   shape = (R*rs) rows x (C*cs) cols,  OS = rs*C*cs
+       shapes {4x4,4x8,4x16,8x8,8x16,16x16} x rs {2,3,4,8} x cs {2,3,4,8,16}
+       = 120 cells, plus an 8-cell n x 1 (single column) family
+  W    simd is W independent (W=1).  simt runs the FULL grid at W in {1,4} and a
+       reduced grid (4 blocks x 4 strides / 2 shapes x 2 rs x 2 cs) at
+       W in {2,8,16,32,64}.  num_warps is therefore a real factor, not a constant.
+
+Scripts
+  stride2d_measure_probe.py   rank-2 probe; --row-strides gives OS = rs*cols*cs
+                              (the (row stride, col stride) parameterisation;
+                              the legacy tight/gap forms are kept for repro).
+                              Load correctness now writes to the float32 sink.
+  dtype_stride_measure_probe.py  rank-1 probe (unchanged protocol).
+  build_dtype_dataset.py / build_2d_dataset.py
+                              aggregation is now the MEDIAN over all numerically
+                              correct passes, and every row carries
+                              target_min_ns / target_max_ns / target_spread /
+                              quality.  A high spread is a QUALITY FLAG, not a
+                              reason to drop a point: repeat measurements of the
+                              same cell agree to 1.2% even when flagged.
+  run_*.sh                    campaign drivers; every one uses a unique output
+                              filename derived from its block/stride signature.
+
+Fixed along the way
+  * 2D int8 load: the kernel stores tl.sum(acc) (float32) but the probe read it
+    back from an element-dtype buffer, so every tile with ~43+ elements
+    overflowed int8 and was flagged wrong (448 cases).  All other dtypes and
+    both 1D paths were unaffected.  Re-measured and verified 296/296.
+  * two drivers reused one output name for the two invocations of a single
+    (op,path,dtype) and silently lost results; the signature suffix fixes it.
+
+results/final/dataset.csv (1D, 2560 rows) and dataset_2d.csv (2D, 3432 rows)
+are the fitting input.  results/final/raw/ holds the 231 merged raw files.

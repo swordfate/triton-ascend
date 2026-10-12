@@ -1,0 +1,333 @@
+{
+ "simd_store_r2": {
+  "n": 325,
+  "n_points_raw_before_R1_filter": 943,
+  "mape": 8.12,
+  "loo_mape": 8.24,
+  "n_terms": 4,
+  "formula": "T = 76.05 + 76.57*Q4 + 0.3458*n*Q4 + 1.115*max(0,n-128)",
+  "terms": [
+   {
+    "name": "1",
+    "coef": 76.0485,
+    "meaning": "MTE3 固定启动/首字节延迟 + 每行 descriptor 的固定发放开销（ns）"
+   },
+   {
+    "name": "Q4",
+    "coef": 76.5708,
+    "meaning": "写合并窗口内的 RMW 串行链长度：Q4 = min(C, 4×32/ISB) = 一行落在同一个目标写合并窗口（4 个 32 B memory sector）内的元素数；系数 ≈ 76.6 ns/元素 ≈ 一次“读-改-写”往返，与 simd_store_r1 的 mx128 系数（85.5 ns）同量级"
+   },
+   {
+    "name": "n*Q4",
+    "coef": 0.345843,
+    "meaning": "聚合排队量：每个元素按“与它共享同一写合并窗口的元素数”付费（ns/(元素·占用度)）；这是有限并发下同窗口写命令串行化的总工作量"
+   },
+   {
+    "name": "max(0,n-128)",
+    "coef": 1.11529,
+    "meaning": "BIU 写命令队列溢出：CAModel 白盒证实本路径每个元素发一条 4 B BIU 写命令（stride>=2 时 aw_cnt = 元素数，wr_len = eb），队列深度约 128 条命令；超出的每条命令再付 1.12 ns"
+   }
+  ],
+  "derived": [
+   "Q4 = min(C, 4*32/ISB)：SECTOR = 32 B 是已独立确认的 memory sector 大小；窗口 sector 数 k 是自由参数，在 k=1..16 上扫描（模型 {1,Q,nQ}），MAPE 在 k=4 处取尖锐极小（k=3: 11.5%，k=4: 8.12%，k=5: 11.6%，k=8: 24.5%）",
+   "因此“窗口 = 4 × 32 B = 128 B 目标地址跨度”。这不是把 128 藏起来：它是从数据估计出来的 sector 数（4），单位是 32 B memory sector，机制是部分写 RMW 的写合并窗口，不是 SIMT LSU 的 cacheline",
+   "hq = max(0, n - 128)：n = 元素数 = BIU 写命令数（每元素一条，CAModel 白盒）；128 是命令条数阈值，扫描 Nq∈{64..256} 得最优 128（112→8.27%，128→8.12%，144→8.14%，160→8.17%，256→8.85%）",
+   "C = f_cols（行内元素数），ISB = inner_stride_bytes（内层步长字节），n = R*C，eb = element_bytes"
+  ],
+  "scope": {
+   "filters": [
+    "C*eb >= 32（每行至少写满一个 32B sector beat）：本轮找到的关键结构性边界，见 notes；剔除 341 点（占本 slot 40.1%），全族 MAPE 从 27.0% 降到 10.2%，再加 eb<=4 后降到 8.6%",
+    "eb <= 4（int8/float16/float32）：真实算子主数据通路不用 int64 存储（int64 占本 slot 23%）",
+    "ISB >= 2*eb（隐含，数据本身保证）：无任何连续写形状；连续写走宽路径（wide）分支，本公式不覆盖"
+   ],
+   "n_all": 851,
+   "n_kept": 325,
+   "keep_ratio": 0.3819,
+   "removed_reason_breakdown": {
+    "C*eb<32 (行不足一个 32B sector beat)": 341,
+    "eb>4 (int64)": 185
+   },
+   "tested_but_not_applied": [
+    "n>=32：加上后 317 点 MAPE 8.65%（略差于 325 点 8.62%），无改善不加",
+    "ISB<=128：eb<=4 时数据最大 ISB=64，自动满足",
+    "R>32：数据最大 R=32，无此子集",
+    "pitch 上限：C*eb>=32 后 pitch 子群 MAPE 已在 4-14%，不再是主要误差来源，不加"
+   ]
+  },
+  "mape_full_slot": 31.34,
+  "round1_for_reference": {
+   "formula": "T = 0.2845*n + 85.72*mx128 + 29.65*mx32 + 1.193*S32 + 0.02079*S512",
+   "mape_full_slot": 25.26,
+   "mape_on_new_scope": 10.24
+  },
+  "ablation_128b_removed": {
+   "note": "本槽（325 点）上把 128 B 粒度因子全部换成 MTE burst 粒度后的对照；模型形式统一为 {1, nbytes, mxB, SB}（4 项）",
+   "ladder": [
+    {
+     "model": "1 + nbytes（去掉两项 128 B 后只剩这个）",
+     "n_terms": 2,
+     "mape": 54.52
+    },
+    {
+     "model": "1 + n",
+     "n_terms": 2,
+     "mape": 51.19
+    },
+    {
+     "model": "1 + S64",
+     "n_terms": 2,
+     "mape": 23.61
+    },
+    {
+     "model": "1+nbytes+mx16+S16",
+     "n_terms": 4,
+     "mape": 31.85
+    },
+    {
+     "model": "1+nbytes+mx32+S32（32 B sector）",
+     "n_terms": 4,
+     "mape": 23.65
+    },
+    {
+     "model": "1+nbytes+mx64+S64（64 B burst）",
+     "n_terms": 4,
+     "mape": 18.42
+    },
+    {
+     "model": "1+nbytes+mx256+S256（256 B 冲突粒度）",
+     "n_terms": 4,
+     "mape": 21.22
+    },
+    {
+     "model": "1+nbytes+mx512+S512",
+     "n_terms": 4,
+     "mape": 33.51
+    },
+    {
+     "model": "1+nbytes+mx1024+S1024",
+     "n_terms": 4,
+     "mape": 34.18
+    },
+    {
+     "model": "1+nbytes+mx2048+S2048",
+     "n_terms": 4,
+     "mape": 33.05
+    },
+    {
+     "model": "1+nbytes+mx4096+S4096",
+     "n_terms": 4,
+     "mape": 34.3
+    },
+    {
+     "model": "1+nbytes+mx8192+S8192",
+     "n_terms": 4,
+     "mape": 37.24
+    },
+    {
+     "model": "CURRENT 1+nbytes+mx128+S128",
+     "n_terms": 4,
+     "mape": 8.62
+    },
+    {
+     "model": "FINAL 1+Q4+nQ4+hq128",
+     "n_terms": 4,
+     "mape": 8.12
+    }
+   ],
+   "strictly_no_128_best": {
+    "model": "1 + mx96 + S256（3 项）",
+    "mape": 12.26,
+    "model5": "1 + mx96 + S256 + multi1024 + multi2048 + hqb512（6 项）",
+    "mape5": 10.5,
+    "model9": "束搜索 9 项最佳",
+    "mape9": 9.53,
+    "verdict": "严格不含任何 128 B 相关量（连“k 个 sector 的窗口”都不用，只允许 16/32/64/96/256/512/1024/2048/4096/8192 B 的块与元素计数 hinge）时，最好 9.53%（9 项）/10.50%（6 项），均差于现状 8.62%"
+   },
+   "best_burst_over_user_list": {
+    "B": 64,
+    "mape": 18.42
+   },
+   "best_burst_over_fine_grid": {
+    "B": 128,
+    "mape": 8.62,
+    "neighbours": {
+     "104": 9.92,
+     "112": 9.53,
+     "120": 8.94,
+     "136": 10.37,
+     "160": 12.03,
+     "192": 15.69,
+     "256": 21.22
+    }
+   }
+  },
+  "window_scan": {
+   "note": "窗口宽 = k 个 32 B memory sector；k 为自由参数",
+   "rows": [
+    {
+     "k": 1,
+     "window_bytes": 32,
+     "mape_1_Q_nQ": 19.03,
+     "mape_1_Q_nQ_hq": 18.39
+    },
+    {
+     "k": 2,
+     "window_bytes": 64,
+     "mape_1_Q_nQ": 19.03,
+     "mape_1_Q_nQ_hq": 18.39
+    },
+    {
+     "k": 3,
+     "window_bytes": 96,
+     "mape_1_Q_nQ": 12.27,
+     "mape_1_Q_nQ_hq": 11.47
+    },
+    {
+     "k": 4,
+     "window_bytes": 128,
+     "mape_1_Q_nQ": 9.56,
+     "mape_1_Q_nQ_hq": 8.12
+    },
+    {
+     "k": 5,
+     "window_bytes": 160,
+     "mape_1_Q_nQ": 12.37,
+     "mape_1_Q_nQ_hq": 11.64
+    },
+    {
+     "k": 6,
+     "window_bytes": 192,
+     "mape_1_Q_nQ": 17.09,
+     "mape_1_Q_nQ_hq": 16.76
+    },
+    {
+     "k": 8,
+     "window_bytes": 256,
+     "mape_1_Q_nQ": 24.84,
+     "mape_1_Q_nQ_hq": 24.49
+    },
+    {
+     "k": 12,
+     "window_bytes": 384,
+     "mape_1_Q_nQ": 33.87,
+     "mape_1_Q_nQ_hq": 33.61
+    },
+    {
+     "k": 16,
+     "window_bytes": 512,
+     "mape_1_Q_nQ": 42.89,
+     "mape_1_Q_nQ_hq": 42.86
+    }
+   ]
+  },
+  "independent_kit_check": {
+   "CAModel_white_box": "results/store_camodel_b{32,64,128}/parsed.json：simd 模式 stride>=2 时 store_engine = mte3:MOV_SRC_TO_DST_ALIGNv2，BIU send_aw_cmd 条数 = 元素数（32/64/128），每条 wr_len = 4 B，目的端口单一；stride=1 时才是 1 条 block*eb 的整块命令。因此本路径不存在 cacheline 粒度的访问，“每元素一条写命令”成立",
+   "CAModel_limit": "同一批 CAModel 里 mte3 的 task_cycles 完全不随 stride 变化（32 元素时 2005-2237 cycles，stride 从 2 到 256），说明该 CAModel 未建模目的端部分写/合并代价 —— 本公式的窗口参数只能来自实测"
+  },
+  "contiguous_branch": {
+   "condition": "ISB == eb（连续写）",
+   "n": 36,
+   "mape": 4.11,
+   "formula": "T = 76.73 + 0.01125868 * nbytes   （nbytes = n * eb，写入字节数）",
+   "terms": [
+    {
+     "name": "const",
+     "coef": 76.73,
+     "meaning": "MTE3 固定启动 + 首字节延迟"
+    },
+    {
+     "name": "nbytes",
+     "coef": 0.01125868,
+     "meaning": "等效写带宽；1/系数 = 89 GB/s"
+    }
+   ],
+   "notes": "连续写走整块写路径：实测 4 个 dtype、nbytes 从 4 到 8192 字节，T 只从 ~79 ns 升到 ~220 ns，而同样数据量下 stride=2 的 strided 写要 401 倍。两者是完全不同的代价律，必须分开分支。实测来源：results/wide12（int8/float16/float32）与 results/dir23（int64）。注意：数据仅覆盖 nbytes <= 8192 的小 tile。"
+  },
+  "notes": "【机制】CAModel 白盒显示策略是『每元素一条 4 B 写命令』（stride>=2 时 aw_cnt = n、wr_len = 4），不做 cacheline 粒度访问；\n代价因而按【命令条数】而非字节收费 —— 加 nbytes 项后 MAPE 只从 8.124% 变到 8.136%（系数 0.056，被完全吸收）。\n部分写进入 L2 后按【写合并窗口】串行化 RMW。窗口大小由数据估计而不是假设：\n把窗口写成『k 个 32 B memory sector 的地址跨度』并对 k 扫描，k = 4 是尖锐最优\n（k=3 → 11.5%，k=4 → 8.12%，k=5 → 11.6%，k=6 → 16.8%，k=8 → 24.5%），即窗口 = 4 × 32 B = 128 B。\n注意：已独立确认的 256 B 冲突粒度在本槽明确更差（21.2%），load/gather 的粒度结论不可平移到 store。\n【限制】本式只覆盖 C*eb >= 32 且 eb <= 4 的范围，禁止外推到被剔除的窄行退化路径。\n残差按 eb / ISB / C / C*eb 分组多在 4–10%、bias 在 ±5% 内；偏弱子群：R=32（18.9%，bias −12.6%）、pitch=128（13.9%）。",
+  "strict_128_free_alternatives": {
+   "note": "严格不使用任何 128 B 相关刻度（连“k 个 32 B sector 的窗口”也不用；块刻度只用 16/32/64/96/256/512/1024/2048/4096/8192 B 与 256 B/2 KB bank 计数，外加元素/命令计数的 hinge），线性 NNLS，权重 1/T。",
+   "models": [
+    {
+     "terms": [
+      "one",
+      "mx96",
+      "S256"
+     ],
+     "n_terms": 3,
+     "mape": 12.264,
+     "loo": 12.369,
+     "coef": [
+      37.4271,
+      95.0272,
+      0.250901
+     ]
+    },
+    {
+     "terms": [
+      "one",
+      "mx96",
+      "S256",
+      "share2048",
+      "hqb512"
+     ],
+     "n_terms": 5,
+     "mape": 10.744,
+     "loo": 10.928,
+     "coef": [
+      30.859,
+      95.0214,
+      0.217589,
+      16.1559,
+      0.221022
+     ]
+    },
+    {
+     "terms": [
+      "one",
+      "mx96",
+      "S256",
+      "multi1024",
+      "multi2048",
+      "hqb512"
+     ],
+     "n_terms": 6,
+     "mape": 10.504,
+     "loo": 10.715,
+     "coef": [
+      30.9995,
+      94.3978,
+      0.218232,
+      31.6763,
+      14.3551,
+      0.21775
+     ]
+    },
+    {
+     "terms": [
+      "one",
+      "mx96",
+      "S256",
+      "multi1024",
+      "multi2048",
+      "niq192",
+      "hqb512"
+     ],
+     "n_terms": 7,
+     "mape": 10.442,
+     "loo": 10.682,
+     "coef": [
+      30.0349,
+      95.9123,
+      0.207942,
+      31.6626,
+      13.5987,
+      0.278881,
+      0.12968
+     ]
+    }
+   ],
+   "conclusion": "严格 128-free 的天花板约 9.5-10.5%，差于现状 8.62%，也差于最终公式 8.12%。"
+  },
+  "mape_full_slot_current_128b": 26.89
+ }
+}

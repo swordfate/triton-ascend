@@ -1,0 +1,73 @@
+{
+ "simd_load_wide_r1": {
+  "n": 32,
+  "mape": 4.11,
+  "n_terms": 2,
+  "formula": "T = 65.3389 + 0.00865176 * span_bytes",
+  "derived": [
+   "span_bytes = (n - 1) * stride_elements * element_bytes + element_bytes  (连续搬运的字节数)"
+  ],
+  "terms": [
+   {
+    "name": "intercept",
+    "coef": 65.3389,
+    "meaning": "MTE2 固定启动 + 首字节延迟"
+   },
+   {
+    "name": "span_bytes",
+    "coef": 0.00865176,
+    "meaning": "等效搬运时间；1/coef = 116 GB/s 等效带宽"
+   }
+  ],
+  "notes": "32 点的 stride 全是 2，span 与 n*eb 共线，无法分离 n 与 eb。stride=1 被探针拒绝测量。实测 T(stride2)/T(stride1)=0.96-1.13，extract_slice 代价约等于 0。贪心 6 项=3.46%。"
+ },
+ "simd_load_gather_r1": {
+  "n": 284,
+  "mape": 20.18,
+  "n_terms": 7,
+  "formula": "T = 96.03 + 4.2413*(w-1) + 0.7178*n + 0.05572*n*(w-1) + 0.1333*L256 + 0.6548*eb + -0.00983*ISB",
+  "derived": [
+   "w = 最挤的 256 字节块里的元素数",
+   "L256 = 触及的 256 字节块数",
+   "块粒度 B=256 由扫描 B in {16,32,64,128,256,512,1024,2048,4096} 得出（最优 256，不是 128）"
+  ],
+  "terms": [
+   {
+    "name": "intercept",
+    "coef": 96.03,
+    "meaning": "固定启动开销"
+   },
+   {
+    "name": "w-1",
+    "coef": 4.2413,
+    "meaning": "同块冲突导致的额外启动开销"
+   },
+   {
+    "name": "n",
+    "coef": 0.7178,
+    "meaning": "每元素一条 BIU 命令的基线代价"
+   },
+   {
+    "name": "n*(w-1)",
+    "coef": 0.05572,
+    "meaning": "同块元素的排队代价（惩罚项）"
+   },
+   {
+    "name": "L256",
+    "coef": 0.1333,
+    "meaning": "触及的 256B 块数"
+   },
+   {
+    "name": "eb",
+    "coef": 0.6548,
+    "meaning": "数据宽度效应"
+   },
+   {
+    "name": "ISB",
+    "coef": -0.00983,
+    "meaning": "stride 越大块越分散，排队越少（减轻惩罚）"
+   }
+  ],
+  "notes": "核心物理：每元素一条 BIU 命令，其单价被同 256B 块的拥挤度 (w-1) 抬高。贪心 78 项=12.14%，物理 7 项=20.18%。"
+ }
+}

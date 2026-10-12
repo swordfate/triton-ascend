@@ -1,0 +1,213 @@
+{
+  "kind": "stride2d_dataset",
+  "raw_files": [
+    "2d_load_simd_float16_W1_expand.json",
+    "2d_load_simd_float32_W1_expand.json",
+    "2d_load_simd_int64_W1_expand.json",
+    "2d_load_simd_int8_W1_expand.json",
+    "2d_load_simt_only_float16_W1_expand.json",
+    "2d_load_simt_only_float32_W1_expand.json",
+    "2d_load_simt_only_int64_W1_expand.json",
+    "2d_load_simt_only_int8_W1_expand.json",
+    "2d_store_simd_float16_W1_expand.json",
+    "2d_store_simd_float32_W1_expand.json",
+    "2d_store_simd_int64_W1_expand.json",
+    "2d_store_simd_int8_W1_expand.json",
+    "2d_store_simt_only_float16_W1_expand.json",
+    "2d_store_simt_only_float16_W4_expand.json",
+    "2d_store_simt_only_float32_W1_expand.json",
+    "2d_store_simt_only_float32_W4_expand.json",
+    "2d_store_simt_only_int64_W1_expand.json",
+    "2d_store_simt_only_int64_W4_expand.json",
+    "2d_store_simt_only_int8_W1_expand.json",
+    "2d_store_simt_only_int8_W4_expand.json"
+  ],
+  "total_cases": 2400,
+  "valid_cases": 2264,
+  "invalid_cases": 136,
+  "invalid_by_bucket": {},
+  "scope": "rank-2 tiles with holes on BOTH axes; R == 1 rank-2 tiles are included as singleton_row_strided",
+  "feature_source": "scripts/stride_feature_reference.py",
+  "coverage": {
+    "load|simd|both_strided": {
+      "n": 384,
+      "forms": [
+        "rs2_cs16",
+        "rs2_cs2",
+        "rs2_cs4",
+        "rs2_cs8",
+        "rs4_cs16",
+        "rs4_cs2",
+        "rs4_cs4",
+        "rs4_cs8"
+      ],
+      "shapes": [
+        "16x32",
+        "16x4",
+        "16x8",
+        "2x16",
+        "2x32",
+        "2x64",
+        "2x8",
+        "32x16",
+        "32x8",
+        "4x32",
+        "8x32",
+        "8x4"
+      ]
+    },
+    "load|simd|singleton_row_strided": {
+      "n": 96,
+      "forms": [
+        "rs2_cs16",
+        "rs2_cs2",
+        "rs2_cs4",
+        "rs2_cs8",
+        "rs4_cs16",
+        "rs4_cs2",
+        "rs4_cs4",
+        "rs4_cs8"
+      ],
+      "shapes": [
+        "1x16",
+        "1x32",
+        "1x64"
+      ]
+    },
+    "load|simt_only|both_strided": {
+      "n": 384,
+      "forms": [
+        "rs2_cs16",
+        "rs2_cs2",
+        "rs2_cs4",
+        "rs2_cs8",
+        "rs4_cs16",
+        "rs4_cs2",
+        "rs4_cs4",
+        "rs4_cs8"
+      ],
+      "shapes": [
+        "16x32",
+        "16x4",
+        "16x8",
+        "2x16",
+        "2x32",
+        "2x64",
+        "2x8",
+        "32x16",
+        "32x8",
+        "4x32",
+        "8x32",
+        "8x4"
+      ]
+    },
+    "load|simt_only|singleton_row_strided": {
+      "n": 96,
+      "forms": [
+        "rs2_cs16",
+        "rs2_cs2",
+        "rs2_cs4",
+        "rs2_cs8",
+        "rs4_cs16",
+        "rs4_cs2",
+        "rs4_cs4",
+        "rs4_cs8"
+      ],
+      "shapes": [
+        "1x16",
+        "1x32",
+        "1x64"
+      ]
+    },
+    "store|simd|both_strided": {
+      "n": 384,
+      "forms": [
+        "rs2_cs16",
+        "rs2_cs2",
+        "rs2_cs4",
+        "rs2_cs8",
+        "rs4_cs16",
+        "rs4_cs2",
+        "rs4_cs4",
+        "rs4_cs8"
+      ],
+      "shapes": [
+        "16x32",
+        "16x4",
+        "16x8",
+        "2x16",
+        "2x32",
+        "2x64",
+        "2x8",
+        "32x16",
+        "32x8",
+        "4x32",
+        "8x32",
+        "8x4"
+      ]
+    },
+    "store|simd|singleton_row_strided": {
+      "n": 96,
+      "forms": [
+        "rs2_cs16",
+        "rs2_cs2",
+        "rs2_cs4",
+        "rs2_cs8",
+        "rs4_cs16",
+        "rs4_cs2",
+        "rs4_cs4",
+        "rs4_cs8"
+      ],
+      "shapes": [
+        "1x16",
+        "1x32",
+        "1x64"
+      ]
+    },
+    "store|simt_only|both_strided": {
+      "n": 768,
+      "forms": [
+        "rs2_cs16",
+        "rs2_cs2",
+        "rs2_cs4",
+        "rs2_cs8",
+        "rs4_cs16",
+        "rs4_cs2",
+        "rs4_cs4",
+        "rs4_cs8"
+      ],
+      "shapes": [
+        "16x32",
+        "16x4",
+        "16x8",
+        "2x16",
+        "2x32",
+        "2x64",
+        "2x8",
+        "32x16",
+        "32x8",
+        "4x32",
+        "8x32",
+        "8x4"
+      ]
+    },
+    "store|simt_only|singleton_row_strided": {
+      "n": 192,
+      "forms": [
+        "rs2_cs16",
+        "rs2_cs2",
+        "rs2_cs4",
+        "rs2_cs8",
+        "rs4_cs16",
+        "rs4_cs2",
+        "rs4_cs4",
+        "rs4_cs8"
+      ],
+      "shapes": [
+        "1x16",
+        "1x32",
+        "1x64"
+      ]
+    }
+  }
+}

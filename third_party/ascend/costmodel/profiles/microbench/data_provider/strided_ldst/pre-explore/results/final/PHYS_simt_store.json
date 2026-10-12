@@ -1,0 +1,137 @@
+{
+ "simt_store_r1": {
+  "n": 962,
+  "mape": 18.95,
+  "n_terms": 8,
+  "formula": "T = max( 24.64 , 2.184*num_warps , 1.3915*L*[eb<4] + 7.6308*(S/W) + 0.48866*(L/eb) + 0.029833*(n*eb) + 0.013872*[eb<4]*n + 1.9038*wf + 0.039732*L*wf + 0.266406*[eb<4]*P/W )",
+  "derived": [
+   "L = 触及的 128B line 数（元素地址 j*ISB 覆盖的不同 128B line 数）",
+   "P = Sum over warp 波次(32 lane 连续元素, 行主序展平) of 该波次触及的不同 128B line 数",
+   "S = Sum over warp 波次 of 该波次触及的 128B line 段数(rank-1 恒为每波次 1)",
+   "W = num_warps",
+   "[eb<4] = 亚 32-bit 存储指示（int8/float16=1, float32/int64=0）",
+   "wf = 4/min(eb,4) = 32-bit LSU 数据通路的欠填浪费因子 (int8=4, float16=2, float32=int64=1)"
+  ],
+  "terms": [
+   {
+    "name": "intercept",
+    "coef": 24.64,
+    "meaning": "固定发射地板（实测 25ns，36.5% 的点落在这里）"
+   },
+   {
+    "name": "num_warps",
+    "coef": 2.184,
+    "meaning": "每 warp 发射开销 k≈2.18 ns/warp（W=16/32/64 处实测 34/68/140ns 拟合）"
+   },
+   {
+    "name": "L*[eb<4]",
+    "coef": 1.3915,
+    "meaning": "窄存储时的 line 事务代价"
+   },
+   {
+    "name": "S/W",
+    "coef": 7.6308,
+    "meaning": "每 warp 的行段数 = warp 波次的主事务数"
+   },
+   {
+    "name": "L/eb",
+    "coef": 0.488664,
+    "meaning": "每字节对应的 line 数（窄 dtype 单位 line 承载的字节更少，代价更高）"
+   },
+   {
+    "name": "n*eb",
+    "coef": 0.029833,
+    "meaning": "总写入字节数（带宽项）"
+   },
+   {
+    "name": "[eb<4]*n",
+    "coef": 0.013872,
+    "meaning": "窄存储的元素级代价"
+   },
+   {
+    "name": "wf",
+    "coef": 1.90379,
+    "meaning": "32-bit 数据通路欠填因子本身的代价"
+   },
+   {
+    "name": "L*wf",
+    "coef": 0.039732,
+    "meaning": "欠填因子加权的 line 事务"
+   },
+   {
+    "name": "[eb<4]*P/W",
+    "coef": 0.266406,
+    "meaning": "窄存储下每 warp 的 line 事务"
+   }
+  ],
+  "notes": "双瓶颈 T=max(发射, 访存)。25ns 地板来自循环发射开销（T 是对 iters 的斜率，固定启动已被扣掉）。W>=16 后 T 由 k*W 主导，W<=8 时由访存主导，与 W>=16 时 T 与元素数无关的既有结论一致。亚 32-bit 存储（int8/float16）存在明显的窄存储惩罚，且只在大 stride（ISB>=32）时暴露：同地址图案下 f16/f32 的 T 比值 ISB<=16 时≈1.0，ISB=32 时≈1.5，ISB>=64 时≈3.0-3.5。贪心 113 项 = 5.47%，本物理式 18.95%（明显劣于贪心，主因是 r1 在 ISB 中段存在未被公式捕获的非单调结构，例如 ISB=64/128 时 T 随 n 近似线性但斜率随 ISB 缓变）。"
+ },
+ "simt_store_r2": {
+  "n": 3224,
+  "mape": 25.24,
+  "n_terms": 8,
+  "formula": "T = max( 24.59 , 1.542*num_warps , 0.123364*L*wf + 0.0284396*min(R,32)^2*C + 0.225891*[eb<4]*n + 0.159854*L*eb + 2.23596*L*[eb<4] + 0.582813*num_warps + 0.964844*(P/S) + 0.00891571*[eb<4]*min(R,32)^2*C )",
+  "derived": [
+   "已剔除 R=1 的伪 2D 形状：3416 -> 3224 点（192 点剔除）",
+   "R,C = 形状 (行列)；n = R*C；pitch = f_row_pitch_bytes",
+   "warp 波次 = 32 个行主序连续元素（SIMT 把 (R,C) tile 展平到 32 lane）",
+   "P = Sum over warp 波次 of 该波次触及的不同 128B line 数（带重复计数）",
+   "S = Sum over warp 波次 of 该波次跨的行段数；P/S = 每行段平均 line 数",
+   "L = 整个 tile 触及的不同 128B line 数",
+   "[eb<4] = 亚 32-bit 存储指示；wf = 4/min(eb,4)"
+  ],
+  "terms": [
+   {
+    "name": "intercept",
+    "coef": 24.59,
+    "meaning": "固定发射地板"
+   },
+   {
+    "name": "num_warps",
+    "coef": 1.542,
+    "meaning": "每 warp 发射开销（r2 实测拟合 1.54 ns/warp，落在已知 1.5-2.2 区间内）"
+   },
+   {
+    "name": "L*wf",
+    "coef": 0.123364,
+    "meaning": "欠填因子加权的 line 事务（窄存储每条 line 的有效字节更少）"
+   },
+   {
+    "name": "min(R,32)^2*C",
+    "coef": 0.02844,
+    "meaning": "warp 跨行惩罚：一行装不满一个 warp(C<32) 时行数被反复重访；实测 T 峰值出现在 R=32(=warp 宽度)，故取 min(R,32)"
+   },
+   {
+    "name": "[eb<4]*n",
+    "coef": 0.225891,
+    "meaning": "窄存储的元素级代价"
+   },
+   {
+    "name": "L*eb",
+    "coef": 0.159854,
+    "meaning": "有效字节 × line 数（带宽项）"
+   },
+   {
+    "name": "L*[eb<4]",
+    "coef": 2.23596,
+    "meaning": "窄存储的 line 事务代价"
+   },
+   {
+    "name": "num_warps",
+    "coef": 0.582813,
+    "meaning": "warp 发射的线性附加项"
+   },
+   {
+    "name": "P/S",
+    "coef": 0.964844,
+    "meaning": "每个行段平均的 line 数（行越长、跨行越少则该项小）"
+   },
+   {
+    "name": "[eb<4]*min(R,32)^2*C",
+    "coef": 0.008916,
+    "meaning": "窄存储下的跨行惩罚放大"
+   }
+  ],
+  "notes": "双瓶颈 T=max(发射, 访存)。实测 T 对 (dtype,R,C,ISB,W) 几乎是确定性函数（同配置重复测量组内 MAPE 仅 5.5%），但对 W 近似无关（W=1..32 同形状 T 差 <15%），只在 W=64 处出现 k*W 瓶颈。核心现象：固定 n 时 T 随 R 每翻倍跳升约 2.2-2.6 倍，峰值出现在 R=32（=warp 宽度），R>32 后因行间共享 line 而回落（如 n=256: R=4->38, R=8->98, R=16->219, R=32->549, R=64->308）。主要残余：R>=32 的强跳变只被 min(R,32)^2*C 部分捕获，该区段仍系统性低估 50-65%，这是 25.24% 误差的主要来源。贪心 49 项 = 17.75%，本物理式 25.24%。"
+ }
+}

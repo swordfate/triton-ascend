@@ -1,0 +1,170 @@
+{
+ "simd_load_wide_r2": {
+  "n": 120,
+  "mape": 4.48,
+  "n_terms": 7,
+  "n_branches": 2,
+  "formula": "R,C = tile 的行/列数 ;  n = R*C ;  eb = 元素字节数 ;  ISB = 内层步长字节数 ;  pitch = 行 pitch(字节)\nrb     = (C-1)*ISB + eb      (一行的连续字节 footprint)\nsrc    = C*ISB               (一行跨步源所跨越的字节数)\nrmax1k = 所有 1 KB 对齐块中（落在该块内的 tile 行数）的最大值   (行 descriptor 的 1 KB 拥挤度)\nnblk64 = tile 逐元素地址集合触及的不同 64 B 块数              (MTE burst 计数，64 B burst 粒度)\nA. src >= 32 B  (一行的跨步源至少覆盖一个完整 32 B memory sector；连续块搬运路径)   n=87  MAPE 2.95%\nT = 68.6263 + 1.1068*R + 3.5929*rmax1k + 0.5032*R*[rb < 32]\nB. src <  32 B  (一行装不满一个 32 B sector；逐元素回退路径)                        n=33  MAPE 8.52%\nT = 131.6284 + 3.0088*n + 54.4293*nblk64",
+  "terms": [
+   {
+    "name": "A.const",
+    "coef": 68.6263,
+    "meaning": "宽路径（连续块搬运）的 MTE2 固定启动 / 首字节延迟。与 simd_load_wide_r1 的 65.7 ns 是同一硬件常数。"
+   },
+   {
+    "name": "A.R",
+    "coef": 1.1068,
+    "meaning": "每行一次块搬运 descriptor 的发射代价（1.11 ns/行）。宽路径下代价由 descriptor 数而不是字节数驱动：固定 R=16、eb=8 时 C 从 4 到 32，T 只从 303 变到 341 ns。"
+   },
+   {
+    "name": "A.rmax1k",
+    "coef": 3.5929,
+    "meaning": "1 KB 块内的行 descriptor 拥挤度：落在同一个 1 KB 对齐块里的 tile 行数的最大值（rmax1k=1 表示所有行各自独占一个 1 KB 块）。系数 3.59 ns/行 = 同一 1 KB 区内多出来的行被串行化的代价。窗口扫描：256/512/1024/2048/4096/8192 B 分别为 6.34/4.27/3.19/5.91/8.18/8.55%，1 KB 是明确的极小点。"
+   },
+   {
+    "name": "A.R*[rb < 32]",
+    "coef": 0.5032,
+    "meaning": "32 B sector 填不满的惩罚：当一行的连续 footprint rb 连一个 32 B memory sector 都填不满时，块搬运需要拆包，每行追加 0.50 ns。这是 MTE 的 32 B sector 门槛（与门限 src>=32 B 同一物理来源）。实测 rb 在 branch A 里成簇出现 {28,30,31} 与 {60,62,63,124,126,127,252,254,508}，中间没有取值。"
+   },
+   {
+    "name": "B.const",
+    "coef": 131.6284,
+    "meaning": "回退路径（每元素一条跨步命令）的 MTE2 固定启动代价，约为宽路径常数的 2 倍。"
+   },
+   {
+    "name": "B.n",
+    "coef": 3.0088,
+    "meaning": "每元素一条 BIU 命令（CAModel：biu_send_count = n，biu_send_sizes = {eb: n}）。一行跨越不满一个 32 B sector 时编译器用不了连续块拷贝，退化为逐元素跨步访问，每元素 3.01 ns 的发射/地址代价。"
+   },
+   {
+    "name": "B.nblk64",
+    "coef": 54.4293,
+    "meaning": "回退路径取回的数据按 64 B burst 计费：nblk64 = tile 触及的不同 64 B 对齐块数，每个 burst 54.43 ns（相当于 64 B / 54.4 ns 的串行取回速率，说明该路径是延迟受限而非带宽受限）。"
+   }
+  ],
+  "derived": [
+   "rb = (C-1)*ISB + eb ; src = C*ISB ; n = R*C ; R = f_rows ; C = f_cols ; pitch = f_row_pitch_bytes",
+   "rmax1k：对 tile 的逐元素精确地址 addr(i,j) = i*pitch + j*ISB（基址 0 对齐）按 1024 B 对齐分块，统计每个块内贡献了至少一个元素的行数，取最大值",
+   "nblk64：同样由逐元素精确地址集合算出，为其落在的不同 64 B 对齐块数",
+   "门限（GATE，保留）：src = C*ISB >= 32 B <=> 一行的跨步源至少覆盖一个完整的 32 B memory sector。这是 MTE 的 sector 粒度",
+   "本槽每个保留点都有 ISB = 2*eb，因此 src = rb + eb；rb 只能取 7/14/15/28/30/31/60/62/63/124/126/127/252/254/508"
+  ],
+  "notes": "【机制】按 src = C*ISB 是否达到一个完整的 32 B memory sector 分为两条路径：\nA（src>=32）走连续块搬运，代价由 descriptor 数（R）和 1 KB 尺度上的行拥挤度（rmax1k）驱动，与搬运字节数几乎无关；\nB（src<32）退化为逐元素取回，按 64 B burst 计费。\n【限制】分支 B 仍有残差（最大 27%）：R=16/C=4 与 R=8/C=8 两点 n 同为 64、T 同为 944 ns，但 nblk64 相差 2 倍，\n任何『每块计费』量都无法同时解释；再加 span/pitch/S64 等第二项只能靠 33 点 4 参数换约 1 个百分点，判定为过拟合，故保留 3 系数形式。",
+  "scope": {
+   "filter_names": [
+    "eb<=4",
+    "R>=2",
+    "C>=4",
+    "spread<=0.2"
+   ],
+   "filters": [
+    "eb<=4 —— 8 字节（int64）元素在目标 AI 算子组合中很少见（matmul / softmax / layernorm / attention / elementwise 用的是 int8 / f16 / f32），而它们属于另一种硬件区制：对 int64 而言宽路径由 line 数和行数驱动，并带有一个明显的超线性拐点（相同行几何下 L = 2 / 8 / 16 / 32 的实测中位数为 79 / 181 / 330 / 540 ns），因此若不把项数翻倍，一个公式无法同时覆盖两种区制。",
+    "R>=2 —— R==1 的形状完全没有行结构；它是一维加载，只是被 rank==2 的槽规则误捕进来。第一轮已就 simt_load_r2 确立了这一点。",
+    "C>=4 —— 一行至少要有 4 个元素才可向量化。C==1 时槽规则 ISB<=2*eb 形同虚设（按构造就有 ISB == eb），因此这些点其实是被误路由进二维槽的一维跨步列加载；它们内部也自相矛盾（pitch 更大时 int8/int64 反而更快、f16/f32 却更慢 —— 第一轮的发现）。",
+    "target_spread <= 0.2 —— 这是测量稳定性判据，而非算子真实性判据。target_spread 是同一配置重复 Event 采样值的相对离散度（(max-min)/mean 形式，0 = 完全可重复）。超过 0.2 意味着同一用例的两次重复测量之差超过其均值的 20%：该点处于已记录的双稳态区制，不是算子的固有属性。误差质量正集中在这条尾部：simt_load_r2 中 spread>0.2 的 66 个点（占该槽 5%）MAPE 为 32-47%，却贡献了总误差质量的 24%；simt_load_r1 同样如此（27 点，占误差质量 18%）。"
+   ],
+   "n_all": 246,
+   "n_kept": 120,
+   "keep_ratio": 0.488,
+   "removed_total": 126,
+   "removed_reason_breakdown": {
+    "eb<=4": 62,
+    "R>=2": 18,
+    "C>=4": 24,
+    "spread<=0.2": 22
+   }
+  },
+  "residuals": {
+   "mape": 4.48,
+   "median_bias_pct": -0.19,
+   "p50_abs_pct": 3.44,
+   "p90_abs_pct": 10.02,
+   "max_abs_pct": 26.62,
+   "by_dtype": {
+    "float16": 4.52,
+    "float32": 2.73,
+    "int8": 5.78
+   },
+   "by_eb": {
+    "eb=1": 5.78,
+    "eb=2": 4.52,
+    "eb=4": 2.73
+   },
+   "by_W": {
+    "W=1": 4.48
+   },
+   "by_ISB": {
+    "ISB=2": 5.78,
+    "ISB=4": 4.52,
+    "ISB=8": 2.73
+   },
+   "by_n": {
+    "n=128": 2.94,
+    "n=16": 6.52,
+    "n=256": 2.91,
+    "n=32": 5.59,
+    "n=512": 2.94,
+    "n=64": 4.94
+   },
+   "worst6": [
+    "T=943.8 pred=1195.1 err=+27% | W=1 R=16 C=4 eb=2 ISB=4 n=64 rb=14 rmax1k=16 nblk64=16",
+    "T=943.6 pred=759.6 err=-19% | W=1 R=8 C=8 eb=1 ISB=2 n=64 rb=15 rmax1k=8 nblk64=8",
+    "T=198.4 pred=234.2 err=+18% | W=1 R=4 C=4 eb=1 ISB=2 n=16 rb=7 rmax1k=4 nblk64=1",
+    "T=198.5 pred=234.2 err=+18% | W=1 R=2 C=8 eb=1 ISB=2 n=16 rb=15 rmax1k=2 nblk64=1",
+    "T=540.5 pred=445.6 err=-18% | W=1 R=4 C=8 eb=1 ISB=2 n=32 rb=15 rmax1k=4 nblk64=4",
+    "T=540.3 pred=445.6 err=-18% | W=1 R=4 C=8 eb=1 ISB=2 n=32 rb=15 rmax1k=4 nblk64=4"
+   ]
+  },
+  "comparison": {
+   "current_128B_formula": 5.79,
+   "drop_conc1k_only_refitA": 7.52,
+   "drop_L_only_refitB": 8.52,
+   "drop_both_no_replacement": 10.25,
+   "this_model_MTE_only": 4.48,
+   "round1_model_on_kept": 10.01,
+   "our_greedy_76feat_17_terms": 12.39
+  },
+  "branch_detail": {
+   "A": {
+    "cond": "src = C*ISB >= 32 B",
+    "n": 87,
+    "mape": 2.95,
+    "n_terms": 4,
+    "formula": "T = 68.6263 + 1.1068*R + 3.5929*rmax1k + 0.5032*R*[rb < 32]"
+   },
+   "B": {
+    "cond": "src = C*ISB <  32 B",
+    "n": 33,
+    "mape": 8.52,
+    "n_terms": 3,
+    "formula": "T = 131.6284 + 3.0088*n + 54.4293*nblk64"
+   }
+  },
+  "burst_scan_branchB": {
+   "16": 18.51,
+   "32": 16.98,
+   "64": 8.52,
+   "96": 8.32,
+   "256": 14.43,
+   "512": 16.06,
+   "1024": 18.64,
+   "2048": 19.08,
+   "4096": 19.08,
+   "8192": 19.08
+  },
+  "burst_scan_branchA_window": {
+   "256": 6.34,
+   "512": 4.27,
+   "1024": 3.19,
+   "2048": 5.91,
+   "4096": 8.18,
+   "8192": 8.54
+  },
+  "no_128B_declaration": [
+   "未使用数据集自带的 f_L / f_mean_warp_lines / f_line_elems_max / f_line_elems_min / f_line_request_size / f_line_density",
+   "未使用任何自算 128 B 量：L128 / mx128 / pairs128 / S128 / multi128 / wrow128 / conc1k",
+   "bucket_worst_* / bucket_pairs_* 经查其定义（counts[(addr//group_bytes)%buckets]，g2048_b8 = 每 256 B 一个 bank，32k16 = 每 2 KB 一个 bank）不含 128 B，本公式也未使用",
+   "使用的 MTE 粒度为：32 B memory sector（门限与 hinge）、64 B burst（nblk64）、1 KB 地址交织块（rmax1k）、行 descriptor（R）"
+  ]
+ }
+}

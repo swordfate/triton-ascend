@@ -1,0 +1,228 @@
+{
+ "simd_load_wide_r1": {
+  "n": 32,
+  "mape": 0.74,
+  "form": "linear",
+  "n_terms": 11,
+  "base": [
+   "ov_L_pages",
+   "minL32",
+   "hL8",
+   "hL4",
+   "he32",
+   "spanperN",
+   "cbL",
+   "bsPages",
+   "rt_L_pages",
+   "ov_L_cshortN"
+  ],
+  "mods": null
+ },
+ "simd_load_wide_r2": {
+  "n": 246,
+  "mape": 19.22,
+  "form": "linear",
+  "n_terms": 11,
+  "base": [
+   "wuSeg",
+   "cmd",
+   "rt_seg_mwl",
+   "R2",
+   "minL32n",
+   "rmwEb",
+   "le_R16",
+   "nhe32W",
+   "cbL",
+   "hse512"
+  ],
+  "mods": null
+ },
+ "simd_load_gather_r1": {
+  "n": 284,
+  "mape": 12.43,
+  "form": "linear",
+  "n_terms": 11,
+  "base": [
+   "n2L",
+   "reqBytes",
+   "bsPages",
+   "le_rowl8xN",
+   "le_lem16xN",
+   "line_elems_max",
+   "ov_cshortN_L",
+   "mn_cshortN_L",
+   "rt_cshortN_L",
+   "hseD1024"
+  ],
+  "mods": null
+ },
+ "simd_load_gather_r2": {
+  "n": 750,
+  "mape": 13.37,
+  "form": "linear",
+  "n_terms": 11,
+  "base": [
+   "mn_cshortN_L",
+   "n2L",
+   "padBytes",
+   "ep_cap",
+   "R2",
+   "wuIters",
+   "burstLong",
+   "line_elems_max",
+   "he4",
+   "le_L32"
+  ],
+  "mods": null
+ },
+ "simd_store_r1": {
+  "n": 291,
+  "mape": 6.75,
+  "form": "linear",
+  "n_terms": 11,
+  "base": [
+   "line_elems_max",
+   "n2L",
+   "reqBytes",
+   "bucket_pairs_32k16",
+   "le_mwl8xL",
+   "wasteL",
+   "nmodW",
+   "le_rowl8xL",
+   "hmwl4",
+   "le_L32xN"
+  ],
+  "mods": null
+ },
+ "simd_store_r2": {
+  "n": 943,
+  "mape": 8.85,
+  "form": "linear",
+  "n_terms": 11,
+  "base": [
+   "line_elems_max",
+   "hepl_n32",
+   "bsN",
+   "burstLong",
+   "bucket_pairs_32k16",
+   "dup",
+   "bsSeg",
+   "cbL",
+   "nmodW",
+   "rt_n_mwl"
+  ],
+  "mods": null
+ },
+ "simt_load_r1": {
+  "n": 855,
+  "mape": 8.37,
+  "form": "xEBW6",
+  "n_terms": 73,
+  "base": [
+   "minL64",
+   "txBytes",
+   "dupL_minL_128",
+   "rt_seg_mwl",
+   "mn_L_iters",
+   "le_rowl8"
+  ],
+  "mods": [
+   "",
+   "|e1",
+   "|e2",
+   "|e4",
+   "|e8",
+   "|W1",
+   "|W2",
+   "|W4",
+   "|W8",
+   "|W16",
+   "|W32",
+   "|W64"
+  ]
+ },
+ "simt_load_r2": {
+  "n": 1762,
+  "mape": 9.39,
+  "form": "xEBW6",
+  "n_terms": 73,
+  "base": [
+   "transX",
+   "LperPitch",
+   "rt_L_seg",
+   "rowsshareL",
+   "ov_iters_mwl",
+   "dupL_minL_128"
+  ],
+  "mods": [
+   "",
+   "|e1",
+   "|e2",
+   "|e4",
+   "|e8",
+   "|W1",
+   "|W2",
+   "|W4",
+   "|W8",
+   "|W16",
+   "|W32",
+   "|W64"
+  ]
+ },
+ "simt_store_r1": {
+  "n": 962,
+  "mape": 6.87,
+  "form": "xEBW6",
+  "n_terms": 73,
+  "base": [
+   "mx_L_W",
+   "hLeb4",
+   "rt_iters_mwl",
+   "cmd",
+   "hL4",
+   "rt_iters_W"
+  ],
+  "mods": [
+   "",
+   "|e1",
+   "|e2",
+   "|e4",
+   "|e8",
+   "|W1",
+   "|W2",
+   "|W4",
+   "|W8",
+   "|W16",
+   "|W32",
+   "|W64"
+  ]
+ },
+ "simt_store_r2": {
+  "n": 3416,
+  "mape": 20.95,
+  "form": "xEBW6",
+  "n_terms": 73,
+  "base": [
+   "mx_L_W",
+   "bucket_pairs_32k16",
+   "padBytes",
+   "hLeb2",
+   "le_mwl16xL",
+   "nmodW"
+  ],
+  "mods": [
+   "",
+   "|e1",
+   "|e2",
+   "|e4",
+   "|e8",
+   "|W1",
+   "|W2",
+   "|W4",
+   "|W8",
+   "|W16",
+   "|W32",
+   "|W64"
+  ]
+ }
+}

@@ -1,0 +1,2454 @@
+{
+  "kind": "dtype_stride_measure",
+  "op": "store",
+  "path": "simd",
+  "dtype": "int8",
+  "element_bytes": 1,
+  "compile_mode": "simd",
+  "cases": [
+    {
+      "path": "simd",
+      "op": "store",
+      "dtype": "int8",
+      "element_bytes": 1,
+      "compile_mode": "simd",
+      "block": 16,
+      "stride": 6,
+      "stride_bytes": 6,
+      "num_warps": 1,
+      "grid": 1,
+      "target_ns": 1556.5870602925618,
+      "target_kind": "rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "contains_template_call": false,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 3,
+      "options": {
+        "num_warps": 1,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "store_simd_int8_b16_s6_w1.source",
+          "bytes": 4792
+        },
+        {
+          "key": "ttir",
+          "path": "store_simd_int8_b16_s6_w1.ttir",
+          "bytes": 2872
+        },
+        {
+          "key": "ttadapter",
+          "path": "store_simd_int8_b16_s6_w1.ttadapter",
+          "bytes": 4051
+        },
+        {
+          "key": "mlirbc",
+          "path": "store_simd_int8_b16_s6_w1.mlirbc",
+          "bytes": 1503
+        },
+        {
+          "key": "bcmlir",
+          "path": "store_simd_int8_b16_s6_w1.bcmlir",
+          "bytes": 4007
+        },
+        {
+          "key": "npubin",
+          "path": "store_simd_int8_b16_s6_w1.npubin",
+          "bytes": 218928
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 3124504.0893554688,
+              "event_ns_median": 3135674.9534606934,
+              "event_ns_all": [
+                3135674.9534606934,
+                3124504.0893554688,
+                3142652.988433838
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 12468150.13885498,
+              "event_ns_median": 12470541.000366211,
+              "event_ns_all": [
+                12468150.13885498,
+                12470541.000366211,
+                12473778.72467041
+              ]
+            }
+          ],
+          "target_ns": 1557.274341583252,
+          "post_witness_ns": 7575473.785400391,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.002395400940338477,
+          "stable_ok": true
+        },
+        {
+          "attempt": 1,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 3122652.053833008,
+              "event_ns_median": 3128199.1004943848,
+              "event_ns_all": [
+                3128199.1004943848,
+                3131979.9423217773,
+                3122652.053833008
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 12462174.415588379,
+              "event_ns_median": 12464638.710021973,
+              "event_ns_all": [
+                12462174.415588379,
+                12467851.638793945,
+                12464638.710021973
+              ]
+            }
+          ],
+          "target_ns": 1556.5870602925618,
+          "post_witness_ns": 7582456.111907959,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.002281608232676135,
+          "stable_ok": true
+        },
+        {
+          "attempt": 2,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 3131902.9331207275,
+              "event_ns_median": 3142591.953277588,
+              "event_ns_all": [
+                3148571.9680786133,
+                3131902.9331207275,
+                3142591.953277588
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 12472004.890441895,
+              "event_ns_median": 12480588.912963867,
+              "event_ns_all": [
+                12485959.05303955,
+                12472004.890441895,
+                12480588.912963867
+              ]
+            }
+          ],
+          "target_ns": 1556.6836595535278,
+          "post_witness_ns": 7578813.076019287,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.0044585327322659045,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "simd",
+      "op": "store",
+      "dtype": "int8",
+      "element_bytes": 1,
+      "compile_mode": "simd",
+      "block": 16,
+      "stride": 128,
+      "stride_bytes": 128,
+      "num_warps": 1,
+      "grid": 1,
+      "target_ns": 136.64649923642477,
+      "target_kind": "rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "contains_template_call": false,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 3,
+      "options": {
+        "num_warps": 1,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "store_simd_int8_b16_s128_w1.source",
+          "bytes": 4798
+        },
+        {
+          "key": "ttir",
+          "path": "store_simd_int8_b16_s128_w1.ttir",
+          "bytes": 2874
+        },
+        {
+          "key": "ttadapter",
+          "path": "store_simd_int8_b16_s128_w1.ttadapter",
+          "bytes": 4057
+        },
+        {
+          "key": "mlirbc",
+          "path": "store_simd_int8_b16_s128_w1.mlirbc",
+          "bytes": 1505
+        },
+        {
+          "key": "bcmlir",
+          "path": "store_simd_int8_b16_s128_w1.bcmlir",
+          "bytes": 4013
+        },
+        {
+          "key": "npubin",
+          "path": "store_simd_int8_b16_s128_w1.npubin",
+          "bytes": 218928
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 288479.0003299713,
+              "event_ns_median": 291532.0098400116,
+              "event_ns_all": [
+                291532.0098400116,
+                298503.01146507263,
+                288479.0003299713
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 1110546.9465255737,
+              "event_ns_median": 1121003.9854049683,
+              "event_ns_all": [
+                1131662.9648208618,
+                1110546.9465255737,
+                1121003.9854049683
+              ]
+            }
+          ],
+          "target_ns": 137.01132436593375,
+          "post_witness_ns": 7578473.091125488,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.03905197788350573,
+          "stable_ok": true
+        },
+        {
+          "attempt": 1,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 288657.9930782318,
+              "event_ns_median": 291337.0132446289,
+              "event_ns_all": [
+                300904.0057659149,
+                291337.0132446289,
+                288657.9930782318
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 1111884.9515914917,
+              "event_ns_median": 1114456.057548523,
+              "event_ns_all": [
+                1114456.057548523,
+                1125036.9548797607,
+                1111884.9515914917
+              ]
+            }
+          ],
+          "target_ns": 137.2044930855433,
+          "post_witness_ns": 7573737.144470215,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.03844554300357225,
+          "stable_ok": true
+        },
+        {
+          "attempt": 2,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 288616.00160598755,
+              "event_ns_median": 298610.98527908325,
+              "event_ns_all": [
+                317842.9901599884,
+                298610.98527908325,
+                288616.00160598755
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 1108494.9970245361,
+              "event_ns_median": 1120911.955833435,
+              "event_ns_all": [
+                1120911.955833435,
+                1127529.9787521362,
+                1108494.9970245361
+              ]
+            }
+          ],
+          "target_ns": 136.64649923642477,
+          "post_witness_ns": 7607994.079589844,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.04146974909476885,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "simd",
+      "op": "store",
+      "dtype": "int8",
+      "element_bytes": 1,
+      "compile_mode": "simd",
+      "block": 16,
+      "stride": 256,
+      "stride_bytes": 256,
+      "num_warps": 1,
+      "grid": 1,
+      "target_ns": 116.64883295694987,
+      "target_kind": "rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "contains_template_call": false,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 3,
+      "options": {
+        "num_warps": 1,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "store_simd_int8_b16_s256_w1.source",
+          "bytes": 4798
+        },
+        {
+          "key": "ttir",
+          "path": "store_simd_int8_b16_s256_w1.ttir",
+          "bytes": 2874
+        },
+        {
+          "key": "ttadapter",
+          "path": "store_simd_int8_b16_s256_w1.ttadapter",
+          "bytes": 4057
+        },
+        {
+          "key": "mlirbc",
+          "path": "store_simd_int8_b16_s256_w1.mlirbc",
+          "bytes": 1505
+        },
+        {
+          "key": "bcmlir",
+          "path": "store_simd_int8_b16_s256_w1.bcmlir",
+          "bytes": 4013
+        },
+        {
+          "key": "npubin",
+          "path": "store_simd_int8_b16_s256_w1.npubin",
+          "bytes": 218928
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 249380.00738620758,
+              "event_ns_median": 261141.98565483093,
+              "event_ns_all": [
+                263880.99789619446,
+                261141.98565483093,
+                249380.00738620758
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 961216.9861793518,
+              "event_ns_median": 964416.0270690918,
+              "event_ns_all": [
+                964416.0270690918,
+                961216.9861793518,
+                969519.0191268921
+              ]
+            }
+          ],
+          "target_ns": 118.63949646552403,
+          "post_witness_ns": 7578437.805175781,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.037767792171230725,
+          "stable_ok": true
+        },
+        {
+          "attempt": 1,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 249727.9942035675,
+              "event_ns_median": 261123.00157546997,
+              "event_ns_all": [
+                290017.9922580719,
+                261123.00157546997,
+                249727.9942035675
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 950460.9704017639,
+              "event_ns_median": 963603.0197143555,
+              "event_ns_all": [
+                973973.9894866943,
+                963603.0197143555,
+                950460.9704017639
+              ]
+            }
+          ],
+          "target_ns": 116.78882936636607,
+          "post_witness_ns": 7605801.105499268,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.0509763240378252,
+          "stable_ok": true
+        },
+        {
+          "attempt": 2,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 255528.98645401,
+              "event_ns_median": 292452.99100875854,
+              "event_ns_all": [
+                292452.99100875854,
+                402606.9939136505,
+                255528.98645401
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 955421.9841957092,
+              "event_ns_median": 962002.9926300049,
+              "event_ns_all": [
+                979655.9810638428,
+                955421.9841957092,
+                962002.9926300049
+              ]
+            }
+          ],
+          "target_ns": 116.64883295694987,
+          "post_witness_ns": 7588139.057159424,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.06980576407447327,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "simd",
+      "op": "store",
+      "dtype": "int8",
+      "element_bytes": 1,
+      "compile_mode": "simd",
+      "block": 32,
+      "stride": 6,
+      "stride_bytes": 6,
+      "num_warps": 1,
+      "grid": 1,
+      "target_ns": 2144.1992123921714,
+      "target_kind": "rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "contains_template_call": false,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 3,
+      "options": {
+        "num_warps": 1,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "store_simd_int8_b32_s6_w1.source",
+          "bytes": 4792
+        },
+        {
+          "key": "ttir",
+          "path": "store_simd_int8_b32_s6_w1.ttir",
+          "bytes": 2872
+        },
+        {
+          "key": "ttadapter",
+          "path": "store_simd_int8_b32_s6_w1.ttadapter",
+          "bytes": 4051
+        },
+        {
+          "key": "mlirbc",
+          "path": "store_simd_int8_b32_s6_w1.mlirbc",
+          "bytes": 1503
+        },
+        {
+          "key": "bcmlir",
+          "path": "store_simd_int8_b32_s6_w1.bcmlir",
+          "bytes": 4007
+        },
+        {
+          "key": "npubin",
+          "path": "store_simd_int8_b32_s6_w1.npubin",
+          "bytes": 218928
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 4305898.189544678,
+              "event_ns_median": 4314232.82623291,
+              "event_ns_all": [
+                4321973.80065918,
+                4314232.82623291,
+                4305898.189544678
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 17188520.431518555,
+              "event_ns_median": 17210630.416870117,
+              "event_ns_all": [
+                17216947.555541992,
+                17210630.416870117,
+                17188520.431518555
+              ]
+            }
+          ],
+          "target_ns": 2147.103706995646,
+          "post_witness_ns": 7604732.990264893,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.0020404505902581467,
+          "stable_ok": true
+        },
+        {
+          "attempt": 1,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 4325835.227966309,
+              "event_ns_median": 4346252.918243408,
+              "event_ns_all": [
+                4346252.918243408,
+                4403554.916381836,
+                4325835.227966309
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 17191030.502319336,
+              "event_ns_median": 17191251.754760742,
+              "event_ns_all": [
+                17272367.477416992,
+                17191251.754760742,
+                17191030.502319336
+              ]
+            }
+          ],
+          "target_ns": 2144.1992123921714,
+          "post_witness_ns": 7576231.002807617,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.00653308186095918,
+          "stable_ok": true
+        },
+        {
+          "attempt": 2,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 4307823.181152344,
+              "event_ns_median": 4309257.030487061,
+              "event_ns_all": [
+                4329813.003540039,
+                4309257.030487061,
+                4307823.181152344
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 17186872.482299805,
+              "event_ns_median": 17195501.32751465,
+              "event_ns_all": [
+                17197898.864746094,
+                17186872.482299805,
+                17195501.32751465
+              ]
+            }
+          ],
+          "target_ns": 2146.50821685791,
+          "post_witness_ns": 7573532.1044921875,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.0025845448236912947,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "simd",
+      "op": "store",
+      "dtype": "int8",
+      "element_bytes": 1,
+      "compile_mode": "simd",
+      "block": 32,
+      "stride": 128,
+      "stride_bytes": 128,
+      "num_warps": 1,
+      "grid": 1,
+      "target_ns": 147.73482580979666,
+      "target_kind": "rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "contains_template_call": false,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 3,
+      "options": {
+        "num_warps": 1,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "store_simd_int8_b32_s128_w1.source",
+          "bytes": 4798
+        },
+        {
+          "key": "ttir",
+          "path": "store_simd_int8_b32_s128_w1.ttir",
+          "bytes": 2874
+        },
+        {
+          "key": "ttadapter",
+          "path": "store_simd_int8_b32_s128_w1.ttadapter",
+          "bytes": 4057
+        },
+        {
+          "key": "mlirbc",
+          "path": "store_simd_int8_b32_s128_w1.mlirbc",
+          "bytes": 1505
+        },
+        {
+          "key": "bcmlir",
+          "path": "store_simd_int8_b32_s128_w1.bcmlir",
+          "bytes": 4013
+        },
+        {
+          "key": "npubin",
+          "path": "store_simd_int8_b32_s128_w1.npubin",
+          "bytes": 218928
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 307868.98732185364,
+              "event_ns_median": 309718.9962863922,
+              "event_ns_all": [
+                316305.011510849,
+                309718.9962863922,
+                307868.98732185364
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 1200966.0005569458,
+              "event_ns_median": 1218623.9957809448,
+              "event_ns_all": [
+                1241500.973701477,
+                1200966.0005569458,
+                1218623.9957809448
+              ]
+            }
+          ],
+          "target_ns": 148.8495022058487,
+          "post_witness_ns": 7576539.993286133,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.02540450663575806,
+          "stable_ok": true
+        },
+        {
+          "attempt": 1,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 308196.9916820526,
+              "event_ns_median": 320933.0141544342,
+              "event_ns_all": [
+                341517.00139045715,
+                320933.0141544342,
+                308196.9916820526
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 1194605.9465408325,
+              "event_ns_median": 1196449.9950408936,
+              "event_ns_all": [
+                1219035.029411316,
+                1194605.9465408325,
+                1196449.9950408936
+              ]
+            }
+          ],
+          "target_ns": 147.73482580979666,
+          "post_witness_ns": 7576220.989227295,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.03196202086381699,
+          "stable_ok": true
+        },
+        {
+          "attempt": 2,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 325966.0005569458,
+              "event_ns_median": 349007.9939365387,
+              "event_ns_all": [
+                453914.999961853,
+                349007.9939365387,
+                325966.0005569458
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 1248281.9557189941,
+              "event_ns_median": 1310770.9884643555,
+              "event_ns_all": [
+                1504235.029220581,
+                1310770.9884643555,
+                1248281.9557189941
+              ]
+            }
+          ],
+          "target_ns": 153.7193258603414,
+          "post_witness_ns": 7636982.9177856445,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.04452683646842794,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "simd",
+      "op": "store",
+      "dtype": "int8",
+      "element_bytes": 1,
+      "compile_mode": "simd",
+      "block": 32,
+      "stride": 256,
+      "stride_bytes": 256,
+      "num_warps": 1,
+      "grid": 1,
+      "target_ns": 126.19916101296742,
+      "target_kind": "rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "contains_template_call": false,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 3,
+      "options": {
+        "num_warps": 1,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "store_simd_int8_b32_s256_w1.source",
+          "bytes": 4798
+        },
+        {
+          "key": "ttir",
+          "path": "store_simd_int8_b32_s256_w1.ttir",
+          "bytes": 2874
+        },
+        {
+          "key": "ttadapter",
+          "path": "store_simd_int8_b32_s256_w1.ttadapter",
+          "bytes": 4057
+        },
+        {
+          "key": "mlirbc",
+          "path": "store_simd_int8_b32_s256_w1.mlirbc",
+          "bytes": 1505
+        },
+        {
+          "key": "bcmlir",
+          "path": "store_simd_int8_b32_s256_w1.bcmlir",
+          "bytes": 4013
+        },
+        {
+          "key": "npubin",
+          "path": "store_simd_int8_b32_s256_w1.npubin",
+          "bytes": 218928
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 265365.98801612854,
+              "event_ns_median": 267338.99116516113,
+              "event_ns_all": [
+                310808.9864253998,
+                267338.99116516113,
+                265365.98801612854
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 1053496.9568252563,
+              "event_ns_median": 1110993.0276870728,
+              "event_ns_all": [
+                1222409.0099334717,
+                1110993.0276870728,
+                1053496.9568252563
+              ]
+            }
+          ],
+          "target_ns": 131.35516146818796,
+          "post_witness_ns": 7569107.0556640625,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.007562428337018252,
+          "stable_ok": true
+        },
+        {
+          "attempt": 1,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 266483.99233818054,
+              "event_ns_median": 267785.0127220154,
+              "event_ns_all": [
+                306643.009185791,
+                267785.0127220154,
+                266483.99233818054
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 1045717.0009613037,
+              "event_ns_median": 1068362.9512786865,
+              "event_ns_all": [
+                1070345.0441360474,
+                1068362.9512786865,
+                1045717.0009613037
+              ]
+            }
+          ],
+          "target_ns": 129.87216810385385,
+          "post_witness_ns": 7574300.765991211,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.019335028858507245,
+          "stable_ok": true
+        },
+        {
+          "attempt": 2,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 272424.01242256165,
+              "event_ns_median": 281316.99562072754,
+              "event_ns_all": [
+                303577.9893398285,
+                281316.99562072754,
+                272424.01242256165
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 1029618.9785003662,
+              "event_ns_median": 1034669.9953079224,
+              "event_ns_all": [
+                1052338.0041122437,
+                1029618.9785003662,
+                1034669.9953079224
+              ]
+            }
+          ],
+          "target_ns": 126.19916101296742,
+          "post_witness_ns": 7572177.886962891,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.05834883820554887,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "simd",
+      "op": "store",
+      "dtype": "int8",
+      "element_bytes": 1,
+      "compile_mode": "simd",
+      "block": 64,
+      "stride": 6,
+      "stride_bytes": 6,
+      "num_warps": 1,
+      "grid": 1,
+      "target_ns": 2576.2112140655518,
+      "target_kind": "rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "contains_template_call": false,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 3,
+      "options": {
+        "num_warps": 1,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "store_simd_int8_b64_s6_w1.source",
+          "bytes": 4792
+        },
+        {
+          "key": "ttir",
+          "path": "store_simd_int8_b64_s6_w1.ttir",
+          "bytes": 2872
+        },
+        {
+          "key": "ttadapter",
+          "path": "store_simd_int8_b64_s6_w1.ttadapter",
+          "bytes": 4051
+        },
+        {
+          "key": "mlirbc",
+          "path": "store_simd_int8_b64_s6_w1.mlirbc",
+          "bytes": 1507
+        },
+        {
+          "key": "bcmlir",
+          "path": "store_simd_int8_b64_s6_w1.bcmlir",
+          "bytes": 4007
+        },
+        {
+          "key": "npubin",
+          "path": "store_simd_int8_b64_s6_w1.npubin",
+          "bytes": 218928
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 5188017.845153809,
+              "event_ns_median": 5210356.23550415,
+              "event_ns_all": [
+                5212183.952331543,
+                5188017.845153809,
+                5210356.23550415
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 20724306.106567383,
+              "event_ns_median": 20727947.235107422,
+              "event_ns_all": [
+                20758646.01135254,
+                20727947.235107422,
+                20724306.106567383
+              ]
+            }
+          ],
+          "target_ns": 2589.381376902262,
+          "post_witness_ns": 7573264.122009277,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.0013397444481411586,
+          "stable_ok": true
+        },
+        {
+          "attempt": 1,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 5197889.804840088,
+              "event_ns_median": 5210392.951965332,
+              "event_ns_all": [
+                5250202.178955078,
+                5210392.951965332,
+                5197889.804840088
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 20655157.0892334,
+              "event_ns_median": 20701557.159423828,
+              "event_ns_all": [
+                20701557.159423828,
+                20722837.448120117,
+                20655157.0892334
+              ]
+            }
+          ],
+          "target_ns": 2576.2112140655518,
+          "post_witness_ns": 7567679.882049561,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.006603780815496843,
+          "stable_ok": true
+        },
+        {
+          "attempt": 2,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 5198606.014251709,
+              "event_ns_median": 5234218.120574951,
+              "event_ns_all": [
+                5250566.005706787,
+                5198606.014251709,
+                5234218.120574951
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 20759500.50354004,
+              "event_ns_median": 20775716.78161621,
+              "event_ns_all": [
+                20775716.78161621,
+                20862632.751464844,
+                20759500.50354004
+              ]
+            }
+          ],
+          "target_ns": 2593.482414881388,
+          "post_witness_ns": 7575487.13684082,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.0016822925706156317,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "simd",
+      "op": "store",
+      "dtype": "int8",
+      "element_bytes": 1,
+      "compile_mode": "simd",
+      "block": 64,
+      "stride": 128,
+      "stride_bytes": 128,
+      "num_warps": 1,
+      "grid": 1,
+      "target_ns": 166.4098252852758,
+      "target_kind": "rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "contains_template_call": false,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 3,
+      "options": {
+        "num_warps": 1,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "store_simd_int8_b64_s128_w1.source",
+          "bytes": 4798
+        },
+        {
+          "key": "ttir",
+          "path": "store_simd_int8_b64_s128_w1.ttir",
+          "bytes": 2874
+        },
+        {
+          "key": "ttadapter",
+          "path": "store_simd_int8_b64_s128_w1.ttadapter",
+          "bytes": 4057
+        },
+        {
+          "key": "mlirbc",
+          "path": "store_simd_int8_b64_s128_w1.mlirbc",
+          "bytes": 1509
+        },
+        {
+          "key": "bcmlir",
+          "path": "store_simd_int8_b64_s128_w1.bcmlir",
+          "bytes": 4013
+        },
+        {
+          "key": "npubin",
+          "path": "store_simd_int8_b64_s128_w1.npubin",
+          "bytes": 218928
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 346309.98969078064,
+              "event_ns_median": 350777.0001888275,
+              "event_ns_all": [
+                362506.0021877289,
+                346309.98969078064,
+                350777.0001888275
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 1365839.958190918,
+              "event_ns_median": 1409559.965133667,
+              "event_ns_all": [
+                1495766.043663025,
+                1409559.965133667,
+                1365839.958190918
+              ]
+            }
+          ],
+          "target_ns": 169.92166141668955,
+          "post_witness_ns": 7575522.899627686,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.014203714319428956,
+          "stable_ok": true
+        },
+        {
+          "attempt": 1,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 356406.00323677063,
+              "event_ns_median": 364389.00232315063,
+              "event_ns_all": [
+                379554.00347709656,
+                356406.00323677063,
+                364389.00232315063
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 1354864.9549484253,
+              "event_ns_median": 1364199.0423202515,
+              "event_ns_all": [
+                1368412.971496582,
+                1364199.0423202515,
+                1354864.9549484253
+              ]
+            }
+          ],
+          "target_ns": 166.4098252852758,
+          "post_witness_ns": 7587238.788604736,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.052225912066159216,
+          "stable_ok": true
+        },
+        {
+          "attempt": 2,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 364686.0122680664,
+              "event_ns_median": 374273.00214767456,
+              "event_ns_all": [
+                410474.9858379364,
+                364686.0122680664,
+                374273.00214767456
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 1380292.0579910278,
+              "event_ns_median": 1380921.9598770142,
+              "event_ns_all": [
+                1409095.048904419,
+                1380292.0579910278,
+                1380921.9598770142
+              ]
+            }
+          ],
+          "target_ns": 169.26767428716025,
+          "post_witness_ns": 7580970.764160156,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.056837240080495885,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "simd",
+      "op": "store",
+      "dtype": "int8",
+      "element_bytes": 1,
+      "compile_mode": "simd",
+      "block": 64,
+      "stride": 256,
+      "stride_bytes": 256,
+      "num_warps": 1,
+      "grid": 1,
+      "target_ns": 141.97166760762533,
+      "target_kind": "rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "contains_template_call": false,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 3,
+      "options": {
+        "num_warps": 1,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "store_simd_int8_b64_s256_w1.source",
+          "bytes": 4798
+        },
+        {
+          "key": "ttir",
+          "path": "store_simd_int8_b64_s256_w1.ttir",
+          "bytes": 2874
+        },
+        {
+          "key": "ttadapter",
+          "path": "store_simd_int8_b64_s256_w1.ttadapter",
+          "bytes": 4057
+        },
+        {
+          "key": "mlirbc",
+          "path": "store_simd_int8_b64_s256_w1.mlirbc",
+          "bytes": 1509
+        },
+        {
+          "key": "bcmlir",
+          "path": "store_simd_int8_b64_s256_w1.bcmlir",
+          "bytes": 4013
+        },
+        {
+          "key": "npubin",
+          "path": "store_simd_int8_b64_s256_w1.npubin",
+          "bytes": 218928
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 307200.01459121704,
+              "event_ns_median": 325906.99195861816,
+              "event_ns_all": [
+                325906.99195861816,
+                327493.9954280853,
+                307200.01459121704
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 1208922.028541565,
+              "event_ns_median": 1212100.0289916992,
+              "event_ns_all": [
+                1208922.028541565,
+                1225978.970527649,
+                1212100.0289916992
+              ]
+            }
+          ],
+          "target_ns": 150.28700232505798,
+          "post_witness_ns": 7609078.884124756,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.016442772448512614,
+          "stable_ok": true
+        },
+        {
+          "attempt": 1,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 355329.9903869629,
+              "event_ns_median": 364450.00767707825,
+              "event_ns_all": [
+                365117.01345443726,
+                364450.00767707825,
+                355329.9903869629
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 1207159.9960327148,
+              "event_ns_median": 1214715.9576416016,
+              "event_ns_all": [
+                1214715.9576416016,
+                1207159.9960327148,
+                1219454.050064087
+              ]
+            }
+          ],
+          "target_ns": 141.97166760762533,
+          "post_witness_ns": 7593632.221221924,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.17740810349826472,
+          "stable_ok": true
+        },
+        {
+          "attempt": 2,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 312752.00843811035,
+              "event_ns_median": 353098.0050563812,
+              "event_ns_all": [
+                385017.991065979,
+                353098.0050563812,
+                312752.00843811035
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 1191136.0025405884,
+              "event_ns_median": 1206928.9684295654,
+              "event_ns_all": [
+                1246729.016304016,
+                1191136.0025405884,
+                1206928.9684295654
+              ]
+            }
+          ],
+          "target_ns": 146.397332350413,
+          "post_witness_ns": 7568596.839904785,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.050264647432494064,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "simd",
+      "op": "store",
+      "dtype": "int8",
+      "element_bytes": 1,
+      "compile_mode": "simd",
+      "block": 128,
+      "stride": 6,
+      "stride_bytes": 6,
+      "num_warps": 1,
+      "grid": 1,
+      "target_ns": 3147.604465484619,
+      "target_kind": "rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "contains_template_call": false,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 3,
+      "options": {
+        "num_warps": 1,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "store_simd_int8_b128_s6_w1.source",
+          "bytes": 4816
+        },
+        {
+          "key": "ttir",
+          "path": "store_simd_int8_b128_s6_w1.ttir",
+          "bytes": 2884
+        },
+        {
+          "key": "ttadapter",
+          "path": "store_simd_int8_b128_s6_w1.ttadapter",
+          "bytes": 4064
+        },
+        {
+          "key": "mlirbc",
+          "path": "store_simd_int8_b128_s6_w1.mlirbc",
+          "bytes": 1507
+        },
+        {
+          "key": "bcmlir",
+          "path": "store_simd_int8_b128_s6_w1.bcmlir",
+          "bytes": 4020
+        },
+        {
+          "key": "npubin",
+          "path": "store_simd_int8_b128_s6_w1.npubin",
+          "bytes": 219184
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 6310016.15524292,
+              "event_ns_median": 6317509.174346924,
+              "event_ns_all": [
+                6317509.174346924,
+                6310016.15524292,
+                6338491.916656494
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 25214670.181274414,
+              "event_ns_median": 25219718.93310547,
+              "event_ns_all": [
+                25214670.181274414,
+                25219718.93310547,
+                25279216.766357422
+              ]
+            }
+          ],
+          "target_ns": 3150.775671005249,
+          "post_witness_ns": 7574969.76852417,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.0010071295604780393,
+          "stable_ok": true
+        },
+        {
+          "attempt": 1,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 6319405.078887939,
+              "event_ns_median": 6328597.068786621,
+              "event_ns_all": [
+                6328597.068786621,
+                6319405.078887939,
+                6329872.131347656
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 25239213.943481445,
+              "event_ns_median": 25257495.880126953,
+              "event_ns_all": [
+                25257495.880126953,
+                25239213.943481445,
+                25261735.916137695
+              ]
+            }
+          ],
+          "target_ns": 3153.301477432251,
+          "post_witness_ns": 7569377.899169922,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.0015216944614961652,
+          "stable_ok": true
+        },
+        {
+          "attempt": 2,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 6346983.909606934,
+              "event_ns_median": 6352585.792541504,
+              "event_ns_all": [
+                6377342.224121094,
+                6346983.909606934,
+                6352585.792541504
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 25232610.70251465,
+              "event_ns_median": 25247108.459472656,
+              "event_ns_all": [
+                25248352.05078125,
+                25247108.459472656,
+                25232610.70251465
+              ]
+            }
+          ],
+          "target_ns": 3147.604465484619,
+          "post_witness_ns": 7576173.782348633,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.00615572196410126,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "simd",
+      "op": "store",
+      "dtype": "int8",
+      "element_bytes": 1,
+      "compile_mode": "simd",
+      "block": 128,
+      "stride": 128,
+      "stride_bytes": 128,
+      "num_warps": 1,
+      "grid": 1,
+      "target_ns": 207.09382990996042,
+      "target_kind": "rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "contains_template_call": false,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 3,
+      "options": {
+        "num_warps": 1,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "store_simd_int8_b128_s128_w1.source",
+          "bytes": 4822
+        },
+        {
+          "key": "ttir",
+          "path": "store_simd_int8_b128_s128_w1.ttir",
+          "bytes": 2886
+        },
+        {
+          "key": "ttadapter",
+          "path": "store_simd_int8_b128_s128_w1.ttadapter",
+          "bytes": 4070
+        },
+        {
+          "key": "mlirbc",
+          "path": "store_simd_int8_b128_s128_w1.mlirbc",
+          "bytes": 1496
+        },
+        {
+          "key": "bcmlir",
+          "path": "store_simd_int8_b128_s128_w1.bcmlir",
+          "bytes": 4026
+        },
+        {
+          "key": "npubin",
+          "path": "store_simd_int8_b128_s128_w1.npubin",
+          "bytes": 219184
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 418601.00626945496,
+              "event_ns_median": 426622.0033168793,
+              "event_ns_all": [
+                435405.99942207336,
+                426622.0033168793,
+                418601.00626945496
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 1678464.0550613403,
+              "event_ns_median": 1685961.9617462158,
+              "event_ns_all": [
+                1703773.021697998,
+                1678464.0550613403,
+                1685961.9617462158
+              ]
+            }
+          ],
+          "target_ns": 209.97717479864755,
+          "post_witness_ns": 7587718.963623047,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.002424761242037634,
+          "stable_ok": true
+        },
+        {
+          "attempt": 1,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 439891.9939994812,
+              "event_ns_median": 441332.99589157104,
+              "event_ns_all": [
+                468181.9975376129,
+                439891.9939994812,
+                441332.99589157104
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 1687526.9412994385,
+              "event_ns_median": 1688037.9915237427,
+              "event_ns_all": [
+                1688037.9915237427,
+                1688581.943511963,
+                1687526.9412994385
+              ]
+            }
+          ],
+          "target_ns": 207.9391578833262,
+          "post_witness_ns": 7584476.947784424,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.04269030196520176,
+          "stable_ok": true
+        },
+        {
+          "attempt": 2,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 436455.99484443665,
+              "event_ns_median": 445298.9995479584,
+              "event_ns_all": [
+                493894.0107822418,
+                445298.9995479584,
+                436455.99484443665
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 1679018.9743041992,
+              "event_ns_median": 1685058.9513778687,
+              "event_ns_all": [
+                1719769.00100708,
+                1685058.9513778687,
+                1679018.9743041992
+              ]
+            }
+          ],
+          "target_ns": 207.09382990996042,
+          "post_witness_ns": 7580613.136291504,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.03978811799981711,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "simd",
+      "op": "store",
+      "dtype": "int8",
+      "element_bytes": 1,
+      "compile_mode": "simd",
+      "block": 128,
+      "stride": 256,
+      "stride_bytes": 256,
+      "num_warps": 1,
+      "grid": 1,
+      "target_ns": 181.37616415818533,
+      "target_kind": "rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "contains_template_call": false,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 3,
+      "options": {
+        "num_warps": 1,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "store_simd_int8_b128_s256_w1.source",
+          "bytes": 4822
+        },
+        {
+          "key": "ttir",
+          "path": "store_simd_int8_b128_s256_w1.ttir",
+          "bytes": 2886
+        },
+        {
+          "key": "ttadapter",
+          "path": "store_simd_int8_b128_s256_w1.ttadapter",
+          "bytes": 4070
+        },
+        {
+          "key": "mlirbc",
+          "path": "store_simd_int8_b128_s256_w1.mlirbc",
+          "bytes": 1509
+        },
+        {
+          "key": "bcmlir",
+          "path": "store_simd_int8_b128_s256_w1.bcmlir",
+          "bytes": 4026
+        },
+        {
+          "key": "npubin",
+          "path": "store_simd_int8_b128_s256_w1.npubin",
+          "bytes": 219184
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 383327.0072937012,
+              "event_ns_median": 386355.996131897,
+              "event_ns_all": [
+                389542.01340675354,
+                386355.996131897,
+                383327.0072937012
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 1509346.9619750977,
+              "event_ns_median": 1516481.0419082642,
+              "event_ns_all": [
+                1521275.9971618652,
+                1509346.9619750977,
+                1516481.0419082642
+              ]
+            }
+          ],
+          "target_ns": 187.6699924468994,
+          "post_witness_ns": 7575674.057006836,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.015875122025191687,
+          "stable_ok": true
+        },
+        {
+          "attempt": 1,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 432581.99095726013,
+              "event_ns_median": 443360.00084877014,
+              "event_ns_all": [
+                443360.00084877014,
+                451058.0003261566,
+                432581.99095726013
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 1520838.975906372,
+              "event_ns_median": 1521950.9601593018,
+              "event_ns_all": [
+                1536985.0397109985,
+                1520838.975906372,
+                1521950.9601593018
+              ]
+            }
+          ],
+          "target_ns": 181.37616415818533,
+          "post_witness_ns": 7585978.031158447,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.13774567277763225,
+          "stable_ok": true
+        },
+        {
+          "attempt": 2,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 395229.0117740631,
+              "event_ns_median": 412102.01382637024,
+              "event_ns_all": [
+                432929.99267578125,
+                412102.01382637024,
+                395229.0117740631
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 1504492.998123169,
+              "event_ns_median": 1518308.0434799194,
+              "event_ns_all": [
+                1527523.0407714844,
+                1518308.0434799194,
+                1504492.998123169
+              ]
+            }
+          ],
+          "target_ns": 184.8773310581843,
+          "post_witness_ns": 7577335.834503174,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.05079654678913098,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "simd",
+      "op": "store",
+      "dtype": "int8",
+      "element_bytes": 1,
+      "compile_mode": "simd",
+      "block": 256,
+      "stride": 6,
+      "stride_bytes": 6,
+      "num_warps": 1,
+      "grid": 1,
+      "target_ns": 4459.042867024739,
+      "target_kind": "rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "contains_template_call": false,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 3,
+      "options": {
+        "num_warps": 1,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "store_simd_int8_b256_s6_w1.source",
+          "bytes": 4816
+        },
+        {
+          "key": "ttir",
+          "path": "store_simd_int8_b256_s6_w1.ttir",
+          "bytes": 2884
+        },
+        {
+          "key": "ttadapter",
+          "path": "store_simd_int8_b256_s6_w1.ttadapter",
+          "bytes": 4064
+        },
+        {
+          "key": "mlirbc",
+          "path": "store_simd_int8_b256_s6_w1.mlirbc",
+          "bytes": 1507
+        },
+        {
+          "key": "bcmlir",
+          "path": "store_simd_int8_b256_s6_w1.bcmlir",
+          "bytes": 4020
+        },
+        {
+          "key": "npubin",
+          "path": "store_simd_int8_b256_s6_w1.npubin",
+          "bytes": 218928
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 8994193.077087402,
+              "event_ns_median": 9013019.561767578,
+              "event_ns_all": [
+                9015123.36730957,
+                8994193.077087402,
+                9013019.561767578
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 35749069.21386719,
+              "event_ns_median": 35794326.78222656,
+              "event_ns_all": [
+                35836555.48095703,
+                35749069.21386719,
+                35794326.78222656
+              ]
+            }
+          ],
+          "target_ns": 4459.146022796631,
+          "post_witness_ns": 7659512.042999268,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.006369483163888783,
+          "stable_ok": true
+        },
+        {
+          "attempt": 1,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 8940097.80883789,
+              "event_ns_median": 8967670.440673828,
+              "event_ns_all": [
+                8970084.190368652,
+                8940097.80883789,
+                8967670.440673828
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 35760650.634765625,
+              "event_ns_median": 35765781.40258789,
+              "event_ns_all": [
+                35760650.634765625,
+                35780467.98706055,
+                35765781.40258789
+              ]
+            }
+          ],
+          "target_ns": 4470.092137654622,
+          "post_witness_ns": 7575551.0330200195,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 7.253819242504991e-06,
+          "stable_ok": true
+        },
+        {
+          "attempt": 2,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 8975910.186767578,
+              "event_ns_median": 8975929.260253906,
+              "event_ns_all": [
+                8975910.186767578,
+                8995109.558105469,
+                8975929.260253906
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 35730167.388916016,
+              "event_ns_median": 35760269.16503906,
+              "event_ns_all": [
+                35822826.38549805,
+                35730167.388916016,
+                35760269.16503906
+              ]
+            }
+          ],
+          "target_ns": 4459.042867024739,
+          "post_witness_ns": 7600007.057189941,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.004855095031211935,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "simd",
+      "op": "store",
+      "dtype": "int8",
+      "element_bytes": 1,
+      "compile_mode": "simd",
+      "block": 256,
+      "stride": 128,
+      "stride_bytes": 128,
+      "num_warps": 1,
+      "grid": 1,
+      "target_ns": 308.4496756394704,
+      "target_kind": "rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "contains_template_call": false,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 3,
+      "options": {
+        "num_warps": 1,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "store_simd_int8_b256_s128_w1.source",
+          "bytes": 4822
+        },
+        {
+          "key": "ttir",
+          "path": "store_simd_int8_b256_s128_w1.ttir",
+          "bytes": 2886
+        },
+        {
+          "key": "ttadapter",
+          "path": "store_simd_int8_b256_s128_w1.ttadapter",
+          "bytes": 4070
+        },
+        {
+          "key": "mlirbc",
+          "path": "store_simd_int8_b256_s128_w1.mlirbc",
+          "bytes": 1509
+        },
+        {
+          "key": "bcmlir",
+          "path": "store_simd_int8_b256_s128_w1.bcmlir",
+          "bytes": 4026
+        },
+        {
+          "key": "npubin",
+          "path": "store_simd_int8_b256_s128_w1.npubin",
+          "bytes": 218928
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 632372.9753494263,
+              "event_ns_median": 645222.008228302,
+              "event_ns_all": [
+                645546.019077301,
+                632372.9753494263,
+                645222.008228302
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 2497387.8860473633,
+              "event_ns_median": 2505644.0830230713,
+              "event_ns_all": [
+                2516151.9050598145,
+                2505644.0830230713,
+                2497387.8860473633
+              ]
+            }
+          ],
+          "target_ns": 310.8358184496562,
+          "post_witness_ns": 7588741.779327393,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.012855037669439925,
+          "stable_ok": true
+        },
+        {
+          "attempt": 1,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 629767.0006752014,
+              "event_ns_median": 630302.0119667053,
+              "event_ns_all": [
+                638920.0091362,
+                629767.0006752014,
+                630302.0119667053
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 2484508.0375671387,
+              "event_ns_median": 2488409.0423583984,
+              "event_ns_all": [
+                2500971.0788726807,
+                2488409.0423583984,
+                2484508.0375671387
+              ]
+            }
+          ],
+          "target_ns": 309.1235061486562,
+          "post_witness_ns": 7569749.83215332,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.013910184475598856,
+          "stable_ok": true
+        },
+        {
+          "attempt": 2,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 628575.0269889832,
+              "event_ns_median": 645838.9759063721,
+              "event_ns_all": [
+                664923.0122566223,
+                645838.9759063721,
+                628575.0269889832
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 2479273.0808258057,
+              "event_ns_median": 2483719.1104888916,
+              "event_ns_all": [
+                2483719.1104888916,
+                2496006.965637207,
+                2479273.0808258057
+              ]
+            }
+          ],
+          "target_ns": 308.4496756394704,
+          "post_witness_ns": 7577280.044555664,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.014127942339639335,
+          "stable_ok": true
+        }
+      ]
+    },
+    {
+      "path": "simd",
+      "op": "store",
+      "dtype": "int8",
+      "element_bytes": 1,
+      "compile_mode": "simd",
+      "block": 256,
+      "stride": 256,
+      "stride_bytes": 256,
+      "num_warps": 1,
+      "grid": 1,
+      "target_ns": 274.9959925810496,
+      "target_kind": "rotate_loop_min_event_slope_ns_per_iter",
+      "valid": true,
+      "correctness_ok": true,
+      "contains_template_call": false,
+      "iters_list": [
+        2000,
+        8000
+      ],
+      "reps": 3,
+      "options": {
+        "num_warps": 1,
+        "logical_program_count_hint": 1,
+        "physical_vector_core_count_hint": 1,
+        "superblock_factor": 1,
+        "auto_simt_scope_mode": "off",
+        "compile_mode": "simd",
+        "compile_on_910_95": true,
+        "enable_auto_blockify": false
+      },
+      "asm_index": [
+        {
+          "key": "source",
+          "path": "store_simd_int8_b256_s256_w1.source",
+          "bytes": 4822
+        },
+        {
+          "key": "ttir",
+          "path": "store_simd_int8_b256_s256_w1.ttir",
+          "bytes": 2886
+        },
+        {
+          "key": "ttadapter",
+          "path": "store_simd_int8_b256_s256_w1.ttadapter",
+          "bytes": 4070
+        },
+        {
+          "key": "mlirbc",
+          "path": "store_simd_int8_b256_s256_w1.mlirbc",
+          "bytes": 1496
+        },
+        {
+          "key": "bcmlir",
+          "path": "store_simd_int8_b256_s256_w1.bcmlir",
+          "bytes": 4026
+        },
+        {
+          "key": "npubin",
+          "path": "store_simd_int8_b256_s256_w1.npubin",
+          "bytes": 218928
+        }
+      ],
+      "attempts": [
+        {
+          "attempt": 0,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 566154.0031433105,
+              "event_ns_median": 579438.9843940735,
+              "event_ns_all": [
+                579638.0043029785,
+                566154.0031433105,
+                579438.9843940735
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 2220267.0574188232,
+              "event_ns_median": 2232764.0056610107,
+              "event_ns_all": [
+                2239531.0401916504,
+                2232764.0056610107,
+                2220267.0574188232
+              ]
+            }
+          ],
+          "target_ns": 275.68550904591876,
+          "post_witness_ns": 7569788.932800293,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.019974603958668347,
+          "stable_ok": true
+        },
+        {
+          "attempt": 1,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 567158.9970588684,
+              "event_ns_median": 579558.0148696899,
+              "event_ns_all": [
+                595309.0190887451,
+                567158.9970588684,
+                579558.0148696899
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 2217134.952545166,
+              "event_ns_median": 2223692.8939819336,
+              "event_ns_all": [
+                2223692.8939819336,
+                2240648.031234741,
+                2217134.952545166
+              ]
+            }
+          ],
+          "target_ns": 274.9959925810496,
+          "post_witness_ns": 7577648.162841797,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.02322864272704143,
+          "stable_ok": true
+        },
+        {
+          "attempt": 2,
+          "rows": [
+            {
+              "iters": 2000,
+              "event_ns_min": 563134.0146064758,
+              "event_ns_median": 566187.0241165161,
+              "event_ns_all": [
+                593722.9990959167,
+                566187.0241165161,
+                563134.0146064758
+              ]
+            },
+            {
+              "iters": 8000,
+              "event_ns_min": 2217387.914657593,
+              "event_ns_median": 2221858.9782714844,
+              "event_ns_all": [
+                2221858.9782714844,
+                2223237.0376586914,
+                2217387.914657593
+              ]
+            }
+          ],
+          "target_ns": 275.70898334185284,
+          "post_witness_ns": 7573892.116546631,
+          "post_freq_mhz": 1650,
+          "witness_ok": true,
+          "frequency_ok": true,
+          "spread": 0.01585114789161196,
+          "stable_ok": true
+        }
+      ]
+    }
+  ],
+  "buffer": {
+    "step": 8192,
+    "mask": 16383,
+    "total": 134287360,
+    "window_bytes": 134287360,
+    "bytes": 134287360
+  },
+  "frequency_check": {
+    "inflight_freq_mhz": 1650,
+    "query_seconds": 0.3643063319614157,
+    "reference_witness_ns": 7570425.987243652,
+    "witness_tolerance": 0.15
+  },
+  "elapsed_seconds": 76.64379428396933
+}

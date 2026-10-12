@@ -1,0 +1,83 @@
+{
+  "model_version": "template_stride_v2",
+  "path": "triton_stride_load",
+  "target": "ns/iteration",
+  "target_definition": "torch.npu.Event slope over a 2000/8000-iteration rotate loop; minimum Event per point across reps, then minimum valid/correct target across pass1/pass2 for the same (path, block, stride, num_warps)",
+  "compile_mode": "simd_simt_template",
+  "ir_evidence": "results/model_template_stride_v2/ir_evidence/",
+  "form": "T = intercept + sum(c_i * feature_i), c_i >= 0",
+  "fit_method": "weighted Lawson-Hanson NNLS + forward selection with a 0.95 absolute-correlation guard and a 0.002 relative-improvement floor (in-sample only)",
+  "fit_weights_alpha": 1.5,
+  "fit_max_terms": 6,
+  "fit_improvement_tol": 0.002,
+  "fit_corr_threshold": 0.95,
+  "feature_names": [
+    "L",
+    "bucket_worst_32k16",
+    "mean_warp_lines",
+    "tail_elems"
+  ],
+  "intercept": 236.4493648196842,
+  "coefficients": [
+    1.6758701453177038,
+    0.3848609413067588,
+    5.431101135362341,
+    0.24777443849445577
+  ],
+  "n_rows": 311,
+  "training_ranges": {
+    "block": [
+      4,
+      2048
+    ],
+    "stride": [
+      3,
+      255
+    ],
+    "num_warps": [
+      32
+    ],
+    "n_blocks": 10,
+    "n_strides": 37
+  },
+  "selection_history": [
+    {
+      "candidate": "L",
+      "objective": 251.8248096775681,
+      "relative_improvement": 0.9305106846425799,
+      "n_candidates": 4
+    },
+    {
+      "candidate": "bucket_worst_32k16",
+      "objective": 147.4251325505901,
+      "relative_improvement": 0.4145726438179362,
+      "n_candidates": 3
+    },
+    {
+      "candidate": "mean_warp_lines",
+      "objective": 64.47964004470663,
+      "relative_improvement": 0.5626278984515756,
+      "n_candidates": 2
+    },
+    {
+      "candidate": "tail_elems",
+      "objective": 52.041263792436695,
+      "relative_improvement": 0.1929039343837194,
+      "n_candidates": 1
+    }
+  ],
+  "metrics": {
+    "n": 311,
+    "mape_pct": 6.165590590854112,
+    "p50_pct": 4.042433569363357,
+    "p90_pct": 13.807107553217012,
+    "p95_pct": 18.654225269730397,
+    "max_pct": 37.560179765970936,
+    "bias_pct": -0.39960813478288126,
+    "rmse_pct": 6.541408571945027,
+    "rmse_ns": 63.79046578951569,
+    "tag": "in_sample"
+  },
+  "coefficients_nonnegative": true,
+  "feature_subset": "profile"
+}
