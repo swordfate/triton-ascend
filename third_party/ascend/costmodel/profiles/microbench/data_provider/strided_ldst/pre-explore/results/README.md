@@ -1,59 +1,127 @@
-# `pre-explore/results/` 数据目录清单
+# `pre-explore/results/` 数据目录清单（提交 2 版）
 
-> 本文由**实际扫描目录**生成（`os.walk` + `stat` + 逐个 JSON/CSV 解析），所有文件数、字节数、行数、MAPE 都是实测值，不是估计。
+> **本文件对应提交 2**（"只精简数据"的那次提交）。
+> **原始 campaign 测量数据已不在本提交里** —— 它们完整保存在提交 1 `5539c4831`
+> （`docs(costmodel): add the full strided load/store calibration workbench`）。
+> 需要原始 raw JSON 的人请 `git checkout 5539c4831 -- <路径>` 或直接切到该提交。
+>
+> 本文由**实际扫描目录**生成（`os.walk` + 逐个 JSON/CSV 解析），所有文件数、字节数、行数、列数、MAPE 都是实测值。
 > 扫描根：`third_party/ascend/costmodel/profiles/microbench/data_provider/strided_ldst/pre-explore/results/`。
-> 路径若未特别说明，均相对该根目录。
+> 路径若未特别说明，均相对该根目录。生成日期：提交 2 工作区（HEAD = `5539c4831`，工作区为该提交 + 数据精简）。
 
-**配套文档**：[`DATA_INVENTORY.md`](DATA_INVENTORY.md) 是按「标定阶段」逐条索引「哪一组测量 → 哪个结果文件」的细表；
-本文是**目录级**清单（campaign / 数据集 / 模型 / 报告 / 血缘），两者互补，不重复。
+**配套文档**：
+
+| 文档 | 说明 |
+|---|---|
+| [`DATA_INVENTORY.md`](DATA_INVENTORY.md) | 按"标定阶段"逐条索引"哪一组测量 -> 哪个结果文件"。**注意：它描述的是提交 1 的数据布局**，其中被 `results/<campaign>/` 引用的路径需到提交 1 查 |
+| [`README.md`](README.md)（本文件） | 目录级清单：现存文件、数据血缘、模型/报告索引 |
+| [`../README.md`](../README.md) | 最终物理模型报告（10 条公式总表 + 逐项物理含义） |
+| [`../docs/WHY-PHYSICS-OVER-GREEDY.md`](../docs/WHY-PHYSICS-OVER-GREEDY.md) | 为什么最终放弃数据驱动贪心、改用物理第一性建模 |
 
 ---
 
 ## 0. 总览
 
+### 0.1 本提交（提交 2）的 `results/` 实测
+
 | 项 | 值 |
 |---|---|
-| 顶级条目 | 49（37 个 campaign/结果子目录 + 12 个根目录散落文件/文档） |
-| 文件总数 | **2381 个**（`os.walk` 实测） |
-| 占用空间 | **168.3 MB**（176 498 999 B 实测） |
-| 最大的三块 | `final/` 60.2 MB、`merged/` 21.4 MB、`v5raw/` 14.0 MB |
-| 板上环境 | `ssh ascend-950pr-63`（用户 `c00946898`，环境 `wj_autoscope`，256 核） |
+| 顶级条目 | 13（1 个 `final/` 目录 + 12 个根目录散落文件） |
+| 文件总数 | **111 个**（`final/` 99 + 根目录 12） |
+| 占用空间 | **38.2 MB**（40 041 498 B 实测） |
+| 其中 `final/` | 99 个文件 / 38.1 MB |
+| 板卡环境 | `ssh ascend-950pr-63`（用户 `c00946898`，环境 `wj_autoscope`，256 核） |
 | 板上工作目录 | `~/strided-template-calibration-v2/` |
 | 统一入口 | [`../scripts/board_env.sh`](../scripts/board_env.sh)（所有 `board_*.sh` 先 source 它） |
 
+### 0.2 提交 1 -> 提交 2 的删减（实测，三种口径）
+
+| 口径 | 文件数 | 大小 | 说明 |
+|---|---:|---:|---|
+| 提交 1 **工作区**实测（旧版本文件 `os.walk` 记录） | 2381 | 168.3 MB（176 498 999 B） | 含 `.gitignore` 忽略、从未提交的 592 个文件 |
+| 提交 1 **git 跟踪**（`git ls-tree -r HEAD -- pre-explore/results`） | **1789** | **138.6 MB**（145 328 894 B） | 真正进了提交 1 的部分 |
+| 提交 2（本提交，工作区实测） | **111** | **38.2 MB**（40 041 498 B） | 只保留最终数据集 / 模型 / 报告 |
+| 提交 2 相对提交 1 的 git 跟踪量 | **-1678 个文件（-93.8%）** | **-100.4 MB（-72.4%）** | `git status` 里 1678 条 `D`（145 328 894 B -> 40 041 498 B） |
+
+**为什么工作区和 git 跟踪差 592 个文件**：提交 1 的 `pre-explore/.gitignore` 明确忽略了三类中间产物；
+这 592 个文件当时在工作区存在，但从未进入提交 1（占 29.7 MB）：
+
+| 被忽略的目录 | 文件数 | 忽略规则（`.gitignore`） |
+|---|---:|---|
+| `dtype_calibration_v1/raw/`、`measure_asm/` | 303 | `results/dtype_calibration_v*/raw/`、`.../measure_asm/` |
+| `dtype_calibration_v2_rotate512/raw/` | 83 | 同上 |
+| `dtype_calibration_v4_final/raw/` | 21 | 同上 |
+| `merged/`（v4+v5 合并快照） | 185 | `results/merged/` |
+| **合计** | **592** | `.gitignore` 注释：canonical merged raw 在 `results/final/raw/`，per-round 副本冗余 |
+
+> 换句话说：**提交 1 里"能追溯的原始数据"= `results/final/raw/` 的 231 个 JSON（29 MB）**，
+> 它是 v4/v5/v8/v9 四代 raw 的合并视图；各代 campaign 自己的 `raw/` 副本按设计未提交。
+
+### 0.3 提交 2 删了什么（`git status` 逐类实测）
+
+| 删除对象 | 文件数 | 说明 |
+|---|---:|---|
+| 37 个 campaign / 中间产物目录（整个目录树） | 1397 | 见 §8 的说明（1397 + 231 + 44 + 6 = 1678） |
+| `results/final/raw/` | **231** | 29 MB，是 campaign 原始数据在 `final/` 下的合并副本 |
+| `results/final/_*`（拟合中间状态） | **44** | `_p2c_*`、`_p3_*`、`_simt_*`、`_phys3_*`、`_greedy_*` 等推导过程状态 |
+| `results/final/fit_v5/` + `results/final/fit_newonly/` | 6 | 统一 6 式在"全量"与"new-only"上的对照产物 |
+| **合计删除** | **1678** | **脚本一个都没删（`pre-explore/scripts/` 623 个文件全部保留）** |
+
 ---
 
-## 1. 数据血缘（一句话链路 + 实际脚本）
+## 1. 数据血缘
+
+### 1.1 一句话链路（含实际脚本名）
 
 ```
-  [板上] 探针 Python（scripts/*_measure_probe.py、*_probe.py）
+  [板上] 探针 Python（scripts/*_measure_probe.py、*_probe.py、camodel/*.py）
       │  经 scripts/board_env.sh 设置 asc 环境后在 ascend-950pr-63 上运行
-      │  写 results/<campaign>/raw/*.json
+      │  写 results/<campaign>/raw/*.json        <<< 提交 1 独有，本提交已删
       │  顶层结构：{kind, op, path, dtype, element_bytes, cases:[...], buffer, frequency_check}
       │  kind ∈ {dtype_stride_measure(1D), stride2d_measure(2D), dtype_calibration_dataset, stride2d_dataset}
       ▼
-  [特征化] build_*.py  ── 用 scripts/stride_feature_reference.py 统一算特征
-      │  build_dtype_dataset.py        → <campaign>/dataset.csv        (rank-1)
-      │  build_2d_dataset.py           → <campaign>/dataset_2d.csv     (rank-2)
-      │  build_store_dataset.py        → model_store_v1/dataset.csv
-      │  build_template_stride_dataset.py → model_template_stride_v*/dataset.csv
-      │  build_unified_dataset.py      → final/dataset_unified_v*.csv  (rank1+rank2 同一套特征命名空间)
-      │  build_v{2,3,4}_numwarps_dataset.py → model_v{2,3,4}*/dataset.csv
+  [特征化] build_*.py ── 统一走 scripts/stride_feature_reference.py 的特征命名空间
+      │  build_dtype_dataset.py    -> <campaign>/dataset.csv     (rank-1)
+      │  build_2d_dataset.py       -> <campaign>/dataset_2d.csv  (rank-2)
+      │  build_store_dataset.py    -> model_store_v1/dataset.csv
+      │  build_template_stride_dataset.py -> model_template_stride_v*/dataset.csv
+      │  build_unified_dataset.py  -> final/dataset_unified_v*.csv   (rank1+rank2 同一命名空间)
+      │  build_v{2,3,4}_numwarps_dataset.py -> model_v{2,3,4}*/dataset.csv
+      │  run_final_pipeline.py     -> final/dataset_new_only_v*.csv   (过滤 source 前缀)
       ▼
-  [拟合] fit_*.py  ── 加权最小二乘（权重 1/T，即最小化相对误差=MAPE）、NNLS、贪心前向+后向消除、max() 结构
+  [拟合] fit_*.py ── 加权最小二乘（权重 1/T，即最小化相对误差 = MAPE）、NNLS、
+      │              贪心前向+后向消除、max() 结构、regime 指示展开
       │  写 results/final/MODEL_*.json、fit_*.json、model_v*.json
       │  物理重构回合写 results/final/PHYS*.json（PHYS_ = 第 1 轮，PHYS2_ = 第 2 轮，PHYS3_ = 第 3 轮）
       ▼
-  [报告] gen_report*.py  ── gen_report_v5.py 按 PHYS3 > PHYS2 > PHYS 优先级合并成最终报告
+  [报告] gen_report*.py ── gen_report_v5.py 按 PHYS3 > PHYS2 > PHYS 优先级合并成最终报告
       │  写 results/final/REPORT_*.md
       ▼
-  [文档] scripts/_readme{1..4}.py  →  pre-explore/README.md + pre-explore/README_data.json
+  [文档] scripts/_readme{1..4}.py -> pre-explore/README.md + pre-explore/README_data.json
 ```
+
+**一句话总结血缘**：
+
+```
+campaign 原始 json（提交 1） -> build_*.py -> dataset csv -> fit_*.py
+    -> MODEL_*.json / PHYS*.json -> gen_report*.py -> REPORT_*.md -> _readme4.py -> pre-explore/README.md
+```
+
+### 1.2 各阶段的产物今天在哪里
+
+| 阶段 | 产物 | 本提交（提交 2） | 提交 1 `5539c4831` |
+|---|---|---|---|
+| 板上测量 | `results/<campaign>/raw/*.json` | **已删** | 有：37 个目录；`final/raw/` 231 个 JSON 是能用 git 追溯的那一份 |
+| 特征化 | `final/dataset_*.csv` | **有**（最终数据集，13 个 CSV） | 有（同左） |
+| 拟合（统计线） | `final/MODEL_*.json`、`fit_*.json`、`model_v*.json` | **有**（60 个） | 有（+ 44 个 `_*` 中间状态） |
+| 拟合（物理线，最终交付） | `final/PHYS*.json` | **有**（16 个） | 有 |
+| 报告 | `final/REPORT_*.md` | **有**（7 个） | 有 |
+| 脚本 | `pre-explore/scripts/**` | **全在**（623 个文件：604 顶层 + 19 camodel） | 有 |
 
 **端到端重跑命令（唯一一条真正打通全链路的脚本）**
 
 ```bash
-# scripts/run_final_pipeline.py 是唯一把 raw → dataset → new-only → 拟合串起来的脚本
+# scripts/run_final_pipeline.py 是唯一把 raw -> dataset -> new-only -> 拟合串起来的脚本
 python3 scripts/run_final_pipeline.py --build \
     --unified pre-explore/results/final/dataset_unified_v5.csv
 #  steps:
@@ -62,130 +130,104 @@ python3 scripts/run_final_pipeline.py --build \
 #   3) build_unified_dataset.py --out results/final/dataset_unified_v5.csv --exclude-template \
 #        --v1-1d results/final/dataset.csv  --v1-2d results/final/dataset_2d.csv \
 #        --v3-2d results/_build/build_c1/dataset_2d.csv --v4-2d results/_build/build_c2/dataset_2d.csv
-#   4) 过滤 source.startswith(v1_/v2_/v3_/v4_) → results/final/dataset_new_only_v5.csv
-#   5) 逐 slot 贪心拟合（≤10 项，可选 max(a*num_warps, linear)）→ results/final/MODEL_FINAL_V7.json
+#   4) 过滤 source.startswith(v1_/v2_/v3_/v4_) -> results/final/dataset_new_only_v5.csv
+#   5) 逐 slot 贪心拟合（<=10 项）-> results/final/MODEL_FINAL_V7.json
 ```
 
-> 注意：`run_final_pipeline.py` 生成的 `MODEL_FINAL_V7.json` 是**统计选型链**的末端，**不是**最终交付的物理公式；
-> 最终 10 条公式来自物理重构回合写出的 `final/PHYS3_*.json` 与 `final/PHYS2_*.json`（见 §4）。
+> **注意**：`run_final_pipeline.py` 的**第 1、2、3 步输入全部在提交 1**（`expand2d/raw`、`expand2d_b/raw`、`_build/`）。
+> 在提交 2 上只能从 `--unified` 之后的步骤起步；想从 raw 重跑请用提交 1。
+> 另外：`MODEL_FINAL_V7.json` 是**统计选型链**的末端，**不是**最终交付的物理公式；
+> 最终 10 条公式来自 `final/PHYS3_*.json` 与 `final/PHYS2_*.json`（见 §5）。
 
 ---
 
-## 2. Campaign 子目录清单
+## 2. `results/` 根目录现存 12 个文件
 
-### 2.1 板上原始测量 campaign（raw JSON 的产地）
-
-| 目录 | 文件数 | 大小 | 是什么 campaign（实测网格） | 对应脚本 |
-|---|---:|---:|---|---|
-| `dtype_calibration_v1/` | 500 | 3.28 MB | **阶段 A+B 基线**。`raw/` 48 个 JSON；op=load,store；path=simd,simt_only,template；dtype=int8,float16,float32,int64（+bf16/int32 仅编译）；block=16..1024；stride=2..32；num_warps=1,4,32；2D shape=8x16,16x32,1x64,1x256。另含 `measure_asm/` 255 个逐 case 汇编/IR 转储（`.ttir/.source/.bcmlir/.mlirbc/.ttadapter`）、`ir_evidence/` 8 个 path-check、`camodel_2d/` 5 个白盒 | [`run_dtype_calibration.sh`](../scripts/run_dtype_calibration.sh)、`run_phaseA_measure.sh`、`run_phaseB_campaign.sh`、`board_launch_all.sh`；探针 `dtype_stride_measure_probe.py` / `stride2d_measure_probe.py`；构建 `build_dtype_dataset.py` / `build_2d_dataset.py` |
-| `dtype_calibration_v2_rotate512/` | 85 | 2.11 MB | **rotate-512 重测**（target 口径改为「512 次迭代 rotate-loop 的最小 event slope」）。84 个 JSON = 34 个 2D + 49 个 1D + 1 个 dataset meta。block=16..512；stride=2..64；num_warps=1；dtype 四种；2D shape=8x16,16x32,1x64,1x256。`dataset.csv` 427 行 | [`run_rotate512_campaign.sh`](../scripts/run_rotate512_campaign.sh)、`run_balance_campaign.sh`、`run_gapfill_campaign.sh`、`run_simdfill_campaign.sh`（四者 `OUT` 都默认指向该目录）；构建 `build_v2_dataset.py` |
-| `dtype_calibration_v4_final/` | 25 | 3.41 MB | **1D core 补扫（core1d remainder）**。`raw/` 21 个 JSON；这是 1D 网格最宽的一批：block=4..512；stride=2..256；num_warps=1,2,4,8,16,32,64；dtype 四种；path=simd,simt_only；2D shape=4x1,4x4,4x8,4x16,8x8,8x16,16x1,16x16。`dataset.csv` 76 行、`dataset_2d.csv` 128 行 | [`run_final_campaign.sh`](../scripts/run_final_campaign.sh)、`run_final_delta.sh`、`run_core1d_remainder.sh`、`run_core1d_remainder2.sh`（`OUT` 默认 = 本目录）、`board_n1_status.sh`、`board_progress.sh` |
-| `v4raw/` | 69 | 6.01 MB | **v4 代原始测量**：17 个 `stride2d_measure` + 52 个 `dtype_stride_measure`。block=4..512；stride=2..256；W=1..64；dtype 四种；2D shape=4x1..16x16 | 由 `board_launch_*.sh` / `run_v4_*.sh` 系列产出。目录名在合并进 `final/raw/` 后缩短为 `v4raw`，脚本里已不再出现该短名 |
-| `v5raw/` | 112 | 14.03 MB | **v5 代**：72 个 2D + 40 个 1D。2D 全面扩形：shape 覆盖 4x4..16x16，inner_stride=2..16，row_stride=2..256。文件名后缀 `_core` / `_wsweep` / `_fix1` / `_fix2_<blocks>_<strides>` / `_n1` | 同上（v5 代 runner） |
-| `v8raw/` | 34 | 2.87 MB | **v8 代 gap 补扫**：8 个 2D + 26 个 1D，文件名后缀 `_gap_<row_strides>_<inner_strides>`；row_stride=16..512，inner_stride=2..64，block=4..512，W=1..64 | 同上（v8 代 runner，含 `board_launch_gapfill_final.sh`） |
-| `v9raw/` | 16 | 6.06 MB | **v9 代 wfull 全扫描**：8 个 2D + 8 个 1D，path 全部 `simt_only`，W=1，block=4..512 × stride=2..256 全交叉（文件名 `_wfull_`） | 同上（v9 代 runner） |
-| `expand2d/` | 20 | 10.97 MB | **2D 扩形（c1）**：`raw/` 20 个 `stride2d_measure`，op=load,store；path=simd,simt_only；dtype 四种；W=1,4；R×C 覆盖 1x16,1x32,1x64,2x8..2x64,4x8..4x32,8x4..8x32,16x4..16x32,32x8,32x16 | [`board_expand2d.sh`](../scripts/board_expand2d.sh)（脚本内旧名 `dtype_calibration_v10_expand2d`）；被 [`run_final_pipeline.py`](../scripts/run_final_pipeline.py) 当作 `--build` 的 c1 输入 |
-| `expand2d_b/` | 22 | 8.93 MB | **2D 扩形（c2，纯 SIMT 补充）**：`raw/` 22 个，path 全为 `simt_only`；W=1,2,4,8,16,32,64；R×C 覆盖 2x8..64x8、2x16..8x16、2x64,2x128,4x64,8x64 等。后缀 `_A_rs`（row-stride 扫描）/ `_B_ws`（warp 扫描） | [`board_expand2d_b.sh`](../scripts/board_expand2d_b.sh)（旧名 `dtype_calibration_v11_expand2d_b`）；`run_final_pipeline.py` 的 c2 输入 |
-| `dir23/` | 5 | 0.23 MB | **定向补充窗口探针**：`d2_store_simd_int64_W1`、`d3_load_simd_f32_W1_win{big,small}`、`d3_store_simt_f32_W4_win{big,small}`。op=load,store；path=simd,simt_only；dtype=float32,int64；block=4..1024；stride=1,2,32,128,512,1024；W=1,4 | [`board_dir23.sh`](../scripts/board_dir23.sh)（旧名 `dtype_calibration_v13_dir23/raw`） |
-| `wide12/` | 7 | 0.57 MB | **SIMD wide 分支 stride∈{1,2} 复核**：1D，path=simd，dtype 四种，block=4..1024，stride=1,2，W=1，load+store。文件名 `1d_<op>_simd_<dtype>_W1_s1_2.json` | [`board_wide12.sh`](../scripts/board_wide12.sh) / [`board_wide12b.sh`](../scripts/board_wide12b.sh)（旧名 `dtype_calibration_v12_wide12/raw`）、[`board_span4k.sh`](../scripts/board_span4k.sh)（写 `raw2/`）、`_p2_write.py` |
-| `board_v2_simd/` | 1 | 0.17 MB | **最早一代 Event 频率重试**（无特征，只有 cycles/ns）。220 个 case，block=16,32,64,128,256 × stride=1..256（44 个取值） | [`run_v2_simd_dense.sh`](../scripts/run_v2_simd_dense.sh)、[`frequency_retry_probe.py`](../scripts/frequency_retry_probe.py) |
-| `board_v2_simd_more_blocks/` | 1 | 0.24 MB | 同上，补非 2 次幂 block：8,24,48,96,192,384,512（308 case） | [`run_v2_more_blocks.sh`](../scripts/run_v2_more_blocks.sh) |
-| `board_v2_simt/` | 1 | 0.12 MB | 纯 SIMT 版：115 case，path=simt_only，block=16..256，stride=1..256 | [`run_v2_simt_dense.sh`](../scripts/run_v2_simt_dense.sh)、`run_simt_numwarps_sweep.sh`；被 `build_v3_numwarps_dataset.py` 读取 |
-| `board_v2_simt_more_blocks/` | 1 | 0.07 MB | 纯 SIMT 补 block=4,8,512（69 case） | [`run_v2_more_blocks.sh`](../scripts/run_v2_more_blocks.sh) |
-| `board_v2_simt_warps/` | 1 | 0.38 MB | **num_warps 扫描**：344 case，block=32,64,128,256 × stride=1..256 × W=1,2,4,8,16,32,64 | [`run_simt_numwarps_sweep.sh`](../scripts/run_simt_numwarps_sweep.sh)、[`run_simt_numwarps_dense.sh`](../scripts/run_simt_numwarps_dense.sh)（`OUT_DIR` 默认 = 本目录）、[`simt_frequency_retry_probe.py`](../scripts/simt_frequency_retry_probe.py) |
-| `model_store_v1/raw/` | 3 | 1.26 MB | **store 专项原始测量**：`board_store_simd.json`(179 KB)、`board_store_simd_wide_more.json`(13 KB)、`board_store_simt.json`(991 KB)。mode=simd,simt_only；block=8..512（12 值）；stride=1..256（23 值）；W=1..64 | [`run_store_measure_simd.sh`](../scripts/run_store_measure_simd.sh)、[`run_store_measure_simt.sh`](../scripts/run_store_measure_simt.sh)；探针 [`store_measure_probe.py`](../scripts/store_measure_probe.py) / [`strided_store_probe.py`](../scripts/strided_store_probe.py) |
-| `model_template_stride_v1/` | 31 | 1.67 MB | **Triton 模板路径（`compile_mode=simd_simt`）1D stride 标定 v1**：f32，block=16..2048（6 值）× 19 个非 2 次幂 stride（3..255）× W=1..8。`dataset.csv` 190 行 | [`fit_template_stride_v1.py`](../scripts/fit_template_stride_v1.py)、[`predict_template_stride_v1.py`](../scripts/predict_template_stride_v1.py)、[`make_template_stride_plots.py`](../scripts/make_template_stride_plots.py) |
-| `model_template_stride_v2/` | 764 | 9.82 MB | **模板路径 v2（取代 v1）**：f32，block=4..2048 × 37 个非 2 次幂 stride（3..255）× W=32。`raw/` 4 个 JSON（load/store × pass1/pass2，共 1206/1480 case）+ 4 个 log；`ir_evidence/measure_asm/` 740 个汇编证据 + `template_stride_path_check_v2.json`(673 KB)。`dataset.csv` 740 行 | [`run_template_stride_calibration_v2.sh`](../scripts/run_template_stride_calibration_v2.sh)、`run_template_stride_measure_{load,store}.sh`、[`build_template_stride_dataset.py`](../scripts/build_template_stride_dataset.py)、[`fit_template_stride_v2.py`](../scripts/fit_template_stride_v2.py)、[`template_stride_path_check.py`](../scripts/template_stride_path_check.py) |
-
-**关键事实**：`final/raw/` 的 231 个 JSON = `v4raw`(69) + `v5raw`(112) + `v8raw`(34) + `v9raw`(16)，文件名统一加了 `vN__` 前缀（逐个核对前缀计数完全吻合：`{v4:69, v5:112, v8:34, v9:16}`）。
-`merged/raw/` 的 181 个 JSON = `v4raw`(69) + `v5raw`(112)，是 v8/v9 加入之前的中间合并快照。
-
-### 2.2 CAModel 白盒证据目录（对照真卡实测的硬件计数器）
-
-| 目录 | 文件数 | 大小 | 内容 | 对应脚本 |
-|---|---:|---:|---|---|
-| `block32_s3/` | 4 | 0.02 MB | load 白盒单点：block=32、stride=3、W=1、f32。`parsed.json`/`parsed.csv`（AIV/MTE2/BIU 计数器）+ `launch_manifest.json` + `run.log` | [`make_summary.py`](../scripts/make_summary.py)；探针在 `scripts/camodel/`（`board_cam_survey.py`、`board_cam_deep.sh`、`board_launch_camodel2d.sh`） |
-| `block64_s3/` | 4 | 0.02 MB | 同上，block=64 | 同上 |
-| `block128_s3/` | 4 | 0.02 MB | 同上，block=128 | 同上 |
-| `store_camodel_b32/` | 3 | 0.08 MB | store 白盒：block=32 × stride=1,2,4,8,16,32,64,128,256 × simd/simt_only。`parsed.json`/`parsed.csv` + `launch_manifest.json` | [`camodel/run_store_camodel.sh`](../scripts/camodel/run_store_camodel.sh)、[`camodel/summarize_strided_store_camodel.py`](../scripts/camodel/summarize_strided_store_camodel.py)、[`make_store_plots.py`](../scripts/make_store_plots.py) |
-| `store_camodel_b64/` | 3 | 0.08 MB | 同上，block=64 | 同上 |
-| `store_camodel_b128/` | 3 | 0.08 MB | 同上，block=128 | 同上 |
-| `strided_load_summary.csv`（根） | 1 | 1.2 KB | 上面 block{32,64,128}_s3 的白盒汇总表（run/mode/block/stride/useful_bytes/span_bytes/task_cycles/BIU cmds/DC reqs…） | [`make_summary.py`](../scripts/make_summary.py) |
-| `strided_load_summary.md`（根） | 1 | 1.0 KB | 上表的 Markdown 版 | 同上 |
-
-### 2.3 数据集 / 模型结果目录（中间产物）
-
-| 目录 | 文件数 | 大小 | 是什么 | 对应脚本 |
-|---|---:|---:|---|---|
-| `model_v2/` | 1 | 0.07 MB | 只有 `dataset.csv`（v2 代 1D f32 load 数据集）。**历史数据集，未重跑** | [`build_v2_dataset.py`](../scripts/build_v2_dataset.py) |
-| `model_v3_numwarps/` | 1 | 0.06 MB | 只有 `dataset.csv`（num_warps 扫描数据集） | [`build_v3_numwarps_dataset.py`](../scripts/build_v3_numwarps_dataset.py)（同时读 `board_v2_simt/`、`board_v2_simt_warps/`） |
-| `model_v4_numwarps/` | 7 | 0.42 MB | `dataset.csv` + 6 个指标 csv；`metrics_summary.json` = {mape_pct, p50, p90, p95, max, bias, rmse, n} | [`build_v4_numwarps_dataset.py`](../scripts/build_v4_numwarps_dataset.py)、[`fit_strided_model_v8.py`](../scripts/fit_strided_model_v8.py)、[`compare_strided_load_v7_v8_on_v4.py`](../scripts/compare_strided_load_v7_v8_on_v4.py) |
-| `model_v4_simple/` | 11 | 0.47 MB | v4 简化模型：`model_v4_simple.json`（coefficients / coefficients_ns / LOBO / LOWO 折 / in_sample）+ `metrics_summary.{csv,json}` + `errors_*.csv` + 分组指标 | [`fit_strided_model_v8.py`](../scripts/fit_strided_model_v8.py)、[`predict_strided_load_v8.py`](../scripts/predict_strided_load_v8.py) |
-| `model_v4_simple_p25/` | 10 | 0.46 MB | v4_simple 的 p25 分位变体：额外含 `cv_candidates.csv`、`cv_lobo_folds.json`、`cv_lowo_folds.json`、按 block/num_warps/stride 的分组指标 | 无脚本硬编码引用（历史变体） |
-| `model_v7_simple/` | 11 | 0.67 MB | v7 纯 SIMT load 模型：`model_v7_simple.json` 分 `simt`/`simd_wide`/`simd_gather`(±`_target`) 四支 + `plots/` 4 张 png + `errors_*.csv` | [`fit_strided_model_v7_simple.py`](../scripts/fit_strided_model_v7_simple.py)、[`predict_strided_load_v7_simple.py`](../scripts/predict_strided_load_v7_simple.py)、[`make_v7_plots.py`](../scripts/make_v7_plots.py)、[`evaluate_strided_load_v7_on_v4.py`](../scripts/evaluate_strided_load_v7_on_v4.py) |
-| `model_store_v1/` | 15 | 1.94 MB | store 专项标定 v1：`dataset.csv` 744 行（mode/block/stride/num_warps + 30 个特征列）+ `model_store_v1.json` + `metrics_summary.{csv,json}` + `errors_{all,simd_gather,simd_wide,simt}.csv` + `plots/` 4 张 png | [`build_store_dataset.py`](../scripts/build_store_dataset.py)、[`fit_strided_store_v1.py`](../scripts/fit_strided_store_v1.py)、[`predict_strided_store_v1.py`](../scripts/predict_strided_store_v1.py)、[`make_store_plots.py`](../scripts/make_store_plots.py) |
-| `refit_no_stride1_v1/` | 16 | 0.74 MB | **阶段 0「零新增测量」重拟**：丢掉所有 `stride==1` 行后重拟 v4_simple / v7_simple / store_v1。`load/` 9 个文件、`store/` 4 个文件，另有 `loading_audit.csv`、`old_vs_new.csv`、`metrics_summary.json` | [`refit_no_stride1.py`](../scripts/refit_no_stride1.py) |
-| `unified_formulas_v1/` | 5 | 0.99 MB | **第一次「统一 6 式」尝试**：`dataset_unified.csv` 3638 行/43 列；`model_unified6.json`（`version=unified_v1`，`formula_count=7`，含 `template_load`/`template_store`）；`metrics_summary_unified6.csv`、`worst_cases_unified6.csv`、`FORMULA_SUMMARY.md`(28 KB) | [`fit_unified_model.py`](../scripts/fit_unified_model.py)、[`fit_unified6.py`](../scripts/fit_unified6.py)、[`summarize_unified6.py`](../scripts/summarize_unified6.py) |
-| `unified_formulas_v2/` | 5 | 0.79 MB | 同上但 `--exclude-template` 后只剩 5 式：`dataset_unified.csv` 2935 行；`model_unified6.json`（`formula_count=5`）；`FORMULA_SUMMARY.md`(23 KB) | [`fit_unified6.py`](../scripts/fit_unified6.py)、[`summarize_unified6.py`](../scripts/summarize_unified6.py)（其 `--dir` 默认值就是本目录） |
-| `_build/build_c1/` | 2 | 0.83 MB | 由 `expand2d/raw` 建出的 2D 数据集（`dataset_2d.csv` 830 KB + meta）；`run_final_pipeline.py --build` 的中间产物 | [`run_final_pipeline.py`](../scripts/run_final_pipeline.py) → [`build_2d_dataset.py`](../scripts/build_2d_dataset.py) |
-| `_build/build_c2/` | 2 | 0.67 MB | 由 `expand2d_b/raw` 建出 | 同上 |
-| `_tmpbuild/` | 2 | 0.05 MB | 一次性草稿：`dataset_2d.csv`(51544 B) 与 `dataset_2d_meta.json`(4313 B) 与 `dtype_calibration_v4_final/` 下同名文件**字节数完全一致**，即该目录的临时副本 | 无脚本引用 |
-| `merged/` | 185 | 21.39 MB | **v4+v5 合并快照**：`raw/` 181 个 JSON；`dataset.csv` 1520 行/51 列；`dataset_2d.csv` 2352 行/48 列（meta 记 89 个 raw 文件、2628 case、2215 valid）；+ `dataset_meta.json`、`dataset_2d_meta.json` | 无脚本硬编码引用（v8/v9 加入前的中间快照） |
-| `final/` | 380 | 60.22 MB | **最终汇合目录**（下详 §3–§5） | 见 §3–§5 |
-
-### 2.4 `final/` 内部结构
-
-| 子项 | 文件数 | 说明 |
+| 文件 | 大小 | 说明 |
 |---|---:|---|
-| `final/raw/` | 231 | v4/v5/v8/v9 四代原始 JSON，文件名加 `vN__` 前缀（= v4raw+v5raw+v8raw+v9raw） |
-| `final/dataset*.csv` + `*_meta.json` | 15 | 见 §3 |
-| `final/MODEL_*.json` | 41 | 见 §4.1 |
-| `final/PHYS*.json` | 16 | 见 §4.2（**最终 10 条公式的载体**） |
-| `final/fit_*.json` | 11 | `fit_v9_greedy`、`fit_v10_exhaustive`、`fit_v11_stepwise`、`fit_v12_big`、`fit_v13`、`fit_v14_crossed`、`fit_v15_Rcross`、`fit_v18_indicator`、`fit_v19_indicators`、`fit_v20_crosscand`、`fit_v21` —— 逐轮搜索的中间状态 |
-| `final/model_v{9,15,16,17}*.json` | 4 | 早期整模型（v9 / v15 全特征 / v16 后向消除 / v17 去重+不确定性） |
-| `final/_*.json` / `_p3_feats.csv` | 44 | `_p2c_*`、`_p3_*`、`_simt_*`、`_phys3_*`、`_greedy_*` 等子代理推导过程的中间状态 |
-| `final/REPORT_*.md` | 7 | 见 §5 |
-| `final/fit_v5/` | 3 | `fit_unified6.py` 在**含历史复用行的全量 unified** 上的产物：`model_unified6.json` + `metrics_summary_unified6.csv` + `worst_cases_unified6.csv`（除 `simd_load_gather` 外各 slot n 都更大，如 `simd_load_wide` n=141） |
-| `final/fit_newonly/` | 3 | 同一脚本在 **`dataset_new_only_v5.csv`**（只含本轮新测行）上的产物（`simd_load_wide` n=132） |
-| 其他 5 个 | 5 | `COMPOSITION.json`（10 个 slot 的数据构成）、`FEATURE_MEANING.json`（特征中文释义）、`DOMAIN_CURVE.json`（各 slot 的 domain 收敛曲线）、`PRUNE_CURVE.json`（剪枝曲线）、`features_dedup.json`（156 个特征去重表） |
+| `README.md` | 本文件 | 目录级清单（提交 2 版） |
+| `DATA_INVENTORY.md` | 9.0 KB | 按标定阶段 A/B 的逐条数据索引。**描述的是提交 1 的布局** |
+| `v4_retest_full_23.json` | 6.95 MB | "23 组配置全重测"的合并结果（顶层 `{results:[...]}`），用于把早期不对齐的 v4 数据替换掉 |
+| `_phys_r2_table.json` | 116 KB | 第 2 轮物理重构的 222 行分组表 |
+| `_phys_r2_models.json` | 2.8 KB | 第 2 轮 12 个候选模型（M1..M12）的 MAPE 与系数 |
+| `_phys_r2_final.json` | <1 KB | 分组终选 |
+| `_phys_r2_greedy.json` / `_phys_r2_greedy2.json` | <1 KB 各 | 第 2 轮贪心对照结果 |
+| `_phys_r2_lib.json` | <1 KB | 特征名表 |
+| `_p3_store_r1_final.json` | 764 B | 第 3 轮 store_r1 的 4 组候选（`old/new5/new6/val`）对比 |
+| `strided_load_summary.csv` | 1.2 KB | CAModel 白盒汇总表（run/mode/block/stride/useful_bytes/span_bytes/task_cycles/BIU cmds/DC reqs…） |
+| `strided_load_summary.md` | 1.0 KB | 上表的 Markdown 版 |
 
-### 2.5 根目录散落文件
-
-| 文件 | 大小 | 说明 | 对应脚本 |
-|---|---:|---|---|
-| `v4_retest_full_23.json` | 7.19 MB | 「23 组配置全重测」的合并结果（顶层 `{results:[...]}`）。用于把早期不对齐的 v4 数据替换掉 | [`merge_v4_retest.py`](../scripts/merge_v4_retest.py)、[`retest_strided_simt_cases.py`](../scripts/retest_strided_simt_cases.py)、`run_v4_retest_missing.sh`、`run_v4_aligned_23.sh`（脚本内写作 `results/v4_aligned_23`） |
-| `_phys_r2_table.json` | 116 KB | 第 2 轮物理重构的 222 行分组表 | `phys_r2_step*.py` |
-| `_phys_r2_models.json` | 2.8 KB | 第 2 轮 12 个候选模型（M1..M12）的 MAPE 与系数 | 同上 |
-| `_phys_r2_final.json` / `_phys_r2_greedy{,2}.json` / `_phys_r2_lib.json` | <1 KB 各 | 分组终选、特征名表、贪心结果 | 同上 |
-| `_p3_store_r1_final.json` | 764 B | 第 3 轮 store_r1 的 4 组候选（`old/new5/new6/val`）对比 | `p3_store_r1_*.py` |
-| `strided_load_summary.csv` / `.md` | 1.2 / 1.0 KB | CAModel 白盒汇总表（见 §2.2） | [`make_summary.py`](../scripts/make_summary.py) |
-| `DATA_INVENTORY.md` | 9.0 KB | 按标定阶段 A/B 的逐条数据索引（**不是本文件**，两者互补） | — |
+> 根目录这 7 个 `_*.json` 是**刻意保留**的：它们是第 2/3 轮物理重构的候选模型与终选记录，
+> 体积很小但能证明"最终公式不是唯一候选、是比出来的"。
+> 两份 `strided_load_summary.*` 出自 `scripts/make_summary.py`（**该脚本已在后续的脚本清理中删除**；
+> 推导记录见 [`../docs/agent-logs/`](../docs/agent-logs/)，需要时用 `git show HEAD:pre-explore/scripts/make_summary.py` 取回），
+> 其数据源 `results/block{32,64,128}_s3/` 与 `results/store_camodel_b{32,64,128}/` **已删（见提交 1）**。
 
 ---
 
-## 3. 最终数据集：`final/dataset_*.csv`
+## 3. `final/dataset_*.csv`：13 个 CSV + 2 个 meta（实测行/列）
 
-### 3.1 全部 dataset csv（实测行数）
+行数为**数据行数**（不含表头）。列名只摘前几列，完整 59 列释义见 §3.2。
 
-| 文件 | 行数 | 列数 | 生成脚本 | 说明 |
+### 3.1 全部 dataset 文件
+
+| 文件 | 行数 | 列数 | 生成脚本 | 用途 |
 |---|---:|---:|---|---|
-| `final/dataset.csv` | 2560 | 51 | [`build_dtype_dataset.py`](../scripts/build_dtype_dataset.py) | rank-1（1D）主数据集 |
-| `final/dataset_2d.csv` | 3432 | 48 | [`build_2d_dataset.py`](../scripts/build_2d_dataset.py) | rank-2（2D tile）主数据集 |
-| `final/dataset_unified.csv` | 8016 | 43 | [`build_unified_dataset.py`](../scripts/build_unified_dataset.py) | 第一次统一（rank1+rank2 重特征化到同一命名空间） |
-| `final/dataset_unified_dedup.csv` | 7895 | 43 | 同上 + 去重 | 去重版 |
-| `final/dataset_unified_v2.csv` | 8016 | 56 | 同上 | v2：+ 2D 行/列/间距特征 |
-| `final/dataset_unified_v3.csv` | 8016 | 59 | 同上 | v3：+ `valid`/`quality`/`target_spread` |
-| `final/dataset_unified_v4.csv` | 9456 | 59 | 同上 | v4：并入 v8/v9 代 raw |
-| **`final/dataset_unified_v5.csv`** | **12040** | **59** | 同上 | **最终统一数据集**（并入 expand2d / expand2d_b 两轮 2D 扩形） |
-| `final/dataset_new_only.csv` | 5918 | 43 | `run_final_pipeline.py`（过滤 `source` 前缀） | 「只看本轮新测」视图 |
-| `final/dataset_new_only_v2.csv` | 6039 | 56 | 同上 | |
-| `final/dataset_new_only_v3.csv` | 6039 | 59 | 同上 | |
-| `final/dataset_new_only_v4.csv` | 7479 | 59 | 同上 | |
-| **`final/dataset_new_only_v5.csv`** | **10063** | **59** | 同上 | **最终拟合用数据集**（物理公式全部在它上面拟合） |
+| `dataset.csv` | 2560 | 51 | [`build_dtype_dataset.py`](../scripts/build_dtype_dataset.py) | rank-1（1D）主数据集，v4 代 raw 的特征化结果 |
+| `dataset_2d.csv` | 3432 | 48 | [`build_2d_dataset.py`](../scripts/build_2d_dataset.py) | rank-2（2D tile）主数据集 |
+| `dataset_unified.csv` | 8016 | 43 | [`build_unified_dataset.py`](../scripts/build_unified_dataset.py) | 第一次统一：rank1+rank2 重特征化到同一命名空间 |
+| `dataset_unified_dedup.csv` | 7895 | 43 | 同上 + 去重 | 去重版（-121 行） |
+| `dataset_unified_v2.csv` | 8016 | 56 | 同上 | v2：+ 2D 行/列/间距特征 |
+| `dataset_unified_v3.csv` | 8016 | 59 | 同上 | v3：+ `valid` / `quality` / `target_spread` |
+| `dataset_unified_v4.csv` | 9456 | 59 | 同上 | v4：并入 v8/v9 代 raw |
+| **`dataset_unified_v5.csv`** | **12040** | **59** | 同上 | **全量统一数据集**（并入 expand2d / expand2d_b 两轮 2D 扩形）；用于"跨口径对照" |
+| `dataset_new_only.csv` | 5918 | 43 | [`run_final_pipeline.py`](../scripts/run_final_pipeline.py) | "只看本轮新测"视图（过滤 `source` 前缀） |
+| `dataset_new_only_v2.csv` | 6039 | 56 | 同上 | 同上，v2 列集 |
+| `dataset_new_only_v3.csv` | 6039 | 59 | 同上 | 同上，v3 列集 |
+| `dataset_new_only_v4.csv` | 7479 | 59 | 同上 | 同上，并入 v8/v9 |
+| **`dataset_new_only_v5.csv`** | **10063** | **59** | 同上 | **最终拟合用数据集**（物理公式全部在它上面拟合，取 `valid=1` 的 9541 行） |
+| `dataset_meta.json` | 21.9 KB | — | `build_dtype_dataset.py` | 元数据：`kind=dtype_calibration_dataset`、total 2560 / valid 2371 / invalid 189、coverage、`feature_source` |
+| `dataset_2d_meta.json` | 11.0 KB | — | `build_2d_dataset.py` | 元数据：`kind=stride2d_dataset`、total 3524 / valid 3262 / invalid 262、`scope`、coverage |
 
-另有各 campaign 自己的 `dataset.csv` / `dataset_2d.csv`（见 §2.1、§2.3），以及 `final/dataset_meta.json`（kind=dtype_calibration_dataset，total 2560 / valid 2371）与 `final/dataset_2d_meta.json`（kind=stride2d_dataset，total 3524 / valid 3262，raw_files 89 个）。
+> 口径说明：**14 个 `dataset_*` 条目 = 13 个 CSV + `dataset_meta.json`**；若把 `dataset_2d_meta.json` 也算进来则是 15 个 `dataset*` 文件。
+> 这里按"CSV 数据文件"计为 13，按"dataset 前缀文件全算"计为 15，两个数都对，取决于是否把 `dataset_2d_meta.json` 计入。
 
-### 3.2 `dataset_unified_v5.csv` vs `dataset_new_only_v5.csv`：为什么两个文件
+### 3.2 59 列的组成（`dataset_unified_v5.csv` / `dataset_new_only_v5.csv`）
+
+所有特征由 [`stride_feature_reference.py`](../scripts/stride_feature_reference.py) 唯一实现（`dataset_meta.json` 的 `feature_source` 也这么记），
+原则是**一律用字节域或纯计数，绝不用元素域 stride**，这样 dtype 宽度以"因子"而非"分支"进入公式。
+
+| 列组 | 列名 | 含义 |
+|---|---|---|
+| **实验条件（11 列）** | `op` / `path` / `dtype` / `element_bytes` | load,store / simd,simt_only / int8,float16,float32,int64 -> 1/2/4/8 |
+| | `num_warps` / `rank` / `elements` / `inner_stride_bytes` | W 1..64 / 1 或 2 / 元素总数 n / ISB = stride x eb |
+| | `source` / `domain` | 数据来源（v1_1d,v1_2d,v2_1d,v3_2d,v4_2d,hist_*）/ rotate 或 single_shot |
+| **目标值（4 列）** | `target_ns` | 板上 Event 测得的每次迭代耗时（ns），同一配置多次 pass 取 **min** |
+| | `target_kind` / `valid` / `quality`, `target_spread` | 口径标记 / 四道门（witness+频率+spread+数值正确性）/ 重复测量离散度（>0.2 视为双稳区） |
+| **地址表基本量（8 列）** | `f_elements`, `f_L` | 元素数；distinct 128 B line 数 |
+| | `f_line_elems_max/min`, `f_line_density` | 单条 128 B line 内最多/最少/平均元素数 |
+| | `f_span_bytes`, `f_page_cross`, `f_cross` | 首末字节跨度；跨 4 KB 页数；跨页标志 |
+| **warp 行为（4 列）** | `f_mean_warp_lines` / `f_min_warp_lines` / `f_max_warp_lines` / `f_iters_per_thread` | 每 warp 触碰 line 数的均值/最小/最大；每线程循环次数 |
+| **热点/冲突（4 列）** | `f_bucket_pairs_2k8` / `f_bucket_worst_2k8` / `f_bucket_pairs_32k16` / `f_bucket_worst_32k16` | 2 KB/8-bucket 与 32 KB/16-bucket 粒度下的命令冲突对数与最拥塞 bucket |
+| **命令与事务（8 列）** | `f_K`, `f_K_stg`, `f_dup`, `f_n_cmd_block` | 指令条数（LDG/STG）；重复请求 line 数；per-element BIU 命令数 |
+| | `f_line_request_size`, `f_line_request_size_cpp4`, `f_tail_elems`, `f_rank` | 每条 line 请求字节量（真实位宽 / C++ 语义 4 B 每元素）；`max(0,n-64)`；rank 数值副本 |
+| **分段/阈值指示（8 列）** | `f_min_L_32`, `f_max_L_minus_32`, `f_dupL_minL_128`, `f_cross_minL_32`, `f_lowW_4_L` | `min(L,32)`、`max(0,L-32)`、`dup x L x min(L,128)`、跨页 x `min(L,32)`、`max(0,4-W) x L` |
+| | `f_inner_stride_bytes`, `f_row_gap_bytes` | 内层跨步字节；行间空隙字节 |
+| **2D 专有（9 列）** | `f_rows`, `f_cols`, `f_row_span_bytes`, `f_row_pitch_bytes`, `f_row_lines`, `f_gap_lines`, `f_comb_lines`, `f_comb_overlap`, `f_rows_share_line`, `f_row_segments`, `f_gap_per_line`, `f_row_span_div_gap`, `f_tail_row_elems` | R、C、行字节跨度、行间距、行内 line 数、空隙 line 数、行列 line 并集、重叠量、是否共享 line、行被切几段、每 line 空隙、跨度/空隙比、末行余量 |
+
+字段分布（`dataset_unified_v5.csv` 实测）：
+
+| 维度 | 分布 |
+|---|---|
+| `op` | load 5790 / store 6250 |
+| `path` | simt_only 8812 / simd 3228 |
+| `dtype` | float32 4254 / int8 2775 / float16 2729 / int64 2282 |
+| `rank` | 1 -> 4584 / 2 -> 7456 |
+| `num_warps` | 1:6530、2:594、4:2540、8:594、16:594、32:594、64:594 |
+| `valid` | 1 -> 11518 / 0 -> 522（new-only 中 1 -> 9541 / 0 -> 522） |
+| `domain` | rotate 11599 / single_shot 441 |
+
+### 3.3 `dataset_unified_v5` vs `dataset_new_only_v5`：为什么两个文件
 
 `build_unified_dataset.py` 把 5 类来源拼进一张表，行首 `source` 列标明出处：
 
@@ -193,237 +235,308 @@ python3 scripts/run_final_pipeline.py --build \
 |---|---:|---|
 | `v1_2d` | 3392 | 本轮 `final/dataset_2d.csv`（rank-2） |
 | `v1_1d` | 2184 | 本轮 `final/dataset.csv`（rank-1） |
-| `v3_2d` | 2112 | `_build/build_c1`（`expand2d/raw`） |
-| `v4_2d` | 1952 | `_build/build_c2`（`expand2d_b/raw`） |
-| `hist_v4` | 992 | **历史复用**：`model_v4_numwarps`/`model_v4_simple` 的数据 |
-| `hist_store` | 544 | **历史复用**：`model_store_v1/dataset.csv` |
-| `hist_v2_single_shot` | 441 | **历史复用**：`model_v2`（`domain=single_shot`） |
-| `v2_1d` | 423 | `dtype_calibration_v2_rotate512` 的 1D 行 |
+| `v3_2d` | 2112 | `_build/build_c1`（`expand2d/raw`，见提交 1） |
+| `v4_2d` | 1952 | `_build/build_c2`（`expand2d_b/raw`，见提交 1） |
+| `hist_v4` | 992 | **历史复用**：`model_v4_numwarps` / `model_v4_simple` 的数据（见提交 1） |
+| `hist_store` | 544 | **历史复用**：`model_store_v1/dataset.csv`（见提交 1） |
+| `hist_v2_single_shot` | 441 | **历史复用**：`model_v2`（`domain=single_shot`，见提交 1） |
+| `v2_1d` | 423 | `dtype_calibration_v2_rotate512` 的 1D 行（见提交 1） |
 
 `dataset_new_only_v5.csv` = 只保留 `source ∈ {v1_1d, v1_2d, v2_1d, v3_2d, v4_2d}` 的 10063 行（丢掉 3 类 `hist_*` 共 1977 行）。
-**为什么拟合要用 new-only**：`hist_v2_single_shot` 的 target 口径不同（`domain=single_shot`，单次发射而非 rotate-loop slope），混进来会污染标定；
-所以全量 unified 只用于「跨口径对照」，真正拟合一律用 new-only。
+**为什么拟合要用 new-only**：`hist_v2_single_shot` 的 target 口径不同（单次发射而非 rotate-loop slope），混进来会污染标定；
+所以全量 unified 只用于"跨口径对照"，真正拟合一律用 new-only。
 
-其余字段分布（`dataset_unified_v5.csv` 实测）：
+---
 
-| 维度 | 分布 |
+## 4. `final/MODEL_*.json`：41 个大写 `MODEL_*` + 4 个 `model_v*` = **45 个模型文件**
+
+口径：除注明外，全部 slot 级模型的方法都是 **加权最小二乘，权重 = 1/T**（等价于直接最小化 MAPE）；
+`MAPE` 列为该 slot 的 **in-sample** MAPE（%）；`项数` 为该式的项数（含截距，按各文件 `n_terms` / 列表长度实测）；
+`总 MAPE` 取各文件自带的 `_overall`（按 n 加权）。`-` 表示该文件没有这一字段（例如只存 `base`+`coefs`、或只存结构）。
+
+### 4.1 早期整模型（4 个）
+
+| 文件 | slot | 项数 | slot MAPE | 总 MAPE | 方法 / 备注 |
+|---|---|---:|---|---:|---|
+| `model_v9.json` | 5 | 4-7 | 16.7-34.2 | 23.50 | 最早整模型；1/T 相对加权 + 非负线性，无 log/exp/幂；数据集 `dataset_new_only.csv`(5918 行) |
+| `model_v15_final.json` | 5 | 231 | 9.50 / 22.86 / 16.19 / 9.95 / 15.83 | 14.54 | 全 231 特征整模型（不做任何选型） |
+| `model_v16_backward.json` | 5 | 214-223 | 9.27 / 22.74 / 16.02 … | 14.42 | 后向消除版；1/T 加权 WLS，字节域原始量线性项 |
+| `model_v17_dedup_unc.json` | 5 | 157 | 见文件 | 14.65 | 特征去重 + 不确定性处理版 |
+
+### 4.2 指示因子展开线（项数爆炸 -> 揭示"堆指示器"的极限）
+
+| 文件 | slot | 项数 | slot MAPE | 总 MAPE | 方法 / 备注 |
+|---|---|---:|---|---:|---|
+| `MODEL_FINAL.json` | 5 | 5-6 | 13.85-26.26 | 17.41 | 每特征 x dtype 指示（eb in 1/2/4/8），系数全非负 -> 每项都是成本 |
+| `MODEL_FINAL_V2.json` | 5 | 181-521 | 5.15-15.42 | 7.23 | 再加 num_warps / rank 指示因子（严重过参数化） |
+| `MODEL_FINAL_V3.json` | 5 | 547-1353 | 1.17-5.34 | 4.07 | 同上（**项数爆炸，已废弃**：最多 1353 项/式，比 `MODEL_FINAL` 的 17.41% 低了 13 个点，但完全不可解释；见 `WHY-PHYSICS-OVER-GREEDY.md` §5.3） |
+| `MODEL_DELIVER.json` | 5 | 261 | 6.78-20.65 | 9.95 | "交付版"：>140 项/式，全部基础特征乘 dtype/num_warps/rank 指示因子 |
+| `MODEL_INDICATOR_FULL.json` | 9 | 73 | 6.87-20.95 | - | 指示器全展开（9 个 slot） |
+| `MODEL_COMPACT.json` | 5 | 13 | 9.79-20.30 | 14.90 | 每 slot 恰 12 项（+截距），权重 1/T |
+| `MODEL_COMPACT_12.json` | 5 | 13 | 9.79-20.30 | 14.90 | 同上；`_note` 记录拟合在 5686 个 probe-valid 点上 |
+| `MODEL_V22.json` | 5 | 222-339 | 5.97-18.96 | - | 早期整模型（只存 mape / n / base / mods / n_terms） |
+| `MODEL_V23.json` | 5 | 222-573 | 5.00-13.93 | - | 早期整模型 |
+
+### 4.3 分 rank + <=10 项线（`run_final_pipeline.py` 的产物族）
+
+| 文件 | slot | 项数 | slot MAPE | 总 MAPE | 方法 / 备注 |
+|---|---|---:|---|---:|---|
+| `MODEL_FINAL_V4.json` | 10 | 8-10 | 0.78-17.35 | 11.68 | 按 rank 拆成 10 个 slot，每 slot <=10 项 |
+| `MODEL_FINAL_V5.json` | 10 | 8-10 | 0.78-17.35 | 11.68 | 同 V4（仅重跑确认，数值完全相同） |
+| `MODEL_FINAL_V6.json` | 10 | 8-10 | 0.73-22.19 | 14.17 | 同 V4，数据换成含 `hist_*` 的更大集 |
+| `MODEL_FINAL_V7.json` | 10 | 8-10 | 0.74-25.98 | 16.31 | **`run_final_pipeline.py` 的末端产物**：贪心前向+后向消除，<=10 项；`simt_store_r2` 仍有 25.98% |
+| `MODEL_FINAL_10TERM.json` | 10 | 8-10 | 4.08-21.96 | 14.79 | 固定 <=10 项 |
+| `MODEL_10TERM_FINAL.json` | 10 | 11 | - | - | 固定 10 项，只存 `base`+`coefs` |
+| `MODEL_BACKELIM10.json` | 10 | 11 | 1.36-21.36 | 15.24 | 后向消除到 11 项 |
+| `MODEL_EXHAUST5.json` | 10 | 6 | 1.46-24.30 | 16.97 | 穷举到 6 项 |
+| `MODEL_RANK_SPLIT.json` | 10 | 11 | 0.87-19.84 | 13.06 | 按 rank 分治，11 项 |
+| `MODEL_RANKSPLIT_NNLS.json` | 10 | 26-37 | 1.13-22.00 | - | 同上但用 **NNLS**（非负最小二乘） |
+| `MODEL_TOPK30.json` | 10 | 2-11 | 4.03-29.20 | - | 从 top-30 候选里选（K 记在文件里） |
+| `MODEL_BESTOF.json` | 10 | 11-73 | 0.57-20.95 | - | 逐 slot 取各方案最优（无项数约束；`simd_load_wide_r1` 用 73 项换 0.57%） |
+| `MODEL_HYBRID.json` | 10 | 11-73 | 0.74-20.95 | - | 逐 slot 混选（在 FINAL_V7 与 BESTOF 之间按 slot 取优） |
+| `MODEL_HYBRID2.json` | 10 | 11-73 | 0.73-22.46 | - | 同上，换数据后重跑 |
+
+### 4.4 交叉项 / 指示器 / regime 线（**数据驱动贪心路线的完整记录**）
+
+| 文件 | slot | 项数 | slot MAPE | 总 MAPE | 方法 / 备注 |
+|---|---|---:|---|---:|---|
+| `MODEL_10CROSSED.json` | 10 | 9-11 | 1.31-24.33 | 16.57 | 每项为"变量 x 变量"的交叉乘积，贪心选 <=10 项 |
+| `MODEL_10CROSSED_DOMAIN.json` | 10 | 9-11 | 1.23-24.08 | 15.58（`_overall_kept`） | 同上 + `domain` 剔除规则；带 `n_kept` / `coverage` / `rule` / `frontier` |
+| `MODEL_MODSEL.json` | 10 | **6-113** | 3.46-17.75 | **11.29** | **按公式逐位选型**：dtype 指示 / num_warps 指示 / 前向选出的 regime 标志；对应 `REPORT_v1_modsel.md` |
+| `MODEL_REGIME.json` | 10 | 11-91 | 0.00-19.57 | - | regime 标志 + 全交叉项；`simd_load_wide_r1` MAPE **0.00%**（典型过拟合） |
+| `MODEL_REGIME_FINAL.json` | 10 | 109 | 0.00-16.32 | 11.27 | regime 6 标志（`nge256,nlt64,mwlg2,Lgt16,Rgt8,Clt8`） |
+| `MODEL_REGIME_V2.json` | 10 | 27-209 | 3.47-15.30 | **9.91** | regime **14 标志**（`_regime_flags` 实测 14 个），`_n_base=8` |
+| `MODEL_REGIME_V3.json` | 10 | 28-217 | 3.48-15.17 | **9.80** | regime **15 标志**；对应 `REPORT_v3_10crossed.md` 一族 |
+| `MODEL_PRUNED.json` | 10 | 13-97 | 3.40-15.89 | 10.87 | 剪枝到 12-96 项；曲线见 `PRUNE_CURVE.json` |
+| `MODEL_DOMAIN.json` | 10 | 2-11 | - | 18.60（kept）/ 18.27（all） | 带 `exclusion_rule` / `coverage` / `mape_kept`，剔除不适应点后重拟 |
+
+> **这一族是 [`../docs/WHY-PHYSICS-OVER-GREEDY.md`](../docs/WHY-PHYSICS-OVER-GREEDY.md) 的证据来源**：
+> 项数从 6 到 113 按公式任意分化、总体 in-sample MAPE 最好 9.80-11.29%，且 `MODEL_REGIME.json` 里出现 0.00% 的 slot ——
+> 这些都是"在同数据上既选特征又拟合"的过拟合特征。
+
+### 4.5 `max()` 结构线
+
+| 文件 | slot | 项数 | slot MAPE | 总 MAPE | 方法 / 备注 |
+|---|---|---:|---|---:|---|
+| `MODEL_MAXLINEAR.json` | 10 | - | 0.78-17.18 | 11.81 | 线性项 + `max()` 包裹（记 `linear_features`/`linear_coefs`/`max_qty`/`max_coef`） |
+| `MODEL_MAXPLUS.json` | 10 | - | 4.20-37.23 | 20.09 | `max()` 结构搜索（`K` + `branches`） |
+| `MODEL_MAXPLUS2.json` | 10 | - | 0.78-17.35 | 11.68 | 同上修正版 |
+| `MODEL_MAXSTRUCT.json` | 7 | - | - | - | `max()` 结构，显式记录 `mape_max`/`mape_linear`/`a_ns_per_warp`/`warp_dominated`；**证明 W>=16 时发射成本与元素数无关** |
+| `MODEL_PHYSMAX.json` | 10 | - | 0.78-17.35 | 11.68 | 物理式 + `max()` |
+
+### 4.6 统计线里的物理尝试 + 专项（4 个）
+
+| 文件 | slot | 项数 | slot MAPE | 总 MAPE | 方法 / 备注 |
+|---|---|---:|---|---:|---|
+| `MODEL_PHYS.json` | 5 | 7 | 12.74-28.83 | 21.46 | 纯物理式但**不分 rank**（5 slot），第 1 轮物理尝试 |
+| `MODEL_PHYS_SMALL.json` | 10 | 4-9 | 1.85-32.63 | 21.95 | 物理式压缩到 4-9 项；例：`simd_load_wide_r1 = 66.4+0.6032*L+3.619*maxL32+0.0111*n+10.8*spanperN-1.025*eb` |
+| `MODEL_GATHER.json` | 4 | - | - | - | SIMD load gather 专项 |
+| `MODEL_GATHER2.json` | 4 | - | - | - | 同上改进版 |
+
+> **`MODEL_FINAL_V7.json` 不是最终交付**：它由统计贪心选出，`simt_store_r2` 仍有约 26% 误差。
+> 最终交付的是 §5 的 10 条物理公式。
+
+---
+
+## 5. `final/PHYS*.json`：16 个（**最终交付物**）
+
+每个文件结构为 `{<slot>: {n, mape, n_terms, formula, terms:[{name, coef, meaning}], derived, scope, notes, ...}, ...}`。
+方法：**由硬件物理过程直接构造项**（搬运字节、BIU 命令数、同块冲突、warp 发射开销），不做 log/指数/幂次，
+系数用加权最小二乘（权重 1/T）或 NNLS 定出；`max()` 结构的式额外做交替分配 / 坐标下降、多随机起点取最优。
+
+### 5.1 三轮谱系
+
+| 轮次 | 文件 | slot 数 | 说明 |
+|---|---|---:|---|
+| 第 1 轮（`PHYS_*`） | `PHYS_mine.json` | 2 | 最早的手工物理式（wide 式尚无 K 饱和项） |
+| | `PHYS_simd_load_wide_r2.json` / `PHYS_simd_load_gather_r2.json` | 1 / 1 | 第 1 轮 2D |
+| | `PHYS_simd_store.json` / `PHYS_simt_store.json` / `PHYS_simt_load.json` | 2 / 2 / 2 | 第 1 轮 store / SIMT store / SIMT load |
+| 第 2 轮（`PHYS2_*`） | `PHYS2_wide_simtload.json` | 4 | wide_r1/r2 + simt_load_r1/r2 |
+| | `PHYS2_simt_store.json` | 2 | simt_store_r1/r2 |
+| | `PHYS2_gather.json` / `PHYS2_simd_store.json` | 2 / 2 | 已被第 3 轮版本取代 |
+| 第 3 轮（`PHYS3_*`） | `PHYS3_simd_load_wide_r1` / `_wide_r2` / `_gather_r1` / `_gather_r2` / `_store_r1` / `_store_r2` | 各 1 | **最终 6 个 slot 的定稿**，每个文件只装一个 slot |
+
+### 5.2 全部 16 个文件的实测 MAPE / 项数
+
+| 文件 | slot | n | MAPE | 项数 | 5 折 / 留一 |
+|---|---|---:|---:|---:|---:|
+| `PHYS_mine.json` | simd_load_wide_r1 | 32 | 4.11 | 2 | - |
+| | simd_load_gather_r1 | 284 | 20.18 | 7 | - |
+| `PHYS_simd_load_wide_r2.json` | simd_load_wide_r2 | 222 | 13.10 | 8 | - |
+| `PHYS_simd_load_gather_r2.json` | simd_load_gather_r2 | 678 | 13.18 | 8 | - |
+| `PHYS_simd_store.json` | simd_store_r1 / r2 | 291 / 851 | 9.69 / 25.26 | 6 / 5 | - |
+| `PHYS_simt_store.json` | simt_store_r1 / r2 | 962 / 3224 | 18.95 / 25.24 | 8 / 8 | - |
+| `PHYS_simt_load.json` | simt_load_r1 / r2 | 855 / 1666 | 10.22 / 10.79 | 8 / 9 | - |
+| `PHYS2_wide_simtload.json` | simd_load_wide_r1 / r2、simt_load_r1 / r2 | 21 / 120 / 506 / 1211 | **1.73** / 5.79 / **4.95** / **6.34** | 2 / 8 / 7 / 6 | - |
+| `PHYS2_gather.json` | simd_load_gather_r1 / r2 | 136 / 438 | 9.54 / 9.52 | 5 / 8 | - |
+| `PHYS2_simd_store.json` | simd_store_r1 / r2 | 189 / 325 | 5.33 / 8.62 | 5 / 4 | 5.55 / 8.73 |
+| `PHYS2_simt_store.json` | simt_store_r1 / r2 | 962 / 1210 | **6.27** / **9.64** | 7 / 8 | - |
+| `PHYS3_simd_load_wide_r1.json` | simd_load_wide_r1 | 21 | **1.22** | 3 | - |
+| `PHYS3_simd_load_wide_r2.json` | simd_load_wide_r2 | 120 | **4.48** | 7 | - |
+| `PHYS3_simd_load_gather_r1.json` | simd_load_gather_r1 | 136 | **8.70** | 6 | 9.19（留一） |
+| `PHYS3_simd_load_gather_r2.json` | simd_load_gather_r2 | 438 | **8.44** | 7 | 8.70 |
+| `PHYS3_simd_store_r1.json` | simd_store_r1 | 189 | **5.33** | 5 | 5.55 |
+| `PHYS3_simd_store_r2.json` | simd_store_r2 | 325 | **8.12** | 4 | 8.24 |
+
+### 5.3 最终 10 条公式 = 6 + 4
+
+```
+PHYS3_simd_load_wide_r1 + PHYS3_simd_load_wide_r2
++ PHYS3_simd_load_gather_r1 + PHYS3_simd_load_gather_r2
++ PHYS3_simd_store_r1 + PHYS3_simd_store_r2
++ PHYS2_wide_simtload (simt_load_r1 / simt_load_r2)
++ PHYS2_simt_store    (simt_store_r1 / simt_store_r2)
+```
+
+与 [`../README.md`](../README.md) 的总表逐行 MAPE 完全对齐（1.22 / 8.70 / 5.33 / 4.95 / 6.27 / 4.48 / 8.44 / 8.12 / 6.34 / 9.64），
+加权平均 **7.22%**（5118 个保留实测点）。
+
+写出这些文件的脚本（**⚠ 下面这一整组写回脚本都已在脚本清理中删除**，`PHYS*.json` 现在是**冻结交付物**）：
+
+| 文件 | 原写出脚本（**均已删除**） |
 |---|---|
-| `op` | load 5790 / store 6250 |
-| `path` | simt_only 8812 / simd 3228 |
-| `dtype` | float32 4254 / int8 2775 / float16 2729 / int64 2282 |
-| `rank` | 1 → 4584 / 2 → 7456 |
-| `num_warps` | 1:6530、2:594、4:2540、8:594、16:594、32:594、64:594 |
-| `valid` | 1 → 11518 / 0 → 522（new-only 中 1 → 9541 / 0 → 522） |
-| `domain` | rotate 11599 / single_shot 441 |
+| `PHYS3_simd_load_wide_r1.json` | `_p3_w1_write.py`、`_w1.py`、`_fixrate.py`、`_clean3.py` |
+| `PHYS3_simd_load_gather_r1.json` | `_p3_g1_write.py`、`_p3_g1_patch.py`、`_p3_g1_verify.py` |
+| `PHYS3_simd_store_r1/r2.json` | `p3_store_r1_write.py`、`phys3_write3.py`、`write_phys2_store.py` |
+| `PHYS2_wide_simtload.json` | `phys2_final_report.py` |
+| `PHYS2_simt_store.json` | `p2_r2c_write.py`、`p2_final_write.py` |
+| `PHYS2_gather.json` | `p2_writejson.py`、`p2_verify2.py` |
+| 全部 PHYS 文件的项名中文化 | `_ren.py` |
 
-### 3.3 `dataset_unified_v5.csv` 的 59 列含义
-
-所有特征都由 [`stride_feature_reference.py`](../scripts/stride_feature_reference.py) 唯一实现（`dataset_meta.json` 的 `feature_source` 字段也这么记），
-原则是**一律用字节域或纯计数，绝不用元素域 stride**，这样 dtype 宽度以「因子」而非「分支」进入公式。
-
-| 列组 | 列名 | 含义 |
-|---|---|---|
-| **实验条件（11 列）** | `op` | `load` / `store` |
-| | `path` | `simd` / `simt_only`（template 路径已被 `--exclude-template` 排除） |
-| | `dtype`, `element_bytes` | `int8/float16/float32/int64` → 1/2/4/8 |
-| | `num_warps` | warp 数 1..64 |
-| | `rank` | 1（1D）或 2（2D tile） |
-| | `elements` | 本次访问的元素总数 n（1D = block；2D = R×C） |
-| | `inner_stride_bytes` | 内层跨步字节数 ISB = stride × eb |
-| | `source` | 数据来源（见 §3.2） |
-| | `domain` | `rotate`（旋转缓冲循环，主口径）/ `single_shot` |
-| **目标值（4 列）** | `target_ns` | 板上 Event 测得的每次迭代耗时（ns），同一配置多次 pass 取 **min**（竞争只会抬高测量） |
-| | `target_kind` | `rotate_loop_min_event_slope_ns_per_iter` 等口径标记 |
-| | `valid` | 1 = 通过 witness+频率+spread+数值正确性四道门 |
-| | `quality`, `target_spread` | 反复测量的离散度，`spread` 大于 0.2 视为双稳区 |
-| **地址表基本量（8 列）** | `f_elements`, `f_L` | 元素数；distinct 128 B line 数 |
-| | `f_line_elems_max/min` | 单条 128 B line 内最多/最少元素数（line 占用密度上下界） |
-| | `f_line_density` | 每 line 平均元素数 |
-| | `f_span_bytes` | 首字节到末字节的连续字节跨度 |
-| | `f_page_cross`, `f_cross` | 跨 4 KB 页数；跨页标志 |
-| **warp 行为（4 列）** | `f_mean_warp_lines` / `f_min_warp_lines` / `f_max_warp_lines` | 每个 warp 平均/最少/最多触碰的 distinct line 数（warp 内发散度） |
-| | `f_iters_per_thread` | 每线程循环次数（元素多于线程数时 >1） |
-| **热点/冲突（4 列）** | `f_bucket_pairs_2k8` / `f_bucket_worst_2k8` | 2 KB / 8-bucket 粒度：bucket 内命令冲突对数、最拥塞 bucket 的命令数 |
-| | `f_bucket_pairs_32k16` / `f_bucket_worst_32k16` | 同上，32 KB / 16-bucket 大尺度 |
-| **命令与事务（8 列）** | `f_K`, `f_K_stg` | 指令条数（LDG / STG，每 32 lane 一条） |
-| | `f_dup` | 重复请求的 line 数（warp 欠填导致同一 line 被重复要） |
-| | `f_n_cmd_block` | per-element BIU 命令数（SIMD gather 下 = 元素数） |
-| | `f_line_request_size`, `f_line_request_size_cpp4` | 每条 128 B line 发起的请求字节量（真实位宽 / C++ 语义硬编码 4 B 每元素） |
-| | `f_tail_elems` | `max(0, elements-64)` 尾部余量 |
-| | `f_rank` | rank 的数值副本（供拟合使用） |
-| **分段/阈值指示（8 列）** | `f_min_L_32`, `f_max_L_minus_32` | `min(L,32)` 与 `max(0, L-32)`：line 数 32 条前后的两段线性区 |
-| | `f_dupL_minL_128` | `dup × L × min(L,128)`：warp 欠填 × line 数 |
-| | `f_cross_minL_32` | 跨页标志 × `min(L,32)` |
-| | `f_lowW_4_L` | `max(0, 4-W) × L`：低 warp 数惩罚 |
-| | `f_inner_stride_bytes`, `f_row_gap_bytes` | 内层跨步字节、行间空隙字节 |
-| **2D 专有（9 列）** | `f_rows`, `f_cols` | R、C |
-| | `f_row_span_bytes`, `f_row_pitch_bytes` | 一行占的字节跨度、行间距（pitch） |
-| | `f_row_lines`, `f_gap_lines` | 落在行内的 line 数、落在空隙里的 line 数 |
-| | `f_comb_lines`, `f_comb_overlap` | 行列 line 的并集大小、重叠量 |
-| | `f_rows_share_line`, `f_row_segments`, `f_gap_per_line`, `f_row_span_div_gap`, `f_tail_row_elems` | 相邻行是否共享 line、行被切成几段、每 line 空隙、跨度/空隙比、末行余量 |
-
-### 3.4 谁在用这两个最终数据集
-
-| 数据集 | 使用者 | 用途 |
-|---|---|---|
-| `dataset_new_only_v5.csv` | `phys2b_lib.get_slots()`（被 [`phys2_final_report.py`](../scripts/phys2_final_report.py) 调用） | 第 2 轮物理拟合的数据入口 |
-| | [`write_phys2_store.py`](../scripts/write_phys2_store.py)、[`phys3_write3.py`](../scripts/phys3_write3.py)、[`_write_phys_store.py`](../scripts/_write_phys_store.py) | 写 `PHYS2_*` / `PHYS3_*` 公式文件 |
-| | [`p3_verify.py`](../scripts/p3_verify.py)、`phys3_cols.py`、`_p2_head.py`、`_p3_hdr.py`、`_z_hdr.py` | 校验与列清单核对 |
-| `dataset_unified_v5.csv` | [`fit_unified6.py`](../scripts/fit_unified6.py)（→ `final/fit_v5/`） | 全量（含 hist_*）对照拟合 |
-| | `final/fit_newonly/` | 同一脚本在 new-only 上的对照 |
-| | [`summarize_unified6.py`](../scripts/summarize_unified6.py) | 生成 `metrics_summary_unified6.csv` / `worst_cases_unified6.csv` / `FORMULA_SUMMARY.md` |
+> **这些脚本的推导记录仍在**：[`../docs/agent-logs/`](../docs/agent-logs/) 的 11 份 `p3_*.txt`，
+> 以及 git 历史（`git show HEAD:pre-explore/scripts/p3_feat.py`、`git checkout HEAD -- <路径>` 可恢复）。
+> **后果**：报告链仍然是通的（`gen_report_v5.py` / `gen_report_concise.py` 直接读这些 JSON），
+> 但**无法用现存脚本重新生成 `PHYS*_*.json`**。要重跑物理拟合轮次，先从 git 取回对应写回脚本，
+> 或改走 `run_final_pipeline.py` 的贪心路线（产出 `MODEL_FINAL_V7.json`，不是 PHYS 族）。
 
 ---
 
-## 4. 模型结果文件
+## 6. `final/fit_*.json`（11 个）+ 辅助 json（5 个）
 
-### 4.1 `final/MODEL_*.json`（41 个，统计选型链）
+### 6.1 `fit_*.json`：逐轮搜索的中间状态（11 个）
 
-除特别注明外，所有 slot 级模型的方法都是 **加权最小二乘，权重 = 1/T（等价于直接最小化 MAPE）**；
-`MAPE` 列是该 slot 的 in-sample MAPE（%），`项数` 是该项式的项数（不含截距时按原文件计），`n` 是拟合点数。
-`_overall` 是文件里自带的按 n 加权的总 MAPE。
+| 文件 | 大小 | slot 数 | 说明 |
+|---|---:|---:|---|
+| `fit_v9_greedy.json` | 2.7 KB | 5 | 最早一轮贪心 |
+| `fit_v10_exhaustive.json` | 2.5 KB | 5 | 穷举 |
+| `fit_v11_stepwise.json` | 4.1 KB | 5 | 逐步回归 |
+| `fit_v12_big.json` | 4.2 KB | 5 | 放大候选池 |
+| `fit_v13.json` | 898 B | 5 | 收敛轮 |
+| `fit_v14_crossed.json` | 5.2 KB | 5 | 交叉项 |
+| `fit_v15_Rcross.json` | 663 B | 5 | 行数 R 相关交叉 |
+| `fit_v18_indicator.json` | 943 B | 5 | 指示器 |
+| `fit_v19_indicators.json` | 887 B | 5 | 指示器（多组） |
+| `fit_v20_crosscand.json` | 1.4 KB | 5 | 交叉候选 |
+| `fit_v21.json` | 1.5 KB | 5 | 最后一轮统计搜索 |
 
-| 文件 | 结构 | 方法 | 总 MAPE | 数据 / n 摘要 |
-|---|---|---|---:|---|
-| `MODEL_FINAL.json` | 5 slot（不分 rank） | 每特征乘 dtype 指示（eb），全系数非负 | 17.41 | n=136/796/847/2177/2083；5–6 项 |
-| `MODEL_FINAL_V2.json` | 5 slot | 同上 + dtype/num_warps/rank 指示因子 | 7.23 | 181–520 项（严重过参数化） |
-| `MODEL_FINAL_V3.json` | 5 slot | 同上 | 4.07 | 295–1058 项（**项数爆炸，已废弃**） |
-| `MODEL_FINAL_V4.json` | 10 slot（分 rank） | 每 slot ≤10 项 | 11.68 | 32/133/284/432/291/491/855/1086/962/1120 |
-| `MODEL_FINAL_V5.json` | 10 slot | 同 V4（V5 仅重跑确认） | 11.68 | 与 V4 完全相同 |
-| `MODEL_FINAL_V6.json` | 10 slot | 同 V4，数据换成含 hist_* 的更大集 | 14.17 | n 涨到 246/750/943/1762/3416 |
-| `MODEL_FINAL_V7.json` | 10 slot | **`run_final_pipeline.py` 的产物**：贪心前向+后向消除，≤10 项，可选 `max(a*num_warps, linear)` | 16.31 | 由 new-only 拟合；`simd_load_wide_r1` MAPE 0.74、`simt_store_r2` 25.98 |
-| `MODEL_FINAL_10TERM.json` / `MODEL_10TERM_FINAL.json` | 10 slot | 固定 10 项（后者只存 `base`+`coefs`） | 14.79 | — |
-| `MODEL_BESTOF.json` | 10 slot | 逐 slot 取各方案最优（无项数约束） | 无 | `simd_load_wide_r1` 0.57 / `simt_store_r2` 20.95 |
-| `MODEL_BACKELIM10.json` | 10 slot | 后向消除到 11 项 | 15.24 | — |
-| `MODEL_EXHAUST5.json` | 10 slot | 穷举到 6 项 | 16.97 | — |
-| `MODEL_TOPK30.json` | 10 slot | 从 top-30 候选里选 | 无 | 2–11 项 |
-| `MODEL_RANK_SPLIT.json` | 10 slot | 按 rank 分治，11 项 | 13.06 | — |
-| `MODEL_RANKSPLIT_NNLS.json` | 10 slot | **NNLS**（非负最小二乘），31 项 | 无 | — |
-| `MODEL_10CROSSED.json` | 10 slot | 每项为「变量 × 变量」交叉乘积，≤10 项 | 16.57 | — |
-| `MODEL_10CROSSED_DOMAIN.json` | 10 slot | 同上 + domain 过滤 | 15.58 | — |
-| `MODEL_MAXLINEAR.json` | 10 slot | 线性 + `max()` 包裹 | 11.81 | — |
-| `MODEL_MAXPLUS.json` / `MODEL_MAXPLUS2.json` | 10 slot | `max()` 结构搜索（2 = 修正版） | 20.09 / 11.68 | — |
-| `MODEL_MAXSTRUCT.json` | 7 slot | `max()` 结构，显式记录 `mape_max`/`mape_linear`/`a_ns_per_warp`/`warp_dominated` | 无 | 证明 num_warps≥16 时发射成本与元素数无关 |
-| `MODEL_PHYSMAX.json` | 10 slot | 物理式 + `max()` | 11.68 | — |
-| `MODEL_PHYS.json` | 5 slot | 纯物理式（每 slot 7 项） | 21.46 | — |
-| `MODEL_PHYS_SMALL.json` | 10 slot | 物理式压缩到 4–9 项 | 21.95 | 例：`simd_load_wide_r1` = `66.4+0.6032*L+3.619*maxL32+0.0111*n+10.8*spanperN-1.025*eb` |
-| `MODEL_MODSEL.json` | 10 slot | **按公式逐位选型**：dtype 指示 / num_warps 指示 / regime 标志，每式 5–111 项 | 11.29 | `REPORT_v1_modsel.md` 对应模型 |
-| `MODEL_REGIME.json` | 10 slot | regime 标志 + 全交叉项（91 项） | 无 | `simd_load_wide_r1` MAPE 0.0（过拟合） |
-| `MODEL_REGIME_FINAL.json` | 10 slot | regime 6 标志（`nge256,nlt64,mwlg2,Lgt16,Rgt8,Clt8`），109 项 | 11.27 | — |
-| `MODEL_REGIME_V2.json` | 10 slot | regime 14 标志，183 项 | 9.91 | — |
-| `MODEL_REGIME_V3.json` | 10 slot | regime 15 标志，17–216 项 | 9.80 | `REPORT_v3_10crossed.md` 对应模型 |
-| `MODEL_PRUNED.json` | 10 slot | 剪枝到 12–96 项 | 10.87 | `PRUNE_CURVE.json` |
-| `MODEL_COMPACT.json` / `MODEL_COMPACT_12.json` | 5 slot | 每 slot 恰 12 项，权重 1/T，拟合 5686 个 probe-valid 点 | 14.90 | 12-term-per-slot 压缩版 |
-| `MODEL_DELIVER.json` | 5 slot | 交付版：>140 项/式，全部基础特征乘 dtype/num_warps/rank 指示因子 | 9.95 | — |
-| `MODEL_INDICATOR_FULL.json` | 9 slot | 指示器全展开，73 项 | 无 | — |
-| `MODEL_GATHER.json` / `MODEL_GATHER2.json` | 单式 | SIMD load gather 专项 | 11.32 / 5.34 | n=748 |
-| `MODEL_DOMAIN.json` | 10 slot | 带 `exclusion_rule` / `coverage` / `mape_kept`，剔除不适应点后重拟 | 18.60（kept） | 每 slot 有 `n` 与 `n_kept` |
-| `MODEL_V22.json` / `MODEL_V23.json` | 5 slot | 早期整模型（只存 `mape/n/base/n_terms`） | 无 | `simd_load_wide` 7.05 / `simt_load` 4.998 |
+> 这 11 个文件是**搜索轨迹**，不是交付物；它们记录了统计路线从 5 个 slot 走到 10 个 slot、
+> 从纯线性走到交叉项/指示器的过程。四条 `model_v*` 见 §4.1。
 
-> **`MODEL_FINAL_V7.json` 不是最终交付**：它由统计贪心选出，`simt_store_r2` 仍有 25.98% 误差。
-> 最终交付的是 §4.2 的 10 条物理公式。
+### 6.2 辅助 json（5 个）
 
-### 4.2 `final/PHYS*.json`（16 个，物理公式，**最终交付**）
-
-每个文件结构为 `{<slot>: {n, mape, n_terms, formula, terms:[{name, coef, meaning}], ...}, _meta: {...}}`。
-方法：**由硬件物理过程直接构造项（搬运字节、BIU 命令数、同块冲突、warp 发射开销），不做 log/指数/幂次，系数用加权最小二乘（权重 1/T）或 NNLS 定出**；
-`max()` 结构的式额外做交替分配 / 坐标下降、多随机起点取最优。
-
-| 文件 | slot | MAPE | 留一/5 折 | 项数 | 公式（截断） |
-|---|---|---:|---:|---:|---|
-| `PHYS3_simd_load_wide_r1.json` | `simd_load_wide_r1` | **1.22** | — | 3 | `T = a + b*span_bytes - c*max(0, span_bytes - K)`，a=65.1033, b=0.00847947, c=0.00478897, K=1536 |
-| `PHYS3_simd_load_wide_r2.json` | `simd_load_wide_r2` | **4.48** | — | 7 | 分支 A/B 的行粒度 + 元素粒度组合 |
-| `PHYS3_simd_load_gather_r1.json` | `simd_load_gather_r1` | **8.70** | 9.19 | 6 | `T = a + b*n + c*(n*eb) + d*mx64 + e*mx512 + f*sq1024` |
-| `PHYS3_simd_load_gather_r2.json` | `simd_load_gather_r2` | **8.44** | 8.70 | 7 | 块粒度 + 元素粒度 + 拥挤度 |
-| `PHYS3_simd_store_r1.json` | `simd_store_r1` | **5.33** | 5.55 | 5 | `T = a + b*nbytes + c*mx128 + d*S64 + e*S512` |
-| `PHYS3_simd_store_r2.json` | `simd_store_r2` | **8.12** | 8.24 | 4 | `T = a + b*Q4 + c*n*Q4 + d*max(0, n-128)`，Q4 = min(C, 128/ISB) |
-| `PHYS2_wide_simtload.json` | `simd_load_wide_r1/r2`, `simt_load_r1/r2` | 1.73 / 5.79 / **4.95** / **6.34** | — | 2/8/7/6 | `simt_load` 用 `max(a*W, b*W*iters*mwl, c + d*min(mwl,8) + ...)` 三段结构；wide 两式已被 PHYS3 取代 |
-| `PHYS2_simt_store.json` | `simt_store_r1/r2` | **6.27** / **9.64** | 6.32 / 9.69 | 7 / 8 | `simt_store_r1` = `max(2.18151*W, 14.9242+9.19181*iters, 4.77174*L128*[eb=1]+...)` |
-| `PHYS2_gather.json` | `simd_load_gather_r1/r2` | 9.54 / 9.52 | 9.85 / 9.72 | 5 / 8 | 已被 PHYS3 版本取代 |
-| `PHYS2_simd_store.json` | `simd_store_r1/r2` | 5.33 / 8.62 | 5.55 / 8.73 | 5 / 4 | r2 已被 PHYS3 版本取代 |
-| `PHYS_simd_store.json` | `simd_store_r1/r2` | 9.69 / 25.26 | — | 6 / 5 | 第 1 轮（NNLS，部分系数被归零） |
-| `PHYS_simt_store.json` | `simt_store_r1/r2` | 18.95 / 25.24 | — | 8 / 8 | 第 1 轮 SIMT store（第 2 轮降到 6.27 / 9.64） |
-| `PHYS_simt_load.json` | `simt_load_r1/r2` | 10.22 / 10.79 | — | 8 / 9 | 第 1 轮 SIMT load |
-| `PHYS_simd_load_wide_r2.json` | `simd_load_wide_r2` | 13.10 | — | 8 | 第 1 轮 2D（第 3 轮降到 4.48） |
-| `PHYS_simd_load_gather_r2.json` | `simd_load_gather_r2` | 13.18 | — | 8 | 第 1 轮 2D（第 3 轮降到 8.44） |
-| `PHYS_mine.json` | `simd_load_wide_r1`, `simd_load_gather_r1` | 4.11 / 20.18 | — | 2 / 7 | 最早的手工物理式（wide 式尚无 K 饱和项） |
-
-**最终 10 条公式 = `PHYS3_simd_load_wide_r1/r2` + `PHYS3_simd_load_gather_r1/r2` + `PHYS3_simd_store_r1/r2` + `PHYS2_wide_simtload`(simt_load_r1/r2) + `PHYS2_simt_store`(simt_store_r1/r2)**，
-与 [`../README.md`](../README.md) 的总表逐行 MAPE 完全对齐（1.22 / 8.70 / 5.33 / 4.95 / 6.27 / 4.48 / 8.44 / 8.12 / 6.34 / 9.64）。
-
-写出这些文件的脚本：
-
-| 文件 | 写出脚本 |
-|---|---|
-| `PHYS3_simd_load_wide_r1.json` | [`_p3_w1_write.py`](../scripts/_p3_w1_write.py)、[`_w1.py`](../scripts/_w1.py)、[`_fixrate.py`](../scripts/_fixrate.py)、[`_clean3.py`](../scripts/_clean3.py) |
-| `PHYS3_simd_load_gather_r1.json` | [`_p3_g1_write.py`](../scripts/_p3_g1_write.py)、[`_p3_g1_patch.py`](../scripts/_p3_g1_patch.py)、[`_p3_g1_verify.py`](../scripts/_p3_g1_verify.py) |
-| `PHYS3_simd_store_r1/r2.json` | [`p3_store_r1_write.py`](../scripts/p3_store_r1_write.py)、[`phys3_write3.py`](../scripts/phys3_write3.py)、[`write_phys2_store.py`](../scripts/write_phys2_store.py) |
-| `PHYS2_wide_simtload.json` | [`phys2_final_report.py`](../scripts/phys2_final_report.py) |
-| `PHYS2_simt_store.json` | [`p2_r2c_write.py`](../scripts/p2_r2c_write.py)、[`p2_final_write.py`](../scripts/p2_final_write.py) |
-| `PHYS2_gather.json` | [`p2_writejson.py`](../scripts/p2_writejson.py)、[`p2_verify2.py`](../scripts/p2_verify2.py) |
-| 全部 PHYS 文件的项名中文化 | [`_ren.py`](../scripts/_ren.py) |
-
-### 4.3 其他模型文件
-
-| 文件 | 说明 |
-|---|---|
-| `final/model_v15_final.json` | 全 231 特征整模型，5 slot，MAPE 9.50/22.86/16.19/9.95/15.83 |
-| `final/model_v16_backward.json` | 后向消除版（204–223 项） |
-| `final/model_v17_dedup_unc.json` | 特征去重 + 不确定性版（157 项） |
-| `final/model_v9.json` | 最早整模型（4–7 项，MAPE 16.7–34.2） |
-| `final/fit_v5/model_unified6.json` | `version=unified_v1`，`branches` 结构（按 slot 存公式），全量 unified 拟合 |
-| `final/fit_newonly/model_unified6.json` | 同上，new-only 拟合 |
-| `unified_formulas_v1/model_unified6.json` | `formula_count=7`（含 template 两式），数据集 3638 行 |
-| `unified_formulas_v2/model_unified6.json` | `formula_count=5`（`--exclude-template`），数据集 2935 行 |
-| `model_store_v1/model_store_v1.json` | store 专项 v1（744 行数据集） |
-| `model_template_stride_v1/model_template_stride_{load,store}_v1.json` | 模板路径 v1（190 行） |
-| `model_template_stride_v2/model_template_stride_{load,store}_v2.json` | 模板路径 v2（740 行） |
-| `model_v4_simple/model_v4_simple.json`、`model_v4_simple_p25/model_v4_simple.json`、`model_v7_simple/model_v7_simple.json` | 1D load 的历史模型（含 LOBO/LOWO 交叉验证折） |
-| `refit_no_stride1_v1/load/model_v4_simple_refit.json`、`.../model_v7_simple_refit.json`、`.../store/model_store_v1_refit.json` | 丢掉 stride==1 后的重拟版 |
+| 文件 | 大小 | 内容 |
+|---|---:|---|
+| `COMPOSITION.json` | 7.8 KB | 10 个 slot 的数据构成：每个 slot 的 n、shapes 分布、`inner_stride_bytes` 分布、dtypes 分布 |
+| `FEATURE_MEANING.json` | 7.4 KB | 特征中文释义表（`L` = 触及的 128B line 数；`n` = 元素数 = BIU 命令数；`iters` = ceil(n/(32W)) 等） |
+| `DOMAIN_CURVE.json` | 32.8 KB | 各 slot 的 domain 收敛曲线：每条剔除规则下的 `coverage` / `mape` / `n` |
+| `PRUNE_CURVE.json` | 3.0 KB | 剪枝曲线：`per_slot` + `overall`（4 项 34.23% -> 8 项 31.9 -> 16 项 25.14 -> 32 项 17.36 -> **96 项 10.86%**） |
+| `features_dedup.json` | 2.0 KB | 156 个特征的去重后列表（`L, Lf, n, eb, ebL, ebn, nW, iters, minL32, maxL32, minL128, W, lowW, rowgap, cmd, ...`） |
 
 ---
 
-## 5. 报告：`final/REPORT_*.md`
+## 7. `final/REPORT_*.md`：7 个（版本谱系）
 
-| 文件 | 大小 | 版本 | 内容 | 生成脚本 |
-|---|---:|---|---|---|
-| `REPORT_v1_modsel.md` | 85 KB | **版本 1：MODSEL** | 每个公式在**候选池**里逐位选型（dtype 指示、num_warps 指示、regime 标志），项数 6–113，附「换成哪个公式收益多少」的对照 | [`gen_reports.py`](../scripts/gen_reports.py) |
-| `REPORT_v2_regime.md` | 175 KB | **版本 2：REGIME** | 每个式子用**全部 14 个 regime 标志 + 4 个 dtype 指示 + 7 个 num_warps 指示**共 26 个指示变量乘基础项，项数爆炸但 in-sample 最小 | [`gen_reports.py`](../scripts/gen_reports.py) |
-| `REPORT_v3_10crossed.md` | 20 KB | **版本 3：10 CROSSED** | 每式 ≤10 项，且每项是「变量 × 变量」的乘积，用贪心挑选 | [`gen_reports.py`](../scripts/gen_reports.py) |
-| `REPORT_v4_physics.md` | 35 KB | **版本 4：PHYSICS** | 每个式由物理过程重建（搬运字节数、BIU 命令数、同类型冲突、warp 发射开销）；不用 max/min 乘积和复杂项，不用 log/指数/幂次；加权最小二乘（权重 1/T） | [`gen_report_phys.py`](../scripts/gen_report_phys.py)（合并全部 `PHYS_*.json`） |
-| `REPORT_v5_physics_scope.md` | 57 KB | **版本 5：PHYSICS + 真实算子范围** | 在 v4 基础上把每个式**限定在真实 AI 算子的取值范围内**；剔除「真实算子不会用」或「不稳定」的点 | [`gen_report_v5.py`](../scripts/gen_report_v5.py)（按 `PHYS3 > PHYS2 > PHYS` 优先级合并 + `COMPOSITION.json`） |
-| `REPORT_v5_physics_scope_concise_des.md` | 35 KB | **版本 5（精简中文版）：一页读懂模型** | 每个式的物理直构（含搬运字节、BIU、边界接口单元的乘积）、派生量定义、公式与各项物理意义、误差；只保留最终留存集，不讲剔除故事 | [`gen_report_concise.py`](../scripts/gen_report_concise.py) |
-| `REPORT_PHYS2_simt_store.md` | 4.7 KB | **第 2 轮：simt_store_r1/r2 单独一轮回归** | 数据 `results/final/dataset_new_only_v5.csv`（valid=1），结果 `results/final/PHYS2_simt_store.json` | 第 2 轮 p2_r2c 系列脚本（脚本里没有硬编码该文件名，由子代理直接写出） |
+| 文件 | 大小 | 行数 | 版本 | 内容 | 生成脚本 |
+|---|---:|---:|---|---|---|
+| `REPORT_v1_modsel.md` | 85 KB | 1751 | **v1：MODSEL（逐位选型）** | 每个公式在候选池里逐位选型（dtype 指示、num_warps 指示、regime 标志），项数 6-113，附"换成哪个公式收益多少"的对照 | `gen_reports.py`（**已删除**，见 §5 脚注） |
+| `REPORT_v2_regime.md` | 175 KB | 3525 | **v2：REGIME（全指示器展开）** | 每式用全部 14 个 regime 标志 + 4 个 dtype 指示 + 7 个 num_warps 指示，项数爆炸但 in-sample 最小 | `gen_reports.py`（**已删除**，见 §5 脚注） |
+| `REPORT_v3_10crossed.md` | 20 KB | 529 | **v3：10 CROSSED** | 每式 <=10 项，且每项是"变量 x 变量"的乘积，用贪心挑选 | `gen_reports.py`（**已删除**，见 §5 脚注） |
+| `REPORT_v4_physics.md` | 35 KB | 581 | **v4：PHYSICS（第 1 轮物理重构）** | 每个式由物理过程重建；不用 log/指数/幂次；加权最小二乘（1/T）。**表里带"贪心对照"列** | [`gen_report_phys.py`](../scripts/gen_report_phys.py)（合并全部 `PHYS_*.json`） |
+| `REPORT_v5_physics_scope.md` | 57 KB | 737 | **v5：PHYSICS + 真实算子范围（详细版）** | 在 v4 基础上把每个式限定在真实 AI 算子取值范围内；逐条给出剔除理由 + 保留率 + 误差 | [`gen_report_v5.py`](../scripts/gen_report_v5.py)（按 `PHYS3 > PHYS2 > PHYS` 合并 + `COMPOSITION.json`） |
+| `REPORT_v5_physics_scope_concise_des.md` | 35 KB | 553 | **v5（精简中文版）：一页读懂模型** | 每个式的物理直构、派生量定义、公式与各项物理意义、误差；只保留最终留存集 | [`gen_report_concise.py`](../scripts/gen_report_concise.py) |
+| `REPORT_PHYS2_simt_store.md` | 4.7 KB | 87 | **第 2 轮：simt_store 专项** | simt_store_r1/r2 单独一轮回归；含"第一轮 15 种跳变惩罚全被压到 0"与 `n*min(R,32)` 的关键发现 | 第 2 轮 p2_r2c 系列脚本 |
 
-报告与 README 的关系：`pre-explore/README.md`（10 条公式总表 + PASS/FAIL 判定）是这些报告的**摘要**，其数据源是 `pre-explore/README_data.json`，由 [`_readme.py`](../scripts/_readme.py)/[`_readme2.py`](../scripts/_readme2.py)/[`_readme3.py`](../scripts/_readme3.py)/[`_readme4.py`](../scripts/_readme4.py) 生成，正文里引用 `REPORT_v5_physics_scope_concise_des.md`。
+**版本谱系一句话**：
 
-另有 `unified_formulas_v1/FORMULA_SUMMARY.md`(28 KB) 与 `unified_formulas_v2/FORMULA_SUMMARY.md`(23 KB)，是 [`summarize_unified6.py`](../scripts/summarize_unified6.py) 生成的**统一 6 式**逐公式说明（含每个特征的中文释义、量纲、物理含义），是理解 `f_*` 特征最直接的文档。
+```
+v1 MODSEL（逐位选型，6-113 项）
+  -> v2 REGIME（全指示器展开，项数爆炸但 in-sample 最小）
+  -> v3 10 CROSSED（<=10 项交叉乘积）
+  -> v4 PHYSICS（第 1 轮物理重构，附贪心对照）
+  -> v5 PHYSICS + 真实算子范围（最终：10 式全部 <10%，加权 7.22%）
+     + v5 精简中文版（一页读懂）
+     + PHYS2_simt_store 专项（第 2 轮，含跳变自变量发现）
+```
 
----
-
-## 6. 血缘速查表
-
-| 产物 | 由谁生成 | 由谁消费 |
-|---|---|---|
-| `<campaign>/raw/*.json` | 板上探针 `scripts/*_probe.py`（`board_*.sh` 驱动） | `build_*.py` |
-| `<campaign>/dataset.csv`、`dataset_2d.csv` | `build_dtype_dataset.py` / `build_2d_dataset.py` | `build_unified_dataset.py`、各 `fit_*.py` |
-| `model_store_v1/dataset.csv` | `build_store_dataset.py` | `fit_strided_store_v1.py`（→ `hist_store` 进 unified） |
-| `model_template_stride_v2/dataset.csv` | `build_template_stride_dataset.py` | `fit_template_stride_v2.py`（**不进最终 10 式**，被 `--exclude-template` 排除） |
-| `_build/build_c{1,2}/dataset_2d.csv` | `run_final_pipeline.py` → `build_2d_dataset.py` | `build_unified_dataset.py` |
-| **`final/dataset_unified_v5.csv`** | `build_unified_dataset.py` | `fit_unified6.py`（→ `final/fit_v5/`） |
-| **`final/dataset_new_only_v5.csv`** | `run_final_pipeline.py`（从 unified_v5 过滤 source） | 全部物理拟合脚本（`phys2b_lib` / `phys3_write3.py` / `write_phys2_store.py` / `p3_verify.py` …） |
-| `final/MODEL_*.json` | `fit_v9..v21`、`fit_final_v4/v5/v6`、`fit_10crossed*`、`fit_regime*`、`fit_max*`、`fit_modsel`、`fit_prune`、`run_final_pipeline.py` | `gen_reports.py` / `gen_report_phys.py` / `gen_report_v5.py` |
-| **`final/PHYS3_*.json` / `final/PHYS2_*.json`** | `_p3_w1_write.py` / `_p3_g1_write.py` / `p3_store_r1_write.py` / `phys2_final_report.py` / `p2_r2c_write.py` | `gen_report_v5.py`（按 PHYS3>PHYS2>PHYS 合并） |
-| `final/REPORT_v*.md` | `gen_reports.py` / `gen_report_phys.py` / `gen_report_v5.py` / `gen_report_concise.py` | `_readme*.py` → `pre-explore/README.md` + `README_data.json` |
+**报告与 README 的关系**：`pre-explore/README.md`（10 条公式总表 + PASS/FAIL 判定）是这些报告的**摘要**，
+其数据源是 `pre-explore/README_data.json`，由 `_readme.py` / `_readme2.py` / 
+`_readme3.py` / [`_readme4.py`](../scripts/_readme4.py) 生成（`_readme.py` / `_readme2.py` / `_readme3.py` 是它的三个早期版本，**均已删除**，推导记录见 [`../docs/agent-logs/`](../docs/agent-logs/) 与 git 历史），正文引用 `REPORT_v5_physics_scope_concise_des.md`。
+因此改报告后应重跑 `_readme4.py`，而不是手改 `pre-explore/README.md`。
 
 ---
 
-## 7. 目录里没有的东西（已删除，不要再找）
+## 8. 本提交已没有的东西（见提交 1 `5539c4831`）
+
+| 已删除 | 数量 | 内容 | 为什么能删 |
+|---|---:|---|---|
+| 37 个 campaign / 中间产物目录 | 1434 文件 | `dtype_calibration_v1`、`v2_rotate512`、`v4_final`、`v4raw`、`v5raw`、`v8raw`、`v9raw`、`expand2d`、`expand2d_b`、`dir23`、`wide12`、`board_v2_*`、`model_store_v1`、`model_template_stride_v1/v2`、`model_v2/v3_numwarps/v4_numwarps/v4_simple/v4_simple_p25/v7_simple`、`refit_no_stride1_v1`、`unified_formulas_v1/v2`、`_build`、`_tmpbuild`、`block*_s3`、`store_camodel_b*` | 全部已被特征化成 `final/dataset_*.csv`；原始证据可从提交 1 取回 |
+| `results/final/raw/` | 231 文件 / 29 MB | v4/v5/v8/v9 四代原始 JSON 的合并视图（文件名带 `vN__` 前缀） | 同上；**这是能用 git 追溯的原始数据** |
+| `results/final/_*` | 44 文件 | `_p2c_*`、`_p3_*`、`_simt_*`、`_phys3_*`、`_greedy_*` 等拟合中间状态 | 推导轨迹在提交 1 与 [`../docs/agent-logs/`](../docs/agent-logs/) 里都有 |
+| `results/final/fit_v5/`、`fit_newonly/` | 6 文件 | 统一 6 式在全量 / new-only 上的对照产物 | 结论已在 §4/§7 记录 |
+
+**脚本在提交 2 里一个都没删**：`pre-explore/scripts/` 当时共 623 个文件（顶层 604 = 96 个 `.sh` + 507 个 `.py` + `INDEX.md`；`camodel/` 子目录 19 个 = 13 `.sh` + 6 `.py`）。
+
+> **后续更新（脚本清理，提交 2 之后）**：又做了一轮「只保留能直接跑出全量实测数据的必要脚本」的清理，
+> 删掉 **518 个**子代理推导的中间产物 —— `_p2_*`/`p2_*` 154、`_p3_*`/`p3_*` 75、一次性 `_*.py` 66、
+> `phys_*` 53、`phys3_*` 26、实验性 `fit_*` 33、一次性诊断 `.sh` 57；
+> 并从 git **恢复了被依赖闭包误删的** `board_env.sh` / `board_env_latest.sh`（所有板端调用的环境包装器）。
+> 现存 **106 个脚本**（顶层 49 `.py` + 47 `.sh`，`camodel/` 3 `.py` + 7 `.sh`）。
+> 索引见 [`../scripts/INDEX.md`](../scripts/INDEX.md)（含完整复现调用链与「测量批次 campaign」术语表）；
+> 被删脚本的推导记录见 [`../docs/agent-logs/`](../docs/agent-logs/)（11 份 `p3_*.txt`）与 git 历史。
+
+另外，目录里从来没有（也不要再找）：
 
 - `.npubin` 编译产物（约 17.7 MB）
 - `.pkl` / `.npy` 特征缓存（约 8.3 MB）
 - `.pyc` / `__pycache__`
 - 嵌套的 `third_party/` 副本
 
-另外：`results/final/` 里 `_` 开头的 44 个文件（`_p2c_*`、`_p3_*`、`_simt_*`、`_phys3_*`）是子代理推导过程的中间状态，**不是交付物**，但保留了完整可复现的搜索轨迹；
-推导过程记录另见 [`../docs/agent-logs/`](../docs/agent-logs/)（12 个 `p3_*.txt`）。
+---
+
+## 9. 血缘速查表
+
+| 产物 | 由谁生成 | 由谁消费 | 本提交是否还在 |
+|---|---|---|---|
+| `<campaign>/raw/*.json` | 板上探针 `scripts/*_probe.py`（`board_*.sh` 驱动） | `build_*.py` | **否（提交 1）** |
+| `<campaign>/dataset.csv`、`dataset_2d.csv` | `build_dtype_dataset.py` / `build_2d_dataset.py` | `build_unified_dataset.py`、各 `fit_*.py` | **否（提交 1）** |
+| `model_store_v1/dataset.csv` | `build_store_dataset.py` | `fit_strided_store_v1.py`（**已删除**）（-> `hist_store` 进 unified） | **否（提交 1）** |
+| `model_template_stride_v2/dataset.csv` | `build_template_stride_dataset.py` | `fit_template_stride_v2.py`（**已删除**；**不进最终 10 式**，被 `--exclude-template` 排除） | **否（提交 1）** |
+| `_build/build_c{1,2}/dataset_2d.csv` | `run_final_pipeline.py` -> `build_2d_dataset.py` | `build_unified_dataset.py` | **否（提交 1）** |
+| `final/dataset_unified_v5.csv` | `build_unified_dataset.py` | `fit_unified6.py`（**已删除**）、跨口径对照 | **是** |
+| `final/dataset_new_only_v5.csv` | `run_final_pipeline.py`（从 unified_v5 过滤 source） | **全部物理拟合脚本**（`phys2b_lib` / `phys3_write3.py` / `write_phys2_store.py` / `p3_verify.py` …，**这一族均已删除**，见 §5 脚注） | **是** |
+| `final/MODEL_*.json` | `fit_v9..v21`、`fit_final_v4/v5/v6/v7`、`fit_10crossed*`、`fit_regime*`、`fit_max*`、`fit_modsel`、`fit_prune`、`run_final_pipeline.py`（**除 `fit_v9.py` / `fit_v9_pool.py` / `fit_v11_stepwise.py` / `run_final_pipeline.py` 外均已删除**） | `gen_reports.py`（**已删除**） / `gen_report_phys.py` / `gen_report_v5.py` | **是** |
+| `final/PHYS3_*.json` / `final/PHYS2_*.json` | `_p3_w1_write.py` / `_p3_g1_write.py` / `p3_store_r1_write.py` / `phys2_final_report.py` / `p2_r2c_write.py`（**均已删除**，见 §5 脚注） | `gen_report_v5.py`（按 PHYS3 > PHYS2 > PHYS 合并） | **是** |
+| `final/REPORT_v*.md` | `gen_reports.py`（**已删除**） / `gen_report_phys.py` / `gen_report_v5.py` / `gen_report_concise.py` | `_readme4.py` -> `pre-explore/README.md` + `README_data.json`（`_readme.py`/`_readme2.py`/`_readme3.py` **已删除**） | **是** |
+
+---
+
+## 10. 想复现全流程怎么办
+
+| 你的目标 | 用哪个提交 | 起步命令 |
+|---|---|---|
+| 从板上 raw JSON 重跑特征化 + 拟合 + 报告 | **提交 1 `5539c4831`** | `git checkout 5539c4831` 后照 [`../../README.md`](../../README.md) 第二~六节做 |
+| 只想用最终数据集重拟 / 校验公式 | **提交 2（本提交）** | 直接用 `final/dataset_new_only_v5.csv`（valid=1 的 9541 行）+ [`../scripts/fit_v9.py`](../scripts/fit_v9.py) 的 `load()` / `mape()` |
+| 只想看结论 | 任意提交 | [`../README.md`](../README.md)（10 式总表）+ [`final/REPORT_v5_physics_scope_concise_des.md`](final/REPORT_v5_physics_scope_concise_des.md) |
+| 想知道为什么不用贪心 | 任意提交 | [`../docs/WHY-PHYSICS-OVER-GREEDY.md`](../docs/WHY-PHYSICS-OVER-GREEDY.md) |
+
+取回提交 1 的某个目录示例：
+
+```bash
+# 只取回 final/raw/ 的 231 个原始 JSON（29 MB）
+git checkout 5539c4831 -- third_party/ascend/costmodel/profiles/microbench/data_provider/
+                              strided_ldst/pre-explore/results/final/raw/
+# 或者不落到工作区，直接看：
+git show 5539c4831:third_party/.../strided_ldst/pre-explore/results/final/raw/v5__load_simd_float32_W1_fix1.json
+```
+
+
