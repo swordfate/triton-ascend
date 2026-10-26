@@ -107,6 +107,26 @@
         "throughput_vector_instructions_per_system_cycle": 0.01801930259,
         "startup_system_cycles": 167.624347826088,
         "free_work_units": 0
+      },
+      "srem": {
+        "description": "PR2502 calibrated effective SIMD srem throughput.",
+        "throughput_measurement": "simd.srem.throughput"
+      },
+      "urem": {
+        "description": "PR2502 calibrated effective SIMD urem throughput.",
+        "throughput_measurement": "simd.urem.throughput"
+      },
+      "div": {
+        "throughput_measurement": "simd.f32.div.throughput",
+        "description": "PR2502 calibrated effective SIMD div throughput."
+      },
+      "exp": {
+        "throughput_measurement": "simd.f32.exp.throughput",
+        "description": "PR2502 calibrated effective SIMD exp throughput."
+      },
+      "log": {
+        "throughput_measurement": "simd.f32.log.throughput",
+        "description": "PR2502 calibrated effective SIMD log throughput."
       }
     },
     "memory": {
@@ -669,6 +689,66 @@
         "startup_system_cycles": 133.173278,
         "free_work_units": 128,
         "includes_local_scope_handoff": true
+      },
+      "srem": {
+        "description": "PR2502 calibrated effective SIMT srem throughput per active warp count.",
+        "throughput_measurement": "simt.srem.throughput",
+        "throughput_measurements": {
+          "1": "simt.srem.throughput.warps_1",
+          "2": "simt.srem.throughput.warps_2",
+          "4": "simt.srem.throughput.warps_4",
+          "8": "simt.srem.throughput.warps_8",
+          "16": "simt.srem.throughput.warps_16",
+          "32": "simt.srem.throughput.warps_32"
+        }
+      },
+      "urem": {
+        "description": "PR2502 calibrated effective SIMT urem throughput per active warp count.",
+        "throughput_measurement": "simt.urem.throughput",
+        "throughput_measurements": {
+          "1": "simt.urem.throughput.warps_1",
+          "2": "simt.urem.throughput.warps_2",
+          "4": "simt.urem.throughput.warps_4",
+          "8": "simt.urem.throughput.warps_8",
+          "16": "simt.urem.throughput.warps_16",
+          "32": "simt.urem.throughput.warps_32"
+        }
+      },
+      "div": {
+        "throughput_measurement": "simt.f32.div.throughput",
+        "description": "PR2502 calibrated effective SIMT div throughput per active warp count.",
+        "throughput_measurements": {
+          "1": "simt.f32.div.throughput.warps_1",
+          "2": "simt.f32.div.throughput.warps_2",
+          "4": "simt.f32.div.throughput.warps_4",
+          "8": "simt.f32.div.throughput.warps_8",
+          "16": "simt.f32.div.throughput.warps_16",
+          "32": "simt.f32.div.throughput.warps_32"
+        }
+      },
+      "exp": {
+        "throughput_measurement": "simt.f32.exp.throughput",
+        "description": "PR2502 calibrated effective SIMT exp throughput per active warp count.",
+        "throughput_measurements": {
+          "1": "simt.f32.exp.throughput.warps_1",
+          "2": "simt.f32.exp.throughput.warps_2",
+          "4": "simt.f32.exp.throughput.warps_4",
+          "8": "simt.f32.exp.throughput.warps_8",
+          "16": "simt.f32.exp.throughput.warps_16",
+          "32": "simt.f32.exp.throughput.warps_32"
+        }
+      },
+      "log": {
+        "throughput_measurement": "simt.f32.log.throughput",
+        "description": "PR2502 calibrated effective SIMT log throughput per active warp count.",
+        "throughput_measurements": {
+          "1": "simt.f32.log.throughput.warps_1",
+          "2": "simt.f32.log.throughput.warps_2",
+          "4": "simt.f32.log.throughput.warps_4",
+          "8": "simt.f32.log.throughput.warps_8",
+          "16": "simt.f32.log.throughput.warps_16",
+          "32": "simt.f32.log.throughput.warps_32"
+        }
       }
     },
     "dot": {

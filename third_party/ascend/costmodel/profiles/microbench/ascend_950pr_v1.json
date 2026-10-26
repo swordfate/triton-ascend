@@ -106,14 +106,14 @@
       "confidence": "high"
     },
     "simd.f32.div.throughput": {
-      "description": "Effective source-level FP32 SIMD divide throughput on one AIV.",
-      "value": 0.471222306,
+      "description": "PR2502 effective SIMD div throughput on one AIV (64 fp32 lanes per vector instruction).",
+      "value": 0.8244375,
       "unit": "vector_instruction/system_cycle",
       "cycle_domain": "SYS_CNT",
       "scope": "single_aiv_runtime_loop_ilp4_or_more_effective_source_vdiv",
       "source_kind": "isolated_microbenchmark",
-      "source": "data_provider/950pr_operation_rates_fresh_20260913.csv; data_provider/950pr_operation_rates_fresh_20260913_ir_audit.log",
-      "confidence": "high"
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
+      "confidence": "medium"
     },
     "simd.f32.max.throughput": {
       "description": "Effective source-level FP32 SIMD maximum throughput on one AIV.",
@@ -136,23 +136,23 @@
       "confidence": "high"
     },
     "simd.f32.exp.throughput": {
-      "description": "Effective source-level FP32 SIMD exponential throughput on one AIV; the intrinsic has a large fixed body so only the compile-time-specialized single-operation slope is claimed.",
-      "value": 0.473372781,
+      "description": "PR2502 effective SIMD exp throughput on one AIV (64 fp32 lanes per vector instruction).",
+      "value": 0.825234375,
       "unit": "vector_instruction/system_cycle",
       "cycle_domain": "SYS_CNT",
       "scope": "single_aiv_special_function_source_operation",
       "source_kind": "isolated_microbenchmark",
-      "source": "data_provider/950pr_operation_rates_fresh_20260913.csv; data_provider/950pr_operation_rates_fresh_20260913_ir_audit.log",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
       "confidence": "medium"
     },
     "simd.f32.log.throughput": {
-      "description": "Effective source-level FP32 SIMD logarithm throughput on one AIV; the intrinsic has a large fixed body so only the compile-time-specialized single-operation slope is claimed.",
-      "value": 0.41025641,
+      "description": "PR2502 effective SIMD log throughput on one AIV (64 fp32 lanes per vector instruction).",
+      "value": 0.825546875,
       "unit": "vector_instruction/system_cycle",
       "cycle_domain": "SYS_CNT",
       "scope": "single_aiv_special_function_source_operation",
       "source_kind": "isolated_microbenchmark",
-      "source": "data_provider/950pr_operation_rates_fresh_20260913.csv; data_provider/950pr_operation_rates_fresh_20260913_ir_audit.log",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
       "confidence": "medium"
     },
     "simd.predicate.select.throughput": {
@@ -246,14 +246,14 @@
       "confidence": "high"
     },
     "simt.f32.div.throughput": {
-      "description": "Effective source-level FP32 SIMT scalar-divide throughput on one AIV.",
-      "value": 52.78359018,
+      "description": "PR2502 effective FP32 SIMT div throughput per active warp count.",
+      "value": 52.781,
       "unit": "scalar_op/system_cycle",
       "cycle_domain": "SYS_CNT",
       "scope": "single_aiv_runtime_loop_ilp8_32_launched_warps_effective_source_div",
       "source_kind": "isolated_microbenchmark",
-      "source": "data_provider/950pr_operation_rates_fresh_20260913.csv; data_provider/950pr_operation_rates_fresh_20260913_ir_audit.log",
-      "confidence": "high"
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
+      "confidence": "medium"
     },
     "simt.f32.max.throughput": {
       "description": "Effective source-level FP32 SIMT scalar-maximum throughput on one AIV.",
@@ -276,23 +276,23 @@
       "confidence": "high"
     },
     "simt.f32.exp.throughput": {
-      "description": "Effective source-level FP32 SIMT exponential throughput on one AIV.",
-      "value": 64.050039093,
+      "description": "PR2502 effective FP32 SIMT exp throughput per active warp count.",
+      "value": 57.383,
       "unit": "scalar_op/system_cycle",
       "cycle_domain": "SYS_CNT",
       "scope": "single_aiv_special_function_source_operation",
       "source_kind": "isolated_microbenchmark",
-      "source": "data_provider/950pr_operation_rates_fresh_20260913.csv; data_provider/950pr_operation_rates_fresh_20260913_ir_audit.log",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
       "confidence": "medium"
     },
     "simt.f32.log.throughput": {
-      "description": "Effective source-level FP32 SIMT logarithm throughput on one AIV.",
-      "value": 19.218768328,
+      "description": "PR2502 effective FP32 SIMT log throughput per active warp count.",
+      "value": 58.371,
       "unit": "scalar_op/system_cycle",
       "cycle_domain": "SYS_CNT",
       "scope": "single_aiv_special_function_source_operation",
       "source_kind": "isolated_microbenchmark",
-      "source": "data_provider/950pr_operation_rates_fresh_20260913.csv; data_provider/950pr_operation_rates_fresh_20260913_ir_audit.log",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
       "confidence": "medium"
     },
     "simt.predicate.select.throughput": {
@@ -746,63 +746,63 @@
       "confidence": "high"
     },
     "simt.f32.div.throughput.warps_1": {
-      "description": "Measured aggregate SIMT source-operation throughput at the stated launched warp count.",
-      "value": 7.968484023,
+      "description": "PR2502 SIMT div throughput at 1 active warps.",
+      "value": 7.966,
       "unit": "scalar_op/system_cycle",
       "cycle_domain": "SYS_CNT",
       "scope": "single_aiv_1_warps_8_independent_chains_per_thread",
       "source_kind": "isolated_microbenchmark",
-      "source": "data_provider/950pr_simt_operation_warp_curve_20260913.csv; data_provider/950pr_simt_operation_warp_curve_20260913_ir_audit.log",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
       "confidence": "high"
     },
     "simt.f32.div.throughput.warps_2": {
-      "description": "Measured aggregate SIMT source-operation throughput at the stated launched warp count.",
-      "value": 15.634960321,
+      "description": "PR2502 SIMT div throughput at 2 active warps.",
+      "value": 15.929,
       "unit": "scalar_op/system_cycle",
       "cycle_domain": "SYS_CNT",
       "scope": "single_aiv_2_warps_8_independent_chains_per_thread",
       "source_kind": "isolated_microbenchmark",
-      "source": "data_provider/950pr_simt_operation_warp_curve_20260913.csv; data_provider/950pr_simt_operation_warp_curve_20260913_ir_audit.log",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
       "confidence": "high"
     },
     "simt.f32.div.throughput.warps_4": {
-      "description": "Measured aggregate SIMT source-operation throughput at the stated launched warp count.",
-      "value": 30.155674251,
+      "description": "PR2502 SIMT div throughput at 4 active warps.",
+      "value": 31.863,
       "unit": "scalar_op/system_cycle",
       "cycle_domain": "SYS_CNT",
       "scope": "single_aiv_4_warps_8_independent_chains_per_thread",
       "source_kind": "isolated_microbenchmark",
-      "source": "data_provider/950pr_simt_operation_warp_curve_20260913.csv; data_provider/950pr_simt_operation_warp_curve_20260913_ir_audit.log",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
       "confidence": "high"
     },
     "simt.f32.div.throughput.warps_8": {
-      "description": "Measured aggregate SIMT source-operation throughput at the stated launched warp count.",
-      "value": 52.774324054,
+      "description": "PR2502 SIMT div throughput at 8 active warps.",
+      "value": 52.763,
       "unit": "scalar_op/system_cycle",
       "cycle_domain": "SYS_CNT",
       "scope": "single_aiv_8_warps_8_independent_chains_per_thread",
       "source_kind": "isolated_microbenchmark",
-      "source": "data_provider/950pr_simt_operation_warp_curve_20260913.csv; data_provider/950pr_simt_operation_warp_curve_20260913_ir_audit.log",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
       "confidence": "high"
     },
     "simt.f32.div.throughput.warps_16": {
-      "description": "Measured aggregate SIMT source-operation throughput at the stated launched warp count.",
-      "value": 52.783292593,
+      "description": "PR2502 SIMT div throughput at 16 active warps.",
+      "value": 52.761,
       "unit": "scalar_op/system_cycle",
       "cycle_domain": "SYS_CNT",
       "scope": "single_aiv_16_warps_8_independent_chains_per_thread",
       "source_kind": "isolated_microbenchmark",
-      "source": "data_provider/950pr_simt_operation_warp_curve_20260913.csv; data_provider/950pr_simt_operation_warp_curve_20260913_ir_audit.log",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
       "confidence": "high"
     },
     "simt.f32.div.throughput.warps_32": {
-      "description": "Measured aggregate SIMT source-operation throughput at the stated launched warp count.",
-      "value": 52.781549653,
+      "description": "PR2502 SIMT div throughput at 32 active warps.",
+      "value": 52.781,
       "unit": "scalar_op/system_cycle",
       "cycle_domain": "SYS_CNT",
       "scope": "single_aiv_32_warps_8_independent_chains_per_thread",
       "source_kind": "isolated_microbenchmark",
-      "source": "data_provider/950pr_simt_operation_warp_curve_20260913.csv; data_provider/950pr_simt_operation_warp_curve_20260913_ir_audit.log",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
       "confidence": "high"
     },
     "simt.f32.max.throughput.warps_1": {
@@ -926,123 +926,123 @@
       "confidence": "high"
     },
     "simt.f32.exp.throughput.warps_1": {
-      "description": "Measured aggregate SIMT source-operation throughput at the stated launched warp count.",
-      "value": 25.6,
+      "description": "PR2502 SIMT exp throughput at 1 active warps.",
+      "value": 8.193,
       "unit": "scalar_op/system_cycle",
       "cycle_domain": "SYS_CNT",
       "scope": "single_aiv_1_warps_8_independent_chains_per_thread",
       "source_kind": "isolated_microbenchmark",
-      "source": "data_provider/950pr_simt_operation_warp_curve_20260913.csv; data_provider/950pr_simt_operation_warp_curve_20260913_ir_audit.log",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
       "confidence": "high"
     },
     "simt.f32.exp.throughput.warps_2": {
-      "description": "Measured aggregate SIMT source-operation throughput at the stated launched warp count.",
-      "value": 47.85046729,
+      "description": "PR2502 SIMT exp throughput at 2 active warps.",
+      "value": 16.239,
       "unit": "scalar_op/system_cycle",
       "cycle_domain": "SYS_CNT",
       "scope": "single_aiv_2_warps_8_independent_chains_per_thread",
       "source_kind": "isolated_microbenchmark",
-      "source": "data_provider/950pr_simt_operation_warp_curve_20260913.csv; data_provider/950pr_simt_operation_warp_curve_20260913_ir_audit.log",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
       "confidence": "high"
     },
     "simt.f32.exp.throughput.warps_4": {
-      "description": "Measured aggregate SIMT source-operation throughput at the stated launched warp count.",
-      "value": 86.779661017,
+      "description": "PR2502 SIMT exp throughput at 4 active warps.",
+      "value": 32.499,
       "unit": "scalar_op/system_cycle",
       "cycle_domain": "SYS_CNT",
       "scope": "single_aiv_4_warps_8_independent_chains_per_thread",
       "source_kind": "isolated_microbenchmark",
-      "source": "data_provider/950pr_simt_operation_warp_curve_20260913.csv; data_provider/950pr_simt_operation_warp_curve_20260913_ir_audit.log",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
       "confidence": "high"
     },
     "simt.f32.exp.throughput.warps_8": {
-      "description": "Measured aggregate SIMT source-operation throughput at the stated launched warp count.",
-      "value": 56.186556927,
+      "description": "PR2502 SIMT exp throughput at 8 active warps.",
+      "value": 53.372,
       "unit": "scalar_op/system_cycle",
       "cycle_domain": "SYS_CNT",
       "scope": "single_aiv_8_warps_8_independent_chains_per_thread",
       "source_kind": "isolated_microbenchmark",
-      "source": "data_provider/950pr_simt_operation_warp_curve_20260913.csv; data_provider/950pr_simt_operation_warp_curve_20260913_ir_audit.log",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
       "confidence": "high"
     },
     "simt.f32.exp.throughput.warps_16": {
-      "description": "Measured aggregate SIMT source-operation throughput at the stated launched warp count.",
-      "value": 57.206703911,
+      "description": "PR2502 SIMT exp throughput at 16 active warps.",
+      "value": 55.942,
       "unit": "scalar_op/system_cycle",
       "cycle_domain": "SYS_CNT",
       "scope": "single_aiv_16_warps_8_independent_chains_per_thread",
       "source_kind": "isolated_microbenchmark",
-      "source": "data_provider/950pr_simt_operation_warp_curve_20260913.csv; data_provider/950pr_simt_operation_warp_curve_20260913_ir_audit.log",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
       "confidence": "high"
     },
     "simt.f32.exp.throughput.warps_32": {
-      "description": "Measured aggregate SIMT source-operation throughput at the stated launched warp count.",
-      "value": 64.150352388,
+      "description": "PR2502 SIMT exp throughput at 32 active warps.",
+      "value": 57.383,
       "unit": "scalar_op/system_cycle",
       "cycle_domain": "SYS_CNT",
       "scope": "single_aiv_32_warps_8_independent_chains_per_thread",
       "source_kind": "isolated_microbenchmark",
-      "source": "data_provider/950pr_simt_operation_warp_curve_20260913.csv; data_provider/950pr_simt_operation_warp_curve_20260913_ir_audit.log",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
       "confidence": "high"
     },
     "simt.f32.log.throughput.warps_1": {
-      "description": "Measured aggregate SIMT source-operation throughput at the stated launched warp count.",
-      "value": 1.312147617,
+      "description": "PR2502 SIMT log throughput at 1 active warps.",
+      "value": 7.897,
       "unit": "scalar_op/system_cycle",
       "cycle_domain": "SYS_CNT",
       "scope": "single_aiv_1_warps_8_independent_chains_per_thread",
       "source_kind": "isolated_microbenchmark",
-      "source": "data_provider/950pr_simt_operation_warp_curve_20260913.csv; data_provider/950pr_simt_operation_warp_curve_20260913_ir_audit.log",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
       "confidence": "high"
     },
     "simt.f32.log.throughput.warps_2": {
-      "description": "Measured aggregate SIMT source-operation throughput at the stated launched warp count.",
-      "value": 2.619595805,
+      "description": "PR2502 SIMT log throughput at 2 active warps.",
+      "value": 15.635,
       "unit": "scalar_op/system_cycle",
       "cycle_domain": "SYS_CNT",
       "scope": "single_aiv_2_warps_8_independent_chains_per_thread",
       "source_kind": "isolated_microbenchmark",
-      "source": "data_provider/950pr_simt_operation_warp_curve_20260913.csv; data_provider/950pr_simt_operation_warp_curve_20260913_ir_audit.log",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
       "confidence": "high"
     },
     "simt.f32.log.throughput.warps_4": {
-      "description": "Measured aggregate SIMT source-operation throughput at the stated launched warp count.",
-      "value": 5.19928916,
+      "description": "PR2502 SIMT log throughput at 4 active warps.",
+      "value": 31.263,
       "unit": "scalar_op/system_cycle",
       "cycle_domain": "SYS_CNT",
       "scope": "single_aiv_4_warps_8_independent_chains_per_thread",
       "source_kind": "isolated_microbenchmark",
-      "source": "data_provider/950pr_simt_operation_warp_curve_20260913.csv; data_provider/950pr_simt_operation_warp_curve_20260913_ir_audit.log",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
       "confidence": "high"
     },
     "simt.f32.log.throughput.warps_8": {
-      "description": "Measured aggregate SIMT source-operation throughput at the stated launched warp count.",
-      "value": 8.746530002,
+      "description": "PR2502 SIMT log throughput at 8 active warps.",
+      "value": 53.619,
       "unit": "scalar_op/system_cycle",
       "cycle_domain": "SYS_CNT",
       "scope": "single_aiv_8_warps_8_independent_chains_per_thread",
       "source_kind": "isolated_microbenchmark",
-      "source": "data_provider/950pr_simt_operation_warp_curve_20260913.csv; data_provider/950pr_simt_operation_warp_curve_20260913_ir_audit.log",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
       "confidence": "high"
     },
     "simt.f32.log.throughput.warps_16": {
-      "description": "Measured aggregate SIMT source-operation throughput at the stated launched warp count.",
-      "value": 16.05015674,
+      "description": "PR2502 SIMT log throughput at 16 active warps.",
+      "value": 56.499,
       "unit": "scalar_op/system_cycle",
       "cycle_domain": "SYS_CNT",
       "scope": "single_aiv_16_warps_8_independent_chains_per_thread",
       "source_kind": "isolated_microbenchmark",
-      "source": "data_provider/950pr_simt_operation_warp_curve_20260913.csv; data_provider/950pr_simt_operation_warp_curve_20260913_ir_audit.log",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
       "confidence": "high"
     },
     "simt.f32.log.throughput.warps_32": {
-      "description": "Measured aggregate SIMT source-operation throughput at the stated launched warp count.",
-      "value": 19.221022994,
+      "description": "PR2502 SIMT log throughput at 32 active warps.",
+      "value": 58.371,
       "unit": "scalar_op/system_cycle",
       "cycle_domain": "SYS_CNT",
       "scope": "single_aiv_32_warps_8_independent_chains_per_thread",
       "source_kind": "isolated_microbenchmark",
-      "source": "data_provider/950pr_simt_operation_warp_curve_20260913.csv; data_provider/950pr_simt_operation_warp_curve_20260913_ir_audit.log",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
       "confidence": "high"
     },
     "simt.predicate.select.throughput.warps_1": {
@@ -3294,6 +3294,166 @@
       "source_kind": "isolated_microbenchmark",
       "source": "data_provider/950pr_simd_structural_completion_20261008.json",
       "confidence": "high"
+    },
+    "simd.srem.throughput": {
+      "description": "PR2502 effective SIMD srem throughput on one AIV (64 fp32 lanes per vector instruction).",
+      "value": 0.025390625,
+      "unit": "vector_instruction/system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_runtime_loop_ilp4_or_more_effective_source_vdiv",
+      "source_kind": "isolated_microbenchmark",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
+      "confidence": "medium"
+    },
+    "simt.srem.throughput": {
+      "description": "PR2502 effective signed/unsigned srem throughput, saturated value (warp 32 carried from the 16-warp measurement: the remainder tile is 16 warps).",
+      "value": 6.651,
+      "unit": "scalar_op/system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_runtime_loop_ilp8_32_launched_warps_effective_source_div",
+      "source_kind": "isolated_microbenchmark",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
+      "confidence": "medium"
+    },
+    "simd.urem.throughput": {
+      "description": "PR2502 effective SIMD urem throughput on one AIV (64 fp32 lanes per vector instruction).",
+      "value": 0.183203125,
+      "unit": "vector_instruction/system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_runtime_loop_ilp4_or_more_effective_source_vdiv",
+      "source_kind": "isolated_microbenchmark",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
+      "confidence": "medium"
+    },
+    "simt.urem.throughput": {
+      "description": "PR2502 effective signed/unsigned urem throughput, saturated value (warp 32 carried from the 16-warp measurement: the remainder tile is 16 warps).",
+      "value": 8.839,
+      "unit": "scalar_op/system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_runtime_loop_ilp8_32_launched_warps_effective_source_div",
+      "source_kind": "isolated_microbenchmark",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
+      "confidence": "medium"
+    },
+    "simt.srem.throughput.warps_1": {
+      "description": "PR2502 SIMT srem throughput at 1 active warps. (warp 32 carried from the 16-warp measurement: the remainder tile is 16 warps)",
+      "value": 1.446,
+      "unit": "scalar_op/system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_kernel_level_throughput",
+      "source_kind": "isolated_microbenchmark",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
+      "confidence": "medium"
+    },
+    "simt.srem.throughput.warps_2": {
+      "description": "PR2502 SIMT srem throughput at 2 active warps. (warp 32 carried from the 16-warp measurement: the remainder tile is 16 warps)",
+      "value": 2.892,
+      "unit": "scalar_op/system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_kernel_level_throughput",
+      "source_kind": "isolated_microbenchmark",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
+      "confidence": "medium"
+    },
+    "simt.srem.throughput.warps_4": {
+      "description": "PR2502 SIMT srem throughput at 4 active warps. (warp 32 carried from the 16-warp measurement: the remainder tile is 16 warps)",
+      "value": 5.707,
+      "unit": "scalar_op/system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_kernel_level_throughput",
+      "source_kind": "isolated_microbenchmark",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
+      "confidence": "medium"
+    },
+    "simt.srem.throughput.warps_8": {
+      "description": "PR2502 SIMT srem throughput at 8 active warps. (warp 32 carried from the 16-warp measurement: the remainder tile is 16 warps)",
+      "value": 6.573,
+      "unit": "scalar_op/system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_kernel_level_throughput",
+      "source_kind": "isolated_microbenchmark",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
+      "confidence": "medium"
+    },
+    "simt.srem.throughput.warps_16": {
+      "description": "PR2502 SIMT srem throughput at 16 active warps. (warp 32 carried from the 16-warp measurement: the remainder tile is 16 warps)",
+      "value": 6.651,
+      "unit": "scalar_op/system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_kernel_level_throughput",
+      "source_kind": "isolated_microbenchmark",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
+      "confidence": "medium"
+    },
+    "simt.srem.throughput.warps_32": {
+      "description": "PR2502 SIMT srem throughput at 32 active warps. (warp 32 carried from the 16-warp measurement: the remainder tile is 16 warps)",
+      "value": 6.651,
+      "unit": "scalar_op/system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_kernel_level_throughput",
+      "source_kind": "isolated_microbenchmark",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
+      "confidence": "medium"
+    },
+    "simt.urem.throughput.warps_1": {
+      "description": "PR2502 SIMT urem throughput at 1 active warps. (warp 32 carried from the 16-warp measurement: the remainder tile is 16 warps)",
+      "value": 1.804,
+      "unit": "scalar_op/system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_kernel_level_throughput",
+      "source_kind": "isolated_microbenchmark",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
+      "confidence": "medium"
+    },
+    "simt.urem.throughput.warps_2": {
+      "description": "PR2502 SIMT urem throughput at 2 active warps. (warp 32 carried from the 16-warp measurement: the remainder tile is 16 warps)",
+      "value": 3.608,
+      "unit": "scalar_op/system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_kernel_level_throughput",
+      "source_kind": "isolated_microbenchmark",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
+      "confidence": "medium"
+    },
+    "simt.urem.throughput.warps_4": {
+      "description": "PR2502 SIMT urem throughput at 4 active warps. (warp 32 carried from the 16-warp measurement: the remainder tile is 16 warps)",
+      "value": 7.157,
+      "unit": "scalar_op/system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_kernel_level_throughput",
+      "source_kind": "isolated_microbenchmark",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
+      "confidence": "medium"
+    },
+    "simt.urem.throughput.warps_8": {
+      "description": "PR2502 SIMT urem throughput at 8 active warps. (warp 32 carried from the 16-warp measurement: the remainder tile is 16 warps)",
+      "value": 8.362,
+      "unit": "scalar_op/system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_kernel_level_throughput",
+      "source_kind": "isolated_microbenchmark",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
+      "confidence": "medium"
+    },
+    "simt.urem.throughput.warps_16": {
+      "description": "PR2502 SIMT urem throughput at 16 active warps. (warp 32 carried from the 16-warp measurement: the remainder tile is 16 warps)",
+      "value": 8.839,
+      "unit": "scalar_op/system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_kernel_level_throughput",
+      "source_kind": "isolated_microbenchmark",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
+      "confidence": "medium"
+    },
+    "simt.urem.throughput.warps_32": {
+      "description": "PR2502 SIMT urem throughput at 32 active warps. (warp 32 carried from the 16-warp measurement: the remainder tile is 16 warps)",
+      "value": 8.839,
+      "unit": "scalar_op/system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "scope": "single_aiv_kernel_level_throughput",
+      "source_kind": "isolated_microbenchmark",
+      "source": "PR2502 arithmetic.cce re-measured per active warp count (chains=8 fp32 / chains=4 remainder)",
+      "confidence": "medium"
     }
   }
 }
