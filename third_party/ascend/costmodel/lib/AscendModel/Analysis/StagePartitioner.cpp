@@ -247,6 +247,9 @@ static bool isSaturatedComputeFallback(Operation *operation) {
 
 static std::string getProfileOperationName(Operation *operation) {
   const llvm::StringRef name = operation->getName().getStringRef();
+  // Tensor remainder keeps one rate per signedness across widths.
+  if (name == "arith.remsi" || name == "arith.remui")
+    return name == "arith.remsi" ? "srem" : "urem";
   if (name == "tt.histogram") {
     for (Type type : operation->getResultTypes())
       if (getScalarBitWidth(type) == 32)
