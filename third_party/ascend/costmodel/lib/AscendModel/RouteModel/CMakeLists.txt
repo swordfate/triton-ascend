@@ -9,6 +9,11 @@ add_mlir_library(AscendModelRouteModel
   ../Analysis/StagePartitioner.cpp
   ../Analysis/StageMemoryPatternAnalysis.cpp
   ../Analysis/SimtRegisterPressureAnalysis.cpp
+  Reduction/ReductionAnalysis.cpp
+  Reduction/ReductionWorkload.cpp
+  Reduction/ReductionProfile.cpp
+  Reduction/ReductionCostModel.cpp
+  Reduction/ReductionLayoutModel.cpp
   StageCostModels.cpp
   Models/IndirectGatherMemoryCostModel.cpp
   Models/IndirectMemoryChainCostModel.cpp

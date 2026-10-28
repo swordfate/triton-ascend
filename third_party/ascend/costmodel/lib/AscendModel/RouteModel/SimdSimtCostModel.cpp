@@ -2212,6 +2212,24 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
         hardware.simdIndirectStoreModel != "simd_mask_envelope_20261019")
       reader.setError("unsupported simd_indirect_store_model");
   }
+  if (const auto *value = root->get("reduction_profile")) {
+    auto reference = value->getAsString();
+    if (!reference || reference->empty())
+      return llvm::createStringError(
+          std::errc::invalid_argument,
+          "reduction_profile must be a nonempty path");
+    const std::string resolved = resolveProfileReference(path, *reference);
+    if (dependencies)
+      dependencies->push_back(resolved);
+    auto loaded = ReductionProfile::loadFromFile(resolved);
+    if (!loaded)
+      return loaded.takeError();
+    if (loaded->getTarget() != hardware.target)
+      return llvm::createStringError(std::errc::invalid_argument,
+                                     "reduction profile target mismatch");
+    hardware.reductionProfile = std::move(*loaded);
+  }
+
   if (const auto *targets = root->getArray("compatible_targets")) {
     for (const llvm::json::Value &target : *targets) {
       auto pattern = target.getAsString();
@@ -2989,6 +3007,14 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
     auto combinedHash = llvm::SHA256::hash(combinedBytes);
     profile.contentSha256 =
         llvm::toHex(llvm::ArrayRef<uint8_t>(combinedHash), true);
+  }
+  if (hardware.reductionProfile) {
+    std::string assets = profile.contentSha256 + "\nreduction=" +
+                         hardware.reductionProfile->getContentHash().str();
+    profile.contentSha256 = llvm::toHex(
+        llvm::SHA256::hash(llvm::ArrayRef<uint8_t>(
+            reinterpret_cast<const uint8_t *>(assets.data()), assets.size())),
+        true);
   }
   return profile;
 }

@@ -2,6 +2,7 @@
 
 #include "AscendModel/Analysis/StagePartitioner.h"
 #include "AscendModel/Analysis/StageMemoryPatternAnalysis.h"
+#include "AscendModel/RouteModel/Reduction/ReductionAnalysis.h"
 #include "ascend/include/Utils/SuperBlockFactor.h"
 
 #include "mlir/Dialect/Arith/IR/Arith.h"
@@ -760,6 +761,8 @@ static void accumulateReductionWorkload(Operation *operation,
       effectiveExtent > 1
           ? std::ceil(std::log2(static_cast<double>(effectiveExtent)))
           : 0.0;
+  if (auto reduction = analyzeReduction(operation))
+    work.reductionWorkloads.push_back(std::move(*reduction));
   work.reductionOperations += 1.0;
   if (operation->getName().getStringRef() == "tt.reduce")
     work.reductionCombineClassCounts[classifyReductionCombine(operation)] +=
@@ -1259,6 +1262,8 @@ template <typename Map> static void mergeCounts(Map &into, const Map &from) {
 }
 
 static void scaleWorkload(StageWorkload &work, double scale) {
+  for (auto &reduction : work.reductionWorkloads)
+    reduction.instances *= scale;
   for (auto field : workloadScalarFields)
     work.*field *= scale;
   for (auto &access : work.memoryAccesses)
@@ -2027,9 +2032,25 @@ static void accumulateDynamicOperationTree(
     Operation *operation, StageWorkload &work, double multiplicity,
     int64_t fallbackLoopTripCount, StageModelFeatures &estimates,
     int64_t logicalProgramCountHint, RankedTensorType mappedTensor = {},
+    bool skipReductionBodies = false,
+    std::vector<StageWorkload> *reductions = nullptr,
     const StageMemoryPatternAnalysis *memoryPatterns = nullptr) {
   if (!operation)
     return;
+  const auto operationName = operation->getName().getStringRef();
+  if (operationName == "tt.reduce") {
+    if (skipReductionBodies)
+      return;
+    if (reductions) {
+      StageWorkload contribution;
+      auto ignored = estimates;
+      accumulateDynamicOperationTree(operation, contribution, multiplicity,
+                                     fallbackLoopTripCount, ignored,
+                                     logicalProgramCountHint, mappedTensor,
+                                     false, nullptr, memoryPatterns);
+      reductions->push_back(std::move(contribution));
+    }
+  }
   StageWorkload local;
   accumulateOneOperation(operation, local, mappedTensor, memoryPatterns);
   const llvm::StringRef name = operation->getName().getStringRef();
@@ -2063,7 +2084,8 @@ static void accumulateDynamicOperationTree(
       for (Operation &nested : block.getOperations())
         accumulateDynamicOperationTree(
             &nested, work, childMultiplicity, fallbackLoopTripCount, estimates,
-            logicalProgramCountHint, childMappedTensor, memoryPatterns);
+            logicalProgramCountHint, childMappedTensor, skipReductionBodies,
+            reductions, memoryPatterns);
 }
 
 static int64_t countAlgorithmLoops(const LogicalStage &stage) {
@@ -2102,6 +2124,8 @@ inferRuntimeGridStrideIterations(const LogicalStage &stage,
 }
 
 static void mergeWorkload(StageWorkload &into, StageWorkload from) {
+  llvm::append_range(into.reductionWorkloads,
+                     std::move(from.reductionWorkloads));
   for (auto field : workloadScalarFields)
     into.*field += from.*field;
   into.memoryAccesses.insert(into.memoryAccesses.end(),
@@ -3411,6 +3435,7 @@ llvm::Error StageWorkloadAnalysis::analyze(
         std::errc::invalid_argument,
         "StageWorkloadAnalysis requires complete operation ownership");
   for (LogicalStage &stage : partition.stages) {
+    stage.reductionContributions.clear();
     StageWorkload work;
     work.paysKernelSetup = stage.workload.paysKernelSetup;
     if (memoryPatterns)
@@ -3437,7 +3462,23 @@ llvm::Error StageWorkloadAnalysis::analyze(
       accumulateDynamicOperationTree(
           root, work, semanticRootEntryMultiplicity(root),
           fallbackLoopTripCount, stage.features, logicalProgramCountHint, {},
-          memoryPatterns);
+          false, &stage.reductionContributions, memoryPatterns);
+    StageWorkload external;
+    external.paysKernelSetup = work.paysKernelSetup;
+    // Ordinary fitted reductions remove only pure combine work; their external
+    // memory operations retain the same static address descriptions.
+    external.addressPatterns = work.addressPatterns;
+    auto ignoredFeatures = stage.features;
+    for (Operation *root : stage.operations)
+      accumulateDynamicOperationTree(
+          root, external, semanticRootEntryMultiplicity(root),
+          fallbackLoopTripCount, ignoredFeatures, logicalProgramCountHint, {},
+          true, nullptr, memoryPatterns);
+    scaleWorkload(external, 1.0 / std::max<int64_t>(1, stage.iterationCount));
+    stage.reductionExternalWorkload = std::move(external);
+    for (auto &contribution : stage.reductionContributions)
+      scaleWorkload(contribution,
+                    1.0 / std::max<int64_t>(1, stage.iterationCount));
     recomputeIssueElements(work);
     stage.workload = std::move(work);
     makePerIteration(stage);
@@ -3658,4 +3699,9 @@ StagePartitioner::partition(ModuleOp module, const SimtAnchorPlan &anchorPlan,
   if (llvm::Error error = StagePartitionVerifier().verify(*result))
     return std::move(error);
   return std::move(*result);
+}
+
+void mlir::ascend::mergeReductionResidualWorkload(StageWorkload &into,
+                                                  StageWorkload from) {
+  mergeWorkload(into, std::move(from));
 }

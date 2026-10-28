@@ -1249,6 +1249,17 @@ llvm::json::Object StageImplementationCost::toJSON() const {
       {"total_system_cycles", totalCycles},
       {"local_scope_completion_inclusive", localScopeCompletionInclusive},
       {"formula_evidence", formulaEvidence},
+      {"calibrated_tail_reduction", calibratedTailReduction},
+      {"calibrated_first_reduction", calibratedFirstReduction},
+      {"calibrated_middle_reduction", calibratedMiddleReduction},
+      {"reduction_fallback_instances", reductionFallbackInstances},
+      {"fitted_reduction_instances",
+       [&] {
+         llvm::json::Object entries;
+         for (const auto &[name, count] : fittedReductionInstances)
+           entries[name] = count;
+         return entries;
+       }()},
       {"resource_system_cycles", resources.toJSON()}};
   if (perAivWorkload)
     result["per_aiv_workload_before_superblock"] = perAivWorkload->toJSON();
@@ -3542,6 +3553,44 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
                                    "and handoff rates must be finite and "
                                    "positive");
 
+  auto implementationFactors = [](const LogicalStageCost &stage,
+                                  bool localScope) {
+    llvm::SmallVector<int64_t> factors;
+    for (const StageImplementationCost &cost : stage.implementations)
+      if (cost.implementation.mode == StageMode::SIMT &&
+          cost.implementation.localScope == localScope &&
+          (localScope || cost.implementation.aivSubblocks == 1) &&
+          !llvm::is_contained(factors, cost.implementation.superblockFactor))
+        factors.push_back(cost.implementation.superblockFactor);
+    llvm::sort(factors);
+    return factors;
+  };
+
+  // A whole-kernel SIMT route uses one factor for every Stage, so only
+  // factors with a measured implementation in every Stage are candidates.
+  llvm::SmallVector<int64_t> allSimtFactors =
+      implementationFactors(costTable.stages.front(), false);
+  for (const LogicalStageCost &stage : llvm::drop_begin(costTable.stages)) {
+    const llvm::SmallVector<int64_t> stageFactors =
+        implementationFactors(stage, false);
+    llvm::erase_if(allSimtFactors, [&](int64_t factor) {
+      return !llvm::is_contained(stageFactors, factor);
+    });
+  }
+
+  // A Mixed route materializes only one local SIMT Stage. Try every factor
+  // offered by any local implementation; buildPlan performs the final route
+  // legality checks.
+  llvm::SmallVector<int64_t> mixedFactors;
+  for (const LogicalStageCost &stage : costTable.stages) {
+    const llvm::SmallVector<int64_t> stageFactors =
+        implementationFactors(stage, true);
+    for (int64_t factor : stageFactors)
+      if (!llvm::is_contained(mixedFactors, factor))
+        mixedFactors.push_back(factor);
+  }
+  llvm::sort(mixedFactors);
+
   auto findImplementation = [](const LogicalStageCost &stage, StageMode mode,
                                int64_t factor, bool localScope,
                                int64_t subblocks =
@@ -3793,7 +3842,7 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
   auto bestFactoredPlan = [&](StageKernelRouteKind kind) {
     StageRoutePlan best;
     best.candidate = kind;
-    for (int64_t factor : {1, 2, 4}) {
+    for (int64_t factor : mixedFactors) {
       const int64_t maximumSubblocks =
           kind == StageKernelRouteKind::Mixed ? costTable.cvAivSubblocks : 1;
       for (int64_t subblocks = 1; subblocks <= maximumSubblocks; ++subblocks) {
@@ -3817,7 +3866,7 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
   result.stages = costTable.stages;
   result.scopeHandoff = scopeHandoff;
   result.allSimd = buildPlan(StageKernelRouteKind::AllSIMD, 1);
-  for (int64_t factor : {1, 2, 4}) {
+  for (int64_t factor : allSimtFactors) {
     StageRoutePlan plan = buildPlan(StageKernelRouteKind::AllSIMT, factor);
     if (plan.legal)
       result.allSimtFactorPlans.emplace(factor, std::move(plan));
