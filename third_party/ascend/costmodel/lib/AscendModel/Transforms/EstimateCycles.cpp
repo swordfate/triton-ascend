@@ -30,9 +30,12 @@ namespace ascend {
 
 namespace {
 
+using utils::analyzeScfForTripCount;
 using utils::getLoopMultiplier;
 using utils::getNumElements;
+using utils::getScfForTripCount;
 using utils::getScfForTripCountWithBindings;
+using utils::LoopTripCountResult;
 using utils::parseBindings;
 using utils::parseLoopTripCounts;
 

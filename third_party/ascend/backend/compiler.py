@@ -262,60 +262,7 @@ def _finalize_program_launch_policy(metadata, opt):
     metadata["ptsm_cap_authorized"] = ptsm_cap_authorized
 
 
-def _update_dynamic_cv_costmodel_report(metadata, opt, requested, rc, rc_readable):
-    report = metadata.get("auto_simt_scope_report")
-    if not report:
-        return
-    try:
-        data = json.loads(report)
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return
-
-    effective = bool(metadata.get("enable_dynamic_cv_pipeline", False))
-    if not requested:
-        state = "not_requested"
-    elif rc > 0:
-        state = "fell_back"
-    elif rc_readable and getattr(opt, "compile_on_910_95", False):
-        # The pass removes the return-code attribute on entry and only restores
-        # a positive value when it falls back. An absent readable attribute
-        # after the scheduled 910/950 pass therefore means it completed.
-        state = "pass_completed"
-    else:
-        state = "unverified"
-
-    data["dynamic_cv_pipeline_backend"] = {
-        "state": state,
-        "requested": requested,
-        "effective_option": effective,
-        "fallback_rc": rc if rc > 0 else None,
-        "physical_hir_certified": False,
-    }
-    confirmed = state == "pass_completed" and effective
-    candidate = data.get("stage_dependency_elapsed_prediction")
-    if isinstance(candidate, dict) and candidate.get("dynamic_cv_requested") is True:
-        candidate["backend_state"] = state
-        candidate["backend_effective_dynamic_cv_confirmed"] = confirmed
-        promotion_allowed = (confirmed and candidate.get("offline_schedule_calibration_certified") is True
-                             and isinstance(candidate.get("schedule_contract"), str)
-                             and bool(candidate["schedule_contract"])
-                             and isinstance(candidate.get("full_kernel_validation_sha256"), str)
-                             and len(candidate["full_kernel_validation_sha256"]) == 64)
-        candidate["promotion_allowed"] = promotion_allowed
-        if promotion_allowed:
-            candidate["status"] = "qualified_on_full_tile_candidate"
-        elif state == "fell_back":
-            candidate["status"] = "requested_on_rejected_after_backend_fallback"
-
-    updated = json.dumps(data, sort_keys=True, separators=(",", ":"))
-    metadata["auto_simt_scope_report"] = updated
-    if dump_path := metadata.get("auto_simt_scope_dump"):
-        Path(dump_path).write_text(updated, encoding="utf-8", newline="\n")
-
-
 def _adjust_metadata_by_module_result(mod, metadata, opt, **kwargs):
-    requested = bool(metadata.get("enable_dynamic_cv_pipeline", False))
-    rc_readable = getattr(ascend.ir, "get_int_attr", None) is not None
     rc = _get_then_remove_rc(mod, "triton_ascend.dynamic_cv_pipeline.rc")
     if rc == 3:
         metadata["disable_vf_operand_substitution"] = True
@@ -329,7 +276,6 @@ def _adjust_metadata_by_module_result(mod, metadata, opt, **kwargs):
         metadata["set_workspace_multibuffer"] = kwargs["set_workspace_multibuffer"]
         if opt.debug:
             print(f"SSBUFFER return code={rc}, will fallback to enable_dynamic_cv_pipeline=False")
-    _update_dynamic_cv_costmodel_report(metadata, opt, requested, rc, rc_readable)
 
 
 def _get_dump_paths(hash_key: str, src_path: str, dst_path: str) -> Tuple[str, str]:
@@ -1184,7 +1130,6 @@ def _publish_route_transform_capability(metadata, opt) -> str:
                                   and getattr(opt, "enable_auto_bind_sub_block", None) is not False
                                   and getattr(opt, "auto_tile_and_bind_subblock", True) else 1),
     }
-    capability["dynamic_cv_pipeline_requested"] = bool(getattr(opt, "enable_dynamic_cv_pipeline", False))
     forced_candidate = metadata.get("backend_forced_route_candidate")
     if forced_candidate in ("all_simd", "all_simt_only", "mixed_simd_simt"):
         capability["backend_forced_route_candidate"] = forced_candidate

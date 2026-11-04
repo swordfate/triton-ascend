@@ -8,7 +8,6 @@
 #ifndef ASCENDMODEL_UTILS_H
 #define ASCENDMODEL_UTILS_H
 
-#include "AscendModel/Analysis/LoopWorkloadAnalysis.h"
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/SCF/IR/SCF.h"
 #include "mlir/IR/BuiltinTypes.h"
@@ -494,13 +493,18 @@ inline LoopTripCountResult analyzeScfForTripCount(scf::ForOp forOp) {
       std::unique(result.dependentArgs.begin(), result.dependentArgs.end()),
       result.dependentArgs.end());
 
-  // Static multiplicity is owned by the same analysis used by the Stage
-  // partitioner and symbolic complete-kernel model. SymbolicBound remains only
-  // the explicit offline binding representation below.
-  const LoopTripCountInfo solution = analyzeLoopTripCount(forOp);
-  if (solution.constantTripCount) {
+  // Check if all bounds are static
+  if (result.lowerBound.isConstant() && result.upperBound.isConstant() &&
+      result.step.isConstant()) {
     result.isStatic = true;
-    result.staticTripCount = *solution.constantTripCount;
+    int64_t lb = result.lowerBound.constantValue;
+    int64_t ub = result.upperBound.constantValue;
+    int64_t step = result.step.constantValue;
+    if (step != 0 && ub > lb) {
+      result.staticTripCount = (ub - lb + step - 1) / step;
+    } else {
+      result.staticTripCount = 0;
+    }
   }
 
   return result;
