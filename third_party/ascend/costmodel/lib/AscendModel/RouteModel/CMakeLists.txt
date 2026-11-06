@@ -18,6 +18,7 @@ add_mlir_library(AscendModelRouteModel
   Models/IndirectGatherMemoryCostModel.cpp
   Models/IndirectMemoryChainCostModel.cpp
   Models/StridedShortCostModel.cpp
+  Models/ContiguousLdStCostModel.cpp
   StageRouteCostModel.cpp
   SimdSimtCostModel.cpp
   ../Transforms/SelectSimdSimtCostModel.cpp
@@ -34,6 +35,7 @@ add_mlir_library(AscendModelRouteModel
   AscendModelProfile
   TritonOffsetAnalysis
   TritonIR
+  MLIRArithDialect
   MLIRIR
   MLIRAnalysis
   MLIRPass

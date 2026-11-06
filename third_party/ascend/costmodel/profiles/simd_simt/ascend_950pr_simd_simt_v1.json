@@ -42,7 +42,7 @@
       "fp32.saturated": {
         "description": "Execution lower bound for every numeric TTIR operation without a dedicated operation profile. Each semantic operation retains its TTIR name in the workload and pays at least one 2048-bit SIMD work unit at the measured saturated FP32 arithmetic rate; shape, address, view, and layout-only operations are excluded.",
         "relative_to": "f32.add",
-        "factor": 1.0
+        "factor": 1
       },
       "f32.sub": {
         "description": "Measured FP32 SIMD subtract throughput.",
@@ -65,7 +65,7 @@
       "f32.relu": {
         "description": "The __hmf_reluf helper uses the measured maximum-class vector throughput but does not lower through the binary semantic-maximum completion path. Fresh A5 ReLU holdout timing remains the independent validation point.",
         "relative_to": "f32.max",
-        "factor": 1.0
+        "factor": 1
       },
       "f32.abs": {
         "description": "Measured FP32 SIMD absolute-value throughput.",
@@ -82,12 +82,12 @@
       "f32.sqrt": {
         "description": "FP32 SIMD square-root lowers to one vector arithmetic operation in the audited pytest and operation-chain controls; use the measured vector arithmetic issue curve.",
         "relative_to": "f32.add",
-        "factor": 1.0
+        "factor": 1
       },
       "f32.cos": {
         "description": "Effective SIMD cosine completion from the fresh 1024-element dependent operation-chain slope. The factor represents the complete backend cosine expansion per semantic vector operation.",
         "relative_to": "f32.add",
-        "factor": 112.0
+        "factor": 112
       },
       "predicate.cmp": {
         "description": "Measured standalone semantic SIMD comparison throughput.",
@@ -161,20 +161,20 @@
       "masked_load_store_read_modify_write": {
         "residual_system_cycles_by_row_bytes_and_active_rows": {
           "8": {
-            "3": 284.0
+            "3": 284
           },
           "16": {
-            "4": 400.0,
-            "9": 1027.0,
-            "12": 920.0
+            "4": 400,
+            "9": 1027,
+            "12": 920
           },
           "32": {
-            "6": 458.0,
-            "12": 536.0
+            "6": 458,
+            "12": 536
           },
           "64": {
-            "12": 290.0,
-            "24": 294.0
+            "12": 290,
+            "24": 294
           }
         },
         "evidence": "Fresh A5 forced-SIMD rank-two FP16 masked load/add/store sweep recorded in microbench/data_provider/950pr_simd_masked_store_read_modify_write_20261009.json. NPUIR consistently adds a destination GM load before the masked merge and store. Curves are bounded by physical row width and statically proven active rows; row-bytes=16 active-rows=6 plus row-bytes=32 active-rows=9 and row-bytes=64 active-rows=18 are interpolation holdouts. Admission additionally requires an exact shared mask and a TTIR store-value dependency on the matching load."
@@ -230,7 +230,7 @@
       },
       "masked_strided_load_copy_completion": {
         "64": {
-          "base_system_cycles": 178.0,
+          "base_system_cycles": 178,
           "additional_row_system_cycles": 0.484375,
           "minimum_rows": 128,
           "maximum_rows": 256,
@@ -241,7 +241,7 @@
       },
       "masked_strided_store_copy_completion": {
         "64": {
-          "base_system_cycles": 3650.0,
+          "base_system_cycles": 3650,
           "additional_row_system_cycles": 3.09375,
           "minimum_rows": 128,
           "maximum_rows": 256,
@@ -262,7 +262,7 @@
             0.00478897
           ],
           "structural_constants": [
-            1536.0
+            1536
           ],
           "evidence": "PHYS3_simd_load_stride2_r1.json; 21 rotate-loop points, ISB=2*eb, MAPE 1.22%"
         },
@@ -333,8 +333,8 @@
             1.11529
           ],
           "structural_constants": [
-            128.0,
-            128.0
+            128,
+            128
           ],
           "evidence": "PHYS3_simd_store_r2.json; 325 points, MAPE 8.12%"
         },
@@ -342,10 +342,10 @@
           "intercept_system_cycles": 233.13893010359232,
           "coefficient_system_cycles": [
             0.2451482631596979,
-            99.292319920040171,
+            99.29231992004017,
             0.6014874004037386,
             0.026348222847080462,
-            0.038518219183032401
+            0.0385182191830324
           ],
           "structural_constants": [],
           "evidence": "data_provider/strided_ldst/pre-explore/results/final/errors_masked_store.csv, stride>=3 branch; 384 points (int8/float16/float32, n=4..512, stride=3/4/5/6/8/16/32/64/128, 15 rank-two shapes), MAPE 6.96%. Masked-only: a runtime mask makes the SIMD store read the destination back, so the fit carries an extra 1 KB aggregate term. Worst regime is stride>=32 with n<=16 (40-56%, 15/384 points), see README 3.5(a)."
@@ -361,6 +361,69 @@
           ],
           "structural_constants": [],
           "evidence": "data_provider/strided_ldst/pre-explore/results/final/errors_masked_store.csv, stride==2 branch; 100 points, MAPE 7.08%. Same shape as simd_store_masked_stride_gt2 with its own numbers: stride 2 lowers through DeinterleaveStatusOptimization (block move plus extract_slice), so the fixed and read-modify-write terms are visibly cheaper. Masked-only."
+        }
+      },
+      "contiguous_ldst": {
+        "evidence": "third_party/ascend/costmodel/profiles/microbench/data_provider/contiguous_ldst/contiguous_1d",
+        "max_elements": 16384,
+        "max_warps": 64,
+        "formulas": {
+          "simd.load": {
+            "features": [
+              "one",
+              "by",
+              "blk_part",
+              "burst"
+            ],
+            "coefficients": [
+              66.38,
+              0.005412,
+              5.8,
+              73.06
+            ]
+          },
+          "simd.store": {
+            "features": [
+              "one",
+              "by",
+              "blk_part",
+              "burst"
+            ],
+            "coefficients": [
+              83.24,
+              0.004262,
+              10.69,
+              40.4
+            ]
+          },
+          "bw.simd.load": {
+            "features": [
+              "one",
+              "invU"
+            ],
+            "coefficients": [
+              7,
+              70
+            ],
+            "max_features": [
+              "realBy"
+            ],
+            "max_coefficients": [
+              0.01220703125
+            ]
+          },
+          "bw.simd.store": {
+            "features": [
+              "one",
+              "realBy",
+              "invU"
+            ],
+            "coefficients": [
+              91.8747966901731,
+              0.0072844538501135704,
+              -7.765914583935799
+            ]
+          }
         }
       }
     },
@@ -635,7 +698,7 @@
       "fp32.saturated": {
         "description": "Execution lower bound for every numeric TTIR operation without a dedicated operation profile. Each semantic operation retains its TTIR name in the workload and pays at least one lane operation at the measured active-warp FP32 arithmetic saturation rate; shape, address, view, and layout-only operations are excluded.",
         "relative_to": "f32.add",
-        "factor": 1.0
+        "factor": 1
       },
       "f32.sub": {
         "description": "Measured FP32 SIMT scalar-subtract throughput.",
@@ -688,7 +751,7 @@
       "f32.relu": {
         "description": "SIMT ReLU helper inherits maximum-class scalar throughput while retaining its distinct semantic operation class.",
         "relative_to": "f32.max",
-        "factor": 1.0
+        "factor": 1
       },
       "f32.abs": {
         "description": "Measured FP32 SIMT scalar-absolute-value throughput.",
@@ -729,12 +792,12 @@
       "f32.sqrt": {
         "description": "FP32 SIMT square-root lowers to one scalar arithmetic instruction in the audited operation-chain controls; inherit the active-warp arithmetic throughput curve.",
         "relative_to": "f32.add",
-        "factor": 1.0
+        "factor": 1
       },
       "f32.cos": {
         "description": "Effective SIMT cosine completion from the fresh 1024-element dependent operation-chain slope. The factor applies to every active-warp point of the measured scalar arithmetic curve.",
         "relative_to": "f32.add",
-        "factor": 84.0
+        "factor": 84
       },
       "predicate.cmp": {
         "description": "Measured standalone semantic SIMT comparison throughput.",
@@ -869,7 +932,7 @@
       },
       "masked_strided_load_copy_completion": {
         "64": {
-          "base_system_cycles": 342.0,
+          "base_system_cycles": 342,
           "additional_row_system_cycles": 1.484375,
           "minimum_rows": 128,
           "maximum_rows": 256,
@@ -880,7 +943,7 @@
       },
       "masked_strided_store_copy_completion": {
         "64": {
-          "base_system_cycles": 60.0,
+          "base_system_cycles": 60,
           "additional_row_system_cycles": 1.4140625,
           "minimum_rows": 128,
           "maximum_rows": 256,
@@ -931,7 +994,7 @@
           "evidence": "PHYS2_simt_store.json; 960 points, MAPE 9.32%"
         },
         "simt_store_r2": {
-          "intercept_system_cycles": 0.0,
+          "intercept_system_cycles": 0,
           "coefficient_system_cycles": [
             4.887541,
             1.36564,
@@ -942,10 +1005,728 @@
             18.3383
           ],
           "structural_constants": [
-            2.0,
+            2,
             33.4824
           ],
           "evidence": "PHYS2_simt_store.json; 1210 points, MAPE 9.64%"
+        }
+      },
+      "contiguous_ldst": {
+        "evidence": "third_party/ascend/costmodel/profiles/microbench/data_provider/contiguous_ldst/contiguous_1d",
+        "max_elements": 16384,
+        "max_warps": 64,
+        "formulas": {
+          "small.load": {
+            "features": [
+              "one",
+              "warpRounds",
+              "i8wRounds",
+              "halfwRounds",
+              "schedR",
+              "d64"
+            ],
+            "coefficients": [
+              46.0160395549,
+              0.0969784406,
+              -0.0272131311,
+              0.00775789359,
+              0.4429625805,
+              9.4340198201
+            ]
+          },
+          "small.store": {
+            "features": [
+              "one",
+              "warpRounds",
+              "i8wRounds",
+              "halfwRounds",
+              "schedR",
+              "d64"
+            ],
+            "coefficients": [
+              22.7730760162,
+              0.0560035362,
+              0.00787346987,
+              -0.0179681543,
+              3.3951546834,
+              -0.9700559558
+            ]
+          },
+          "normal.load": {
+            "features": [
+              "one",
+              "te",
+              "W",
+              "log2eb",
+              "mask"
+            ],
+            "coefficients": [
+              92.3619650175,
+              17.5143402417,
+              0.8378622075,
+              14.1532970628,
+              15.8257912268
+            ]
+          },
+          "masked.load.l_gt_32_nospill": {
+            "features": [
+              "lines",
+              "te",
+              "ldg",
+              "schedR",
+              "W2",
+              "burst"
+            ],
+            "coefficients": [
+              1.235768211,
+              34.38604531,
+              10.44577769,
+              10.33665395,
+              -0.01819455717,
+              529.82291
+            ]
+          },
+          "masked.load.l_gt_32_spill": {
+            "features": [
+              "lines",
+              "te",
+              "thr",
+              "W",
+              "invW",
+              "half"
+            ],
+            "coefficients": [
+              106.3947559,
+              69.05169058,
+              -12.79675406,
+              -5588.922085,
+              2341.535913,
+              988.4613322
+            ]
+          },
+          "unmasked.store.te_lt_1": {
+            "features": [
+              "one",
+              "te",
+              "W",
+              "schedR"
+            ],
+            "coefficients": [
+              29.79699454,
+              14.55184065,
+              4.118122232,
+              -12.20951539
+            ]
+          },
+          "unmasked.store.te_ge_1_int8": {
+            "features": [
+              "one",
+              "LN",
+              "W",
+              "lines"
+            ],
+            "coefficients": [
+              9.618859832,
+              -0.1781618936,
+              -9.834985741,
+              63.14103133
+            ]
+          },
+          "unmasked.store.te_ge_1_wide_w_le_4": {
+            "features": [
+              "one",
+              "byh1k",
+              "rounds",
+              "half"
+            ],
+            "coefficients": [
+              27.10323398,
+              0.01903438418,
+              0.910918776,
+              2.135236491
+            ]
+          },
+          "unmasked.store.te_ge_1_wide_w_gt_4": {
+            "features": [
+              "one",
+              "by",
+              "W",
+              "K1",
+              "warpB"
+            ],
+            "coefficients": [
+              21.98229199,
+              -0.006888274584,
+              1.707037092,
+              0.008053648578,
+              -0.09785353277
+            ]
+          },
+          "masked.store.te_lt_1": {
+            "features": [
+              "one",
+              "i8",
+              "lnW",
+              "W",
+              "warpB"
+            ],
+            "coefficients": [
+              37.58799109,
+              -13.04121221,
+              -11.49799278,
+              2.600154616,
+              -0.01348248809
+            ]
+          },
+          "masked.store.te_ge_1_int8": {
+            "features": [
+              "one",
+              "by",
+              "LN",
+              "byLnW",
+              "W"
+            ],
+            "coefficients": [
+              27.81782943,
+              0.3189959759,
+              -0.1263655451,
+              0.02606958803,
+              -8.965792073
+            ]
+          },
+          "masked.store.te_ge_1_fp16": {
+            "features": [
+              "one",
+              "K1",
+              "LN",
+              "lperw",
+              "W"
+            ],
+            "coefficients": [
+              28.62783772,
+              0.04134228705,
+              0.06123416017,
+              -7.462977658,
+              -3.425899512
+            ]
+          },
+          "masked.store.te_ge_1_fp32": {
+            "features": [
+              "one",
+              "K1",
+              "thr",
+              "invW",
+              "byh1k",
+              "d64h8"
+            ],
+            "coefficients": [
+              20.80579023,
+              0.01351907627,
+              -2.215742714,
+              30.61015858,
+              -0.01804397694,
+              2.583023046
+            ]
+          },
+          "masked.store.te_ge_1_int64": {
+            "features": [
+              "one",
+              "K1",
+              "invW",
+              "te"
+            ],
+            "coefficients": [
+              3.799381075,
+              0.007200420738,
+              24.83977112,
+              -3.075679736
+            ]
+          },
+          "bw.simt.load.W1": {
+            "features": [
+              "one",
+              "invU"
+            ],
+            "coefficients": [
+              -60,
+              210
+            ],
+            "max_features": [
+              "realBy"
+            ],
+            "max_coefficients": [
+              0.06201171875
+            ]
+          },
+          "bw.simt.load.W2": {
+            "features": [
+              "one",
+              "invU"
+            ],
+            "coefficients": [
+              -22,
+              150
+            ],
+            "max_features": [
+              "realBy"
+            ],
+            "max_coefficients": [
+              0.03369140625
+            ]
+          },
+          "bw.simt.load.W4": {
+            "features": [
+              "one",
+              "invU"
+            ],
+            "coefficients": [
+              -2,
+              80
+            ],
+            "max_features": [
+              "realBy"
+            ],
+            "max_coefficients": [
+              0.01904296875
+            ]
+          },
+          "bw.simt.load.W8": {
+            "features": [
+              "one",
+              "invU"
+            ],
+            "coefficients": [
+              4,
+              60
+            ],
+            "max_features": [
+              "realBy"
+            ],
+            "max_coefficients": [
+              0.02197265625
+            ]
+          },
+          "bw.simt.load.W16": {
+            "features": [
+              "one",
+              "invU"
+            ],
+            "coefficients": [
+              6,
+              60
+            ],
+            "max_features": [
+              "realBy"
+            ],
+            "max_coefficients": [
+              0.01416015625
+            ]
+          },
+          "bw.simt.load.W32": {
+            "features": [
+              "one",
+              "invU"
+            ],
+            "coefficients": [
+              20,
+              70
+            ],
+            "max_features": [
+              "realBy"
+            ],
+            "max_coefficients": [
+              0.01318359375
+            ]
+          },
+          "bw.simt.load.W64": {
+            "features": [
+              "one",
+              "invU"
+            ],
+            "coefficients": [
+              72,
+              100
+            ],
+            "max_features": [
+              "realBy"
+            ],
+            "max_coefficients": [
+              0.00048828125
+            ]
+          },
+          "bw.simt.store.W2": {
+            "features": [
+              "one",
+              "invU"
+            ],
+            "coefficients": [
+              -52,
+              80
+            ],
+            "max_features": [
+              "realBy"
+            ],
+            "max_coefficients": [
+              0.04052734375
+            ]
+          },
+          "bw.simt.store.W4": {
+            "features": [
+              "one",
+              "invU"
+            ],
+            "coefficients": [
+              8,
+              20
+            ],
+            "max_features": [
+              "realBy"
+            ],
+            "max_coefficients": [
+              0.01416015625
+            ]
+          },
+          "bw.simt.store.W8": {
+            "features": [
+              "one",
+              "invU"
+            ],
+            "coefficients": [
+              10,
+              20
+            ],
+            "max_features": [
+              "realBy"
+            ],
+            "max_coefficients": [
+              0.01416015625
+            ]
+          },
+          "bw.simt.store.W16": {
+            "features": [
+              "one",
+              "invU"
+            ],
+            "coefficients": [
+              14,
+              30
+            ],
+            "max_features": [
+              "realBy"
+            ],
+            "max_coefficients": [
+              0.01904296875
+            ]
+          },
+          "bw.simt.store.W32": {
+            "features": [
+              "one",
+              "invU"
+            ],
+            "coefficients": [
+              2,
+              70
+            ],
+            "max_features": [
+              "realBy"
+            ],
+            "max_coefficients": [
+              0.01416015625
+            ]
+          },
+          "bw.simt.store.W64": {
+            "features": [
+              "one",
+              "invU"
+            ],
+            "coefficients": [
+              -4,
+              140
+            ],
+            "max_features": [
+              "realBy"
+            ],
+            "max_coefficients": [
+              0.01318359375
+            ]
+          }
+        },
+        "tables": {
+          "load.eb2": {
+            "te_knots": [
+              8,
+              16,
+              32,
+              64,
+              128,
+              256
+            ],
+            "by_knots": [
+              2048,
+              4096,
+              8192,
+              16384,
+              32768,
+              65536
+            ],
+            "cost_ns": [
+              [
+                197.588,
+                215.521,
+                318.173,
+                577.761,
+                1454.744,
+                3662.898
+              ],
+              [
+                223.486,
+                263.272,
+                308.591,
+                534.474,
+                956.963,
+                1713.42
+              ],
+              [
+                281.373,
+                301.784,
+                459.439,
+                735.843,
+                1166.333,
+                1848.672
+              ],
+              [
+                313.546,
+                536.374,
+                917.561,
+                1153.478,
+                1509.823,
+                1976.254
+              ],
+              [
+                2541.379,
+                2953.653,
+                3432.809,
+                3989.695,
+                4535.39,
+                5155.722
+              ],
+              [
+                5044.251,
+                6672.577,
+                8826.539,
+                11675.817,
+                15444.866,
+                31569.341
+              ]
+            ]
+          },
+          "load.eb4": {
+            "te_knots": [
+              8,
+              16,
+              32,
+              64,
+              128
+            ],
+            "by_knots": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536
+            ],
+            "cost_ns": [
+              [
+                212.946,
+                238.997,
+                393.915,
+                776.797,
+                4686.991
+              ],
+              [
+                258.154,
+                288.01,
+                409.547,
+                785.475,
+                2872.877
+              ],
+              [
+                299.241,
+                311.76,
+                464.619,
+                817.77,
+                2594.282
+              ],
+              [
+                2127.655,
+                1693.093,
+                1347.288,
+                1634.349,
+                4891.047
+              ],
+              [
+                3665.763,
+                5126.585,
+                7169.549,
+                10026.644,
+                23370.885
+              ]
+            ]
+          },
+          "store.eb2": {
+            "te_knots": [
+              8,
+              16,
+              32,
+              64,
+              128,
+              256,
+              512
+            ],
+            "by_knots": [
+              2048,
+              4096,
+              8192,
+              16384,
+              32768,
+              65536
+            ],
+            "cost_ns": [
+              [
+                80.41,
+                162.78,
+                318.841,
+                638.06,
+                1283.885,
+                2583.397
+              ],
+              [
+                79.338,
+                164.107,
+                319.229,
+                635.615,
+                1271.804,
+                2544.756
+              ],
+              [
+                78.68,
+                158.167,
+                325.407,
+                636.71,
+                1273.369,
+                2546.635
+              ],
+              [
+                79.017,
+                157.75,
+                314.932,
+                646.129,
+                1276.618,
+                2522.337
+              ],
+              [
+                81.374,
+                160.881,
+                318.072,
+                628.847,
+                1288.303,
+                2639.314
+              ],
+              [
+                165.238,
+                274.416,
+                455.732,
+                756.848,
+                1256.921,
+                2087.407
+              ],
+              [
+                90.918,
+                192.263,
+                406.574,
+                859.773,
+                1818.14,
+                3844.777
+              ]
+            ]
+          },
+          "store.eb4": {
+            "te_knots": [
+              8,
+              16,
+              32,
+              64,
+              128,
+              256,
+              512
+            ],
+            "by_knots": [
+              4096,
+              8192,
+              16384,
+              32768,
+              65536,
+              131072
+            ],
+            "cost_ns": [
+              [
+                116.418,
+                234.743,
+                467.358,
+                935.782,
+                1892.568,
+                3827.617
+              ],
+              [
+                99.009,
+                234.883,
+                468.506,
+                935.752,
+                1890.159,
+                3817.999
+              ],
+              [
+                104.441,
+                197.914,
+                470.005,
+                935.99,
+                1896.654,
+                3843.304
+              ],
+              [
+                100.553,
+                203.329,
+                411.154,
+                939.022,
+                1904.125,
+                3861.136
+              ],
+              [
+                196.41,
+                314.265,
+                502.838,
+                804.563,
+                1984.767,
+                4896.201
+              ],
+              [
+                280.62,
+                446.255,
+                709.654,
+                1128.522,
+                1794.625,
+                2853.892
+              ],
+              [
+                741.62,
+                1006.509,
+                1366.01,
+                1853.917,
+                2516.092,
+                3414.78
+              ]
+            ]
+          }
         }
       }
     },
@@ -1151,7 +1932,7 @@
           "maximum_iteration_count": 16,
           "minimum_source_program_count": 16,
           "maximum_source_program_count": 32,
-          "iteration_system_cycles": 357.0,
+          "iteration_system_cycles": 357,
           "startup_intercept_system_cycles": -2450.21930016352,
           "startup_sqrt_program_system_cycles": 811.17575695736,
           "evidence": "data_provider/950pr_simt_single_result_row_reduction_recurrence_20261009.json; the structural fit uses P16/T4, P16/T16 and P32/T16 endpoints for one FP32 extent-128 reduction per dynamic recurrence iteration. P16/T8 and independent P24/T8/T12 cases are interpolation holdouts. Matching uses only TTIR recurrence/reduction geometry, trip count, factor and source launch count."
@@ -1486,17 +2267,17 @@
     "simd_rank2_strided_direct_load_completion": {
       "minimum_elements": 16,
       "maximum_elements": 128,
-      "startup_system_cycles": 150.0,
+      "startup_system_cycles": 150,
       "per_element_system_cycles": 4.5,
-      "maximum_residual_system_cycles": 440.0,
+      "maximum_residual_system_cycles": 440,
       "evidence": "data_provider/950pr_simd_rank2_direct_load_completion_20261011.json; fresh one-program whole-SIMD rank-2 direct block-pointer copy sweep at 2x8, 8x8, 4x16 and 8x16 with a non-unit inner source stride, plus a contiguous-inner-stride exclusion. The residual is profiler completion minus the compiler-derived Stage resources and generic boundary. The bounded startup-plus-element formula leaves the 4x8 geometry as a holdout at +0.40%; it uses rank, direct-address provenance, inner-stride proof and tile elements only."
     },
     "simt_rank2_strided_direct_load_completion": {
       "minimum_elements": 16,
       "maximum_elements": 128,
-      "startup_system_cycles": 275.0,
+      "startup_system_cycles": 275,
       "per_element_system_cycles": 1.1,
-      "maximum_target_system_cycles": 420.0,
+      "maximum_target_system_cycles": 420,
       "evidence": "data_provider/950pr_simt_rank2_direct_load_completion_20261011.json; fresh Auto-selected whole-SIMT one-program rank-2 direct block-pointer copies at 16/32/64/128 elements after the independently measured whole-SIMD residual made the route competitive. The bounded target uses only direct-address provenance, non-unit inner source stride and tile elements; the unit-inner-stride control is excluded."
     },
     "rank2_interleaved_prefix_scan_completion": {
@@ -1506,14 +2287,14 @@
       "maximum_scan_extent": 256,
       "minimum_independent_sequences": 4,
       "maximum_independent_sequences": 8,
-      "startup_system_cycles": 200.0,
-      "per_element_system_cycles": 3.0,
+      "startup_system_cycles": 200,
+      "per_element_system_cycles": 3,
       "factor2_startup_system_cycles": 1206.6666666666667,
       "factor2_per_element_system_cycles": 0.9505208333333334,
       "factor2_reference_physical_program_count": 32,
-      "factor2_per_active_physical_program_system_cycles": 30.0,
-      "factor2_minimum_target_system_cycles": 1070.0,
-      "factor4_startup_system_cycles": 1300.0,
+      "factor2_per_active_physical_program_system_cycles": 30,
+      "factor2_minimum_target_system_cycles": 1070,
+      "factor4_startup_system_cycles": 1300,
       "factor4_per_element_system_cycles": 1.64,
       "evidence": "data_provider/950pr_rank2_interleaved_prefix_scan_completion_20261011.json; fresh production-mode (TRITON_DEBUG=0) A5 Auto sweep across source grids 32/64/128/256/512/1024, scan extents 64/128/256, 4/8 interleaved sequences and selected physical grids 4/8/32. Each factor curve is a serialized complete physical-group body, and the matcher requires exactly one direct rank-2 load, one add-prefix-scan and one direct rank-2 store with row-major interleaving."
     },
@@ -1566,7 +2347,7 @@
       "required_result_count": 2,
       "required_independent_sequences": 8,
       "minimum_active_ratio": 0.625,
-      "maximum_active_ratio": 1.0,
+      "maximum_active_ratio": 1,
       "elapsed_intercept_system_cycles": 1495.72223381,
       "elapsed_sqrt_program_system_cycles": 135.05901948,
       "elapsed_inactive_ratio_system_cycles": 474.91152811,
@@ -1597,16 +2378,16 @@
       "maximum_independent_sequences": 32,
       "minimum_scan_extent": 32,
       "maximum_scan_extent": 64,
-      "base_reduction_system_cycles": 39.0,
-      "per_independent_sequence_reduction_system_cycles": 13.0,
-      "maximum_reduction_system_cycles": 285.0,
+      "base_reduction_system_cycles": 39,
+      "per_independent_sequence_reduction_system_cycles": 13,
+      "maximum_reduction_system_cycles": 285,
       "large_minimum_independent_sequences": 64,
       "large_maximum_independent_sequences": 512,
       "large_minimum_scan_extent": 16,
       "large_maximum_scan_extent": 32,
-      "large_base_reduction_system_cycles": 211.0,
+      "large_base_reduction_system_cycles": 211,
       "large_per_independent_sequence_reduction_system_cycles": 2.75,
-      "large_maximum_reduction_system_cycles": 1611.0,
+      "large_maximum_reduction_system_cycles": 1611,
       "evidence": "data_provider/950pr_simt_multi_sequence_minmax_scan_completion_20261009.json plus fresh A5 extent-16/32 sweeps over 64/128/256/512 independent sequences. The original small-sequence formula remains unchanged; the bounded large-sequence branch shares the lowered helper envelope and leaves the seven new geometries within 7%. Matching uses only the TTIR prefix-scan tuple; single-sequence, reverse, multi-result and non-minmax scans remain exclusion controls."
     },
     "simd_straight_line_add_reduction_completion": {
@@ -1614,7 +2395,7 @@
       "maximum_rows": 64,
       "minimum_extent": 8,
       "maximum_extent": 32,
-      "shared_completion_system_cycles": 100.0,
+      "shared_completion_system_cycles": 100,
       "evidence": "data_provider/950pr_simd_straight_line_add_reduction_completion_20261009.json; paired add-versus-minmax row-reduction sweeps cover extents 8/16/32, rows 32/64, and active widths 3/4/8/12/16/17. The completion transfer is selected by the TTIR reduction combine region and bounded geometry only; min/max is an exclusion control."
     },
     "simd_two_loop_single_reduction_completion": {
@@ -1623,8 +2404,8 @@
       "minimum_runtime_iterations": 2,
       "maximum_runtime_iterations": 5,
       "required_reduction_extent": 8192,
-      "first_iteration_system_cycles": 180.0,
-      "additional_iteration_system_cycles": 430.0,
+      "first_iteration_system_cycles": 180,
+      "additional_iteration_system_cycles": 430,
       "evidence": "data_provider/950pr_simd_two_loop_single_reduction_completion_20261009.json; development points cover Q=2/3 at columns 64/128/256 and the Q=5 row-count endpoint. The formula adds a serialized per-wave completion envelope to the compiler-derived two-loop plus one-add-reduction structure; it does not model pipeline overlap or inspect an operator name."
     },
     "tiny_straight_line_simt_memory_completion": {
@@ -1639,7 +2420,7 @@
         "16": -247.007538209923,
         "32": -19.507538209923,
         "64": 479.928676256791,
-        "128": 375.0,
+        "128": 375,
         "256": 631.781714828573
       },
       "evidence": "data_provider/950pr_simt_non_affine_rank1_memory_20261009.json; paired one-dimensional and channel-row structural families at source program counts 8/16/32/64/128/256. Curve points use the paired-layout center; the P128 point is the robust center of fresh-process medians on cards 0/2/4/5 plus the independent flat-layout measurement. Matching uses the compiler-proven non-affine FP address DAG, rank-one 32-element load/store geometry and source program count, never an operator or kernel name."

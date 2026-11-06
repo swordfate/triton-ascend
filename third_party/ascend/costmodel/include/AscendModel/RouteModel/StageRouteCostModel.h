@@ -507,10 +507,15 @@ struct StageResourceCycles {
   /// separate receipt-owned term; diagnostic decomposition, not extra terms.
   double stridedShortLoadCompletion = 0.0;
   double stridedShortStoreCompletion = 0.0;
+  /// Closed-form contiguous load/store cycles claimed by
+  /// mapContiguousMemoryCompletion.  Same receipt contract: already included
+  /// in load/store, diagnostic decomposition plus route-side ownership input.
+  double contiguousClosedFormLoad = 0.0;
+  double contiguousClosedFormStore = 0.0;
   double criticalPath = 0.0;
   bool indirectMemoryAnalyticalFallback = false;
 
-  std::array<std::pair<llvm::StringRef, double>, 53> keyedValues() const;
+  std::array<std::pair<llvm::StringRef, double>, 55> keyedValues() const;
   bool isFiniteAndNonNegative() const;
   llvm::json::Object toJSON() const;
   /// Preserve every non-zero resource while omitting default-valued

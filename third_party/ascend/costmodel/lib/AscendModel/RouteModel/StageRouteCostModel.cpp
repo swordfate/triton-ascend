@@ -1114,7 +1114,7 @@ llvm::json::Object StageModelFeatures::toJSON() const {
   return result;
 }
 
-std::array<std::pair<llvm::StringRef, double>, 53>
+std::array<std::pair<llvm::StringRef, double>, 55>
 StageResourceCycles::keyedValues() const {
   return {
       {{"setup", setup},
@@ -1184,6 +1184,10 @@ StageResourceCycles::keyedValues() const {
         stridedShortLoadCompletion},
        {"strided_short_store_completion_per_iteration",
         stridedShortStoreCompletion},
+       {"contiguous_closed_form_load_per_iteration",
+        contiguousClosedFormLoad},
+       {"contiguous_closed_form_store_per_iteration",
+        contiguousClosedFormStore},
        {"critical_path_per_iteration", criticalPath}}};
 }
 
@@ -2877,10 +2881,23 @@ static bool applyRuntimeSchedule(StageRoutePlan &plan,
       const LogicalStageCost &stage = costTable.stages[index];
       const StageImplementationCost *selected =
           findImplementationCost(stage, plan.implementations[index]);
-      if (!selected || stage.model != "independent_pipelined_loop" ||
+      if (!selected)
+        continue;
+      // The stage's loads must be owned by a measured envelope, not by the
+      // analytical fallback.  The group curve owns them via
+      // continuousLoadGroup with an empty load resource; the contiguous
+      // closed form owns them via the load resource itself, covered exactly
+      // by its receipt.  Either way the sub-grid transfer applies.
+      const bool groupPricedLoads =
+          selected->resources.continuousLoadGroup > 0.0 &&
+          selected->resources.load <= 0.0;
+      const bool closedFormPricedLoads =
+          selected->resources.contiguousClosedFormLoad > 0.0 &&
+          selected->resources.load <=
+              selected->resources.contiguousClosedFormLoad + 1.0e-9;
+      if (stage.model != "independent_pipelined_loop" ||
           !stage.features.insideAutoBlockifyV1Loop ||
-          selected->resources.continuousLoadGroup <= 0.0 ||
-          selected->resources.load > 0.0)
+          (!groupPricedLoads && !closedFormPricedLoads))
         continue;
       const double adjustment =
           std::min(selected->resources.setup,

@@ -4,6 +4,7 @@
 #include "AscendModel/RouteModel/Models/IndirectGatherMemoryCostModel.h"
 #include "mlir/IR/BuiltinTypes.h"
 
+#include "AscendModel/RouteModel/Models/ContiguousLdStCostModel.h"
 #include "AscendModel/RouteModel/Models/StridedShortCostModel.h"
 #include "AscendModel/RouteModel/Reduction/ReductionCostModel.h"
 
@@ -13,6 +14,8 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <cstdlib>
+#include <tuple>
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -476,6 +479,170 @@ static void mapStridedShortMemoryCompletion(
     }
   }
 }
+
+/// Price the contiguous (inner stride == 1) direct accesses of one Stage with
+/// the calibrated closed form.  Masked accesses use the FormB slots.  Accesses
+/// this pass prices are recorded in `layout` and `claimed`, so the group curves
+/// further down do not charge them again.
+static void mapContiguousMemoryCompletion(
+    const LogicalStage &stage, const StageWorkload &work,
+    const StageModeProfile &profile, StageResourceCycles &resources, bool simd,
+    int64_t superblockFactor, LayoutCoverage &layout,
+    std::vector<const StageMemoryAccess *> &claimed) {
+  // Debug switch: ASCEND_MODEL_NO_CONTIG=1 restores the pre-integration
+  // behaviour so the same binary can produce both sides of an A/B comparison.
+  if (::getenv("ASCEND_MODEL_NO_CONTIG") != nullptr)
+    return;
+  if (stage.features.synchronizationCount != 0)
+    return;
+  // The contiguous calibration reports SYS_CNT nanoseconds, and every Stage
+  // resource pool here is system cycles at 1 GHz
+  // (kernelTiming.systemCounterFrequencyMHz == 1000): one calibrated
+  // nanosecond is exactly one system cycle, so no clock conversion applies.
+  constexpr double kCyclesPerNanosecond = 1.0;
+  // The throughput fit carries a 1/unroll term, and unroll means how many
+  // same-shape transfers are in flight in one iteration.  Count them so the
+  // formula is evaluated at the real concurrency instead of at one.
+  std::map<std::tuple<bool, int64_t, int64_t, bool>, int64_t> groupSize;
+  for (const StageMemoryAccess &access : work.memoryAccesses) {
+    if (access.count <= 0.0)
+      continue;
+    const auto layoutClass = access.layoutClass();
+    if (layoutClass != StageMemoryAccess::LayoutClass::ContiguousShort &&
+        layoutClass != StageMemoryAccess::LayoutClass::ContiguousWide)
+      continue;
+    if (!access.hasStaticLayout() || access.elementBits / 8 <= 0)
+      continue;
+    const auto shape = accessShape(access);
+    if (!shape)
+      continue;
+    groupSize[std::make_tuple(access.store, shape->second,
+                              int64_t(access.elementBits / 8),
+                              access.masked)] += static_cast<int64_t>(access.count);
+  }
+
+  // Same-shape streams in one iteration are priced as one group: the formula
+  // is evaluated once at that concurrency, then scaled by the group size.
+  double totalLoad = 0.0;
+  double totalStore = 0.0;
+  for (const StageMemoryAccess &access : work.memoryAccesses) {
+    if (access.count <= 0.0)
+      continue;
+    const auto layoutClass = access.layoutClass();
+    if (layoutClass != StageMemoryAccess::LayoutClass::ContiguousShort &&
+        layoutClass != StageMemoryAccess::LayoutClass::ContiguousWide)
+      continue;
+    if (!access.hasStaticLayout())
+      continue;
+    if (access.addressDependsOnLoadedIndex ||
+        access.addressHasNonAffineTensorComputation ||
+        access.addressHasTensorControlFlowSelection)
+      continue;
+    if (access.effectiveRank() > 2)
+      continue;
+    if (access.elementBits / 8 <= 0)
+      continue;
+    const auto shape = accessShape(access);
+    if (!shape)
+      continue;
+    contiguous_ldst::ContiguousAccessStats stats;
+    // Whole-kernel SuperBlock groups F logical programs into one physical
+    // program whose F warps issue their same-shape accesses concurrently.
+    // The closed form is calibrated on that group geometry (its W term
+    // already prices the in-group concurrency), so evaluate the merged
+    // access once at elements*F and keep the per-program share below: the
+    // Stage aggregation multiplies per-program resources by F again, which
+    // then restores the group wall clock instead of multiplying a latency
+    // by F.
+    const int64_t groupFactor =
+        simd ? 1 : std::max<int64_t>(1, superblockFactor);
+    stats.elements = shape->second * groupFactor;
+    stats.elementBytes = access.elementBits / 8;
+    // The SIMD formula has no warp term; SIMT segments are calibrated per warp.
+    stats.warps = simd ? 1 : std::max<int64_t>(1, profile.activeWarpCount);
+    stats.store = access.store;
+    stats.masked = access.masked;
+    stats.simd = simd;
+    const auto groupKey = std::make_tuple(access.store, shape->second,
+                                          int64_t(access.elementBits / 8),
+                                          access.masked);
+    const auto groupIt = groupSize.find(groupKey);
+    const int64_t groupCount =
+        groupIt == groupSize.end() ? int64_t{1}
+                                   : std::max<int64_t>(1, groupIt->second);
+    stats.concurrency = groupCount;
+    // Latency curves assume the loop serialises on the access; without a
+    // dependency across iterations the accesses pipeline instead.
+    // A loop pipelines across iterations; a straight-line stage pipelines a
+    // group of same-shape accesses exactly like the unrolled throughput
+    // calibration (measured on 950PR: a 3x4 KiB SIMD fp32 load group costs
+    // 169 ns total vs bw.simd.load@u=3 = 150 ns, and a 4x64 B SIMT group is
+    // flat at ~120 ns in N, matching the shared-latency shape).  Such a
+    // group therefore streams even without a loop; a lone single access
+    // keeps the latency price.
+    const bool streams = stage.features.hasLoop || stage.iterationCount > 1 ||
+                         access.count > 1.0 || groupCount > 1;
+    stats.pipelined = streams && !stage.features.hasLoopCarriedDataDependency;
+    if (!stats.isValid())
+      continue;
+    // te is a power of two for every unmasked SIMT access (both the element
+    // count and the warp count are), so there is no band between the curve
+    // and the table regimes to guard against.
+    if (!stats.simd) {
+      const double te = static_cast<double>(stats.elements) /
+                        (32.0 * static_cast<double>(stats.warps));
+      if (te >= 8.0) {
+        const auto table = profile.contiguous.tables.find(
+            (stats.store ? "store.eb" : "load.eb") +
+            std::to_string(stats.elementBytes));
+        if (table == profile.contiguous.tables.end() ||
+            !table->second.isValid())
+          continue;
+      }
+    }
+    // Sub-cacheline accesses have their own measured segments (small.<dir>.
+    // eb<n>.<main|deg|line64>), so they are claimed here rather than skipped.
+    const double ns = contiguous_ldst::estimateContiguousCompletionNs(stats, profile.contiguous);
+    // Outside the calibrated domain the analytical fallback keeps the bytes.
+    if (!(ns > 0.0))
+      continue;
+    // A group of same-shape accesses inside one iteration shares one latency:
+    // the first pays the calibrated cost, the rest stream at a measured rate.
+    // groupFactor divides the group wall clock back into the per-program
+    // share that the resource pools (and the xF Stage aggregation) expect.
+    const double total =
+        ns / groupFactor * kCyclesPerNanosecond * access.count;
+    const double warpInstructions =
+        access.count * llvm::divideCeil(shape->second, int64_t(32));
+    claimed.push_back(&access);
+    if (access.store) {
+      totalStore += total;
+      layout.storeBytes += access.count * shape->first;
+      layout.storeOperations += access.count;
+      layout.storeWarpInstructions += warpInstructions;
+      layout.storeShapes[*shape] += access.count;
+    } else {
+      totalLoad += total;
+      layout.loadBytes += access.count * shape->first;
+      layout.loadOperations += access.count;
+      layout.loadWarpInstructions += warpInstructions;
+      layout.loadShapes[*shape] += access.count;
+    }
+  }
+  const double sum = totalLoad + totalStore;
+  if (sum <= 0.0)
+    return;
+  // The baseline accumulates load and store additively; this pass keeps the
+  // same convention instead of inventing an overlap factor between them.
+  resources.load += totalLoad;
+  resources.store += totalStore;
+  // Receipt for route-side ownership rules (e.g. the sub-grid load-group
+  // startup transfer): the closed form owns exactly these load cycles, so
+  // they can be recognized as measured-envelope work rather than fallback.
+  resources.contiguousClosedFormLoad += totalLoad;
+  resources.contiguousClosedFormStore += totalStore;
+}
+
 
 /// The single string form of a slot: the profile JSON key.
 
@@ -1298,9 +1465,10 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
             std::optional<double> calibratedReduction = std::nullopt,
             StageMemoryCost fitted = {}) {
   StageResourceCycles resources;
-  // Accesses priced by the closed-form strided-direct mechanism.  The masked
-  // strided copy floor yields on them and stays in force for everything else.
-  std::vector<const StageMemoryAccess *> stridedShortAlreadyClaimed;
+  // Accesses already priced by a closed-form mechanism (strided-direct or
+  // contiguous).  The group curves below yield on them, so nothing is charged
+  // twice.
+  std::vector<const StageMemoryAccess *> closedFormClaimed;
   StageWorkload work = stage.workload;
   if (wholeSimt)
     mapCompositeDotPaths(work, profile, superblockFactor, resources);
@@ -1812,13 +1980,19 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
     // Runs before the load-group curve below, and before the masked-copy curve
     // further down, so both can see which accesses this pass already priced.
     mapStridedShortMemoryCompletion(stage, work, profile, resources, simd,
-                                    layout, stridedShortAlreadyClaimed);
+                                    layout, closedFormClaimed);
+    // Contiguous (stride == 1) accesses are claimed by their own calibrated
+    // closed form; the analytical fallback and the group curves below see them
+    // as already priced.
+    mapContiguousMemoryCompletion(stage, work, profile, resources, simd,
+                                   superblockFactor, layout, closedFormClaimed);
     // The store-group curve below must not price a store this pass already did.
     const bool storesClaimedByClosedForm = std::any_of(
-        stridedShortAlreadyClaimed.begin(), stridedShortAlreadyClaimed.end(),
+        closedFormClaimed.begin(), closedFormClaimed.end(),
         [](const StageMemoryAccess *access) { return access->store; });
     if (pipelinedSimd && profile.independentLoadGroupBytesPerCycle > 0.0) {
       std::vector<const StageMemoryAccess *> flatPrefix;
+      bool hasClaimedLoad = false;
       bool reachedFirstLoad = false;
       bool allLoadsRankOne = true;
       for (const StageMemoryAccess &access : work.memoryAccesses) {
@@ -1828,6 +2002,11 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
           continue;
         }
         reachedFirstLoad = true;
+        // A load already priced by a closed-form model must not be charged
+        // again by the independent-load-group envelope: the group curve is a
+        // complete envelope over the same bytes (measured +62% on copy).
+        if (llvm::is_contained(closedFormClaimed, &access))
+          hasClaimedLoad = true;
         auto shape = accessShape(access);
         if (access.count <= 0.0 || !shape || access.elementBits != 32 ||
             !access.isFlatContiguous())
@@ -1873,14 +2052,18 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
           // The one-stream evidence is a flat rank-one grid-stride transfer.
           (operationsPerGroup != 1 || allLoadsRankOne);
       if (groupCovered) {
+        // The kernel-startup term belongs to the stage, not to the group curve:
+        // a closed-form claim removes the group envelope but not the startup.
         resources.setup += profile.independentLoadGroupKernelStartupCycles;
-        resources.continuousLoadGroup +=
+        if (!hasClaimedLoad) {
+          resources.continuousLoadGroup +=
             groupOccurrences *
             (profile.independentLoadGroupIterationStartupCycles +
              bytesPerGroup / profile.independentLoadGroupBytesPerCycle);
-        layout.loadBytes += coveredBytes;
-        layout.loadOperations += coveredOperations;
-        layout.loadWarpInstructions += coveredWarpInstructions;
+          layout.loadBytes += coveredBytes;
+          layout.loadOperations += coveredOperations;
+          layout.loadWarpInstructions += coveredWarpInstructions;
+        }
       }
     }
 
@@ -1960,15 +2143,30 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
     };
     // A count curve describes one uninterrupted sequence.
     std::vector<StageMemoryAccess> accessGroups;
+    // Parallel flag: the group was already priced by a closed-form model
+    // (strided-direct or contiguous).  Claiming follows the identity of the
+    // original access, never a numeric comparison, so two mechanisms cannot
+    // both charge the same bytes.  Groups never merge across claim state: a
+    // partially claimed group would let this curve price bytes a closed form
+    // already owns.
+    std::vector<bool> groupClaimed;
     for (const StageMemoryAccess &access : work.memoryAccesses) {
+      const bool claimed =
+          llvm::is_contained(closedFormClaimed, &access);
       if (!accessGroups.empty() && accessGroups.back().store == access.store &&
           accessGroups.back().layoutKey() == access.layoutKey() &&
-          !hasExchange(access) && !hasExchange(accessGroups.back()))
+          groupClaimed.back() == claimed &&
+          !hasExchange(access) && !hasExchange(accessGroups.back())) {
         accessGroups.back().count += access.count;
-      else
+      } else {
         accessGroups.push_back(access);
+        groupClaimed.push_back(claimed);
+      }
     }
-    for (const auto &access : accessGroups) {
+    for (size_t groupIndex = 0; groupIndex < accessGroups.size(); ++groupIndex) {
+      const auto &access = accessGroups[groupIndex];
+      if (groupClaimed[groupIndex])
+        continue;
       if (!isContinuousMemoryStage(stage.costModelKind) ||
           stage.features.synchronizationCount != 0 || stage.features.hasLoop ||
           stage.features.conditionalBranchCount != 0)
@@ -1983,6 +2181,7 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
       const auto shape = accessShape(access);
       if (!groupCost || !shape)
         continue;
+      // Accesses already priced by a closed form are skipped below by identity.
       // Subtract the covered work in its original normalized unit. The new
       // profile's group envelope is not itself an instruction count.
       const double normalizedWarps =
@@ -1992,13 +2191,11 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
         layout.storeBytes += access.count * shape->first;
         layout.storeOperations += access.count;
         layout.storeWarpInstructions += access.count * normalizedWarps;
-        layout.storeShapes[*shape] += access.count;
       } else {
         resources.continuousLoadGroup += *groupCost;
         layout.loadBytes += access.count * shape->first;
         layout.loadOperations += access.count;
         layout.loadWarpInstructions += access.count * normalizedWarps;
-        layout.loadShapes[*shape] += access.count;
       }
     }
     struct CurvedMemoryCoverage {
@@ -2158,6 +2355,10 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
       if (!profile.maskedLoadStoreRmwResidualCyclesByRowBytesAndActiveRows
                .empty()) {
         for (const StageMemoryAccess &access : work.memoryAccesses) {
+          // Already priced by the contiguous closed form: charging the
+          // read-modify-write residual again would double count it.
+          if (llvm::is_contained(closedFormClaimed, &access))
+            continue;
           if (!access.store || access.count <= 0.0 || !access.masked ||
               access.elementBits != 16 ||
               !access.maskedStoreHasMatchingLoadDependency ||
@@ -2609,7 +2810,7 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
     resources.store = std::max(resources.store, resources.storeLayoutService);
   }
   mapMaskedStridedCopyCompletion(stage, work, profile, resources,
-                                 stridedShortAlreadyClaimed);
+                                 closedFormClaimed);
   return materializeControlFlow(stage, mode, resources, profile.controlFlow);
 }
 
