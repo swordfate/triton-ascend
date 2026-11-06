@@ -1206,7 +1206,87 @@ static std::string resolveProfileReference(llvm::StringRef ownerPath,
   return resolved.str().str();
 }
 
+/// Reads simd.memory.contiguous_ldst / simt.memory.contiguous_ldst.
+static void readContiguousLdStFit(ProfileJSONReader &reader,
+                                 const llvm::json::Object &memory,
+                                 llvm::StringRef context,
+                                 contiguous_ldst::ContiguousFit &fit) {
+  const auto *block = memory.getObject("contiguous_ldst");
+  if (!block)
+    return;
+  const std::string base = (context + ".contiguous_ldst").str();
+  fit.maxElements = reader.integer(*block, "max_elements", base);
+  fit.maxWarps = reader.integer(*block, "max_warps", base);
+  if (reader.string(*block, "evidence", base).empty())
+    reader.setError(base + ".evidence must identify calibration data");
+  const auto *formulas = reader.object(*block, "formulas", base);
+  if (!formulas) {
+    reader.setError(base + ".formulas is required");
+    return;
+  }
+  for (const auto &entry : *formulas) {
+    const auto *formula = entry.second.getAsObject();
+    const std::string path = base + ".formulas." + entry.first.str();
+    if (!formula) {
+      reader.setError(path + " must be an object");
+      continue;
+    }
+    contiguous_ldst::ContiguousFormula parsed;
+    if (const auto *features = formula->getArray("features"))
+      for (const auto &feature : *features)
+        parsed.features.push_back(feature.getAsString().value_or("").str());
+    if (const auto *coefficients = formula->getArray("coefficients"))
+      for (const auto &coefficient : *coefficients)
+        parsed.coefficients.push_back(coefficient.getAsNumber().value_or(0.0));
+    if (const auto *mf = formula->getArray("max_features"))
+      for (const auto &feature : *mf)
+        parsed.maxFeatures.push_back(feature.getAsString().value_or("").str());
+    if (const auto *mc = formula->getArray("max_coefficients"))
+      for (const auto &coefficient : *mc)
+        parsed.maxCoefficients.push_back(coefficient.getAsNumber().value_or(0.0));
+    if (!parsed.isValid()) {
+      reader.setError(path + " needs matching finite feature/coefficient lists");
+      continue;
+    }
+    fit.formulas[entry.first.str()] = std::move(parsed);
+  }
+  // Optional measured tables for the large per-thread regime.
+  if (const auto *tables = block->getObject("tables")) {
+    for (const auto &entry : *tables) {
+      const std::string path = base + ".tables." + entry.first.str();
+      const auto *table = entry.second.getAsObject();
+      if (!table) {
+        reader.setError(path + " must be an object");
+        continue;
+      }
+      contiguous_ldst::ContiguousTable parsed;
+      if (const auto *te = table->getArray("te_knots"))
+        for (const auto &knot : *te)
+          parsed.teKnots.push_back(knot.getAsNumber().value_or(0.0));
+      if (const auto *by = table->getArray("by_knots"))
+        for (const auto &knot : *by)
+          parsed.byKnots.push_back(knot.getAsNumber().value_or(0.0));
+      if (const auto *rows = table->getArray("cost_ns"))
+        for (const auto &row : *rows) {
+          std::vector<double> values;
+          if (const auto *cells = row.getAsArray())
+            for (const auto &cell : *cells)
+              values.push_back(cell.getAsNumber().value_or(0.0));
+          parsed.costsNs.push_back(std::move(values));
+        }
+      if (!parsed.isValid()) {
+        reader.setError(path + " needs ascending knots and a full cost grid");
+        continue;
+      }
+      fit.tables[entry.first.str()] = std::move(parsed);
+    }
+  }
+  if (!fit.isValid() || fit.formulas.empty())
+    reader.setError(base + " needs positive limits and at least one formula");
+}
+
 static void readStridedShortCompletionFits(
+
     ProfileJSONReader &reader, const llvm::json::Object &memory,
     llvm::StringRef context,
     std::map<std::string, StridedShortCompletionFit> &out) {
@@ -2780,6 +2860,7 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
       readMaskedStridedCopyCompletion(
           *memory, "masked_strided_store_copy_completion", "simd.memory",
           reader, simdProfile.maskedStridedStoreCopyCompletionByStrideBytes);
+      readContiguousLdStFit(reader, *memory, "simd.memory", simdProfile.contiguous);
     }
     if (const auto *dot = reader.object(*simd, "dot", "simd")) {
       simdProfile.dotSetupCycles = resolveNumberOrMeasurement(
@@ -2940,6 +3021,7 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
           reader, simtProfile.maskedStridedStoreCopyCompletionByStrideBytes);
       readStridedShortCompletionFits(reader, *memory, "simt.memory",
                                      simtProfile.stridedShortCompletionFits);
+      readContiguousLdStFit(reader, *memory, "simt.memory", simtProfile.contiguous);
     }
     readStageResources(reader, *simt, "simt", microbench, simtProfile);
     if (const auto *resources = simt->getObject("stage_resources")) {
