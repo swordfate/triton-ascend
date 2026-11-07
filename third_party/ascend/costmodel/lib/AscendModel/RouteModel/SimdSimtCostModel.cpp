@@ -1281,6 +1281,54 @@ static void readContiguousLdStFit(ProfileJSONReader &reader,
       fit.tables[entry.first.str()] = std::move(parsed);
     }
   }
+  // Optional FormS single-shot (u==1, non-pipelined) pricing.
+  if (const auto *forms = block->getObject("forms")) {
+    if (const auto *sf = forms->getObject("simd_formulas")) {
+      for (const auto &entry : *sf) {
+        const std::string path = base + ".forms.simd_formulas." + entry.first.str();
+        const auto *formula = entry.second.getAsObject();
+        if (!formula) {
+          reader.setError(path + " must be an object");
+          continue;
+        }
+        contiguous_ldst::ContiguousFormula parsed;
+        if (const auto *features = formula->getArray("features"))
+          for (const auto &feature : *features)
+            parsed.features.push_back(feature.getAsString().value_or("").str());
+        if (const auto *coefficients = formula->getArray("coefficients"))
+          for (const auto &coefficient : *coefficients)
+            parsed.coefficients.push_back(coefficient.getAsNumber().value_or(0.0));
+        if (!parsed.isValid()) {
+          reader.setError(path + " needs matching feature/coefficient lists");
+          continue;
+        }
+        fit.formSFormulas[entry.first.str()] = std::move(parsed);
+      }
+    }
+    auto readTables = [&](const char *key, const char *prefix) {
+      const auto *tblock = forms->getObject(key);
+      if (!tblock)
+        return;
+      for (const auto &entry : *tblock) {
+        const auto *table = entry.second.getAsObject();
+        if (!table)
+          continue;
+        std::map<int64_t, double> parsed;
+        for (const auto &cell : *table) {
+          int64_t by = 0;
+          if (!llvm::to_integer(cell.first, by))
+            continue;
+          if (const auto ns = cell.second.getAsNumber())
+            parsed[by] = *ns;
+        }
+        if (!parsed.empty())
+          fit.formSTables[std::string(prefix) + entry.first.str()] =
+              std::move(parsed);
+      }
+    };
+    readTables("simd_tables_te8", "ldst.");
+    readTables("simt_tables", "simt.");
+  }
   if (!fit.isValid() || fit.formulas.empty())
     reader.setError(base + " needs positive limits and at least one formula");
 }

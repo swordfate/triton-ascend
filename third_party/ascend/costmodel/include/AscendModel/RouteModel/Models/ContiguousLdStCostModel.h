@@ -23,6 +23,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -44,6 +45,11 @@ struct ContiguousAccessStats {
   /// so consecutive accesses pipeline and the throughput curves apply instead of
   /// the latency ones.
   bool pipelined = false;
+  /// True when the access repeats (inside a loop, repeated iterations, or a
+  /// same-shape group), regardless of whether it can pipeline.  A loop-carried
+  /// access has streams=true but pipelined=false: its marginal cost belongs to
+  /// the serial formulas, not the single-shot FormS tables.
+  bool streams = false;
   /// Number of same-shape accesses issued back to back in one iteration.  The
   /// throughput fit carries a 1/unroll term, so this is the factor that term
   /// divides by; 1 means the access stands alone.
@@ -125,6 +131,11 @@ struct ContiguousFit {
   llvm::StringMap<ContiguousFormula> formulas;
   /// Keyed by "<dir>.eb<elementWidth>", e.g. "load.eb2", "store.eb4".
   llvm::StringMap<ContiguousTable> tables;
+  /// FormS single-shot (u==1, non-pipelined) pricing: SIMD formulas for the
+  /// te<8 domain ("load.A", "load.B", "store") plus by->ns measured tables
+  /// ("ldst.load.A.eb4" = SIMD te>=8, "simt.load.A.fp32.W4" = SIMT).
+  llvm::StringMap<ContiguousFormula> formSFormulas;
+  llvm::StringMap<std::map<int64_t, double>> formSTables;
 
   bool isValid() const { return maxElements > 0 && maxWarps > 0; }
 };

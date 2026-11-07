@@ -258,6 +258,76 @@ double ContiguousTable::interpolate(double te, double by) const {
   return v0 * (1.0 - ty) + v1 * ty;
 }
 
+namespace {
+
+/// Linear interpolation on the by axis inside the measured interval; returns
+/// 0 (refuse) outside it so the caller keeps the pre-FormS path.
+double formsInterpBy(const std::map<int64_t, double> &table, int64_t by) {
+  if (table.empty() || by < table.begin()->first || by > table.rbegin()->first)
+    return 0.0;
+  auto hi = table.lower_bound(by);
+  if (hi->first == by)
+    return hi->second;
+  auto lo = std::prev(hi);
+  const double w = static_cast<double>(by - lo->first) /
+                   static_cast<double>(hi->first - lo->first);
+  return lo->second + w * (hi->second - lo->second);
+}
+
+/// FormS single-shot pricing for one lone non-pipelined access.
+double estimateFormSNs(const ContiguousAccessStats &astats,
+                       const ContiguousFit &fit) {
+  const int64_t by = astats.elements * astats.elementBytes;
+  const double bpt = static_cast<double>(by) /
+                     (32.0 * static_cast<double>(astats.warps));
+  const double te = static_cast<double>(astats.elements) /
+                    (32.0 * static_cast<double>(astats.warps));
+  const char *form = astats.masked ? "B" : "A";
+  if (astats.simd) {
+    if (te < 8.0) {
+      const std::string key =
+          astats.store ? "store" : (std::string("load.") + form);
+      auto it = fit.formSFormulas.find(key);
+      if (it == fit.formSFormulas.end())
+        return 0.0;
+      double ns = 0.0;
+      bool known = true;
+      for (size_t i = 0; i < it->second.features.size(); ++i) {
+        const double v = it->second.features[i] == "one"     ? 1.0
+                         : it->second.features[i] == "bpt"   ? bpt
+                         : it->second.features[i] == "log2eb"
+                             ? std::log2(static_cast<double>(astats.elementBytes))
+                             : -1.0;
+        if (v < 0.0) {
+          known = false;
+          break;
+        }
+        ns += it->second.coefficients[i] * v;
+      }
+      if (!known || !(ns > 0.0))
+        return 0.0;
+      return std::max(ns, 15.0);
+    }
+    const std::string key = (astats.store ? "ldst.store." : "ldst.load.") +
+                            std::string(form) + ".eb" +
+                            std::to_string(astats.elementBytes);
+    auto it = fit.formSTables.find(key);
+    return it == fit.formSTables.end() ? 0.0 : formsInterpBy(it->second, by);
+  }
+  static const char *kDts[] = {"",      "int8", "fp16", "",     "fp32",
+                               "",      "",     "",     "int64"};
+  const std::string key =
+      (astats.store ? "simt.store." : "simt.load.") + std::string(form) + "." +
+      (astats.elementBytes >= 1 && astats.elementBytes <= 8
+           ? kDts[astats.elementBytes]
+           : "") +
+      ".W" + std::to_string(astats.warps);
+  auto it = fit.formSTables.find(key);
+  return it == fit.formSTables.end() ? 0.0 : formsInterpBy(it->second, by);
+}
+
+} // namespace
+
 double estimateContiguousCompletionNs(const ContiguousAccessStats &astats,
                                       const ContiguousFit &fit) {
   if (!astats.isValid() || !fit.isValid())
@@ -299,6 +369,18 @@ double estimateContiguousCompletionNs(const ContiguousAccessStats &astats,
                  vectorized ? 1 : 0, what, key.c_str(), value);
   };
 
+  // FormS: a lone single-shot access with NO repetition context (no loop,
+  // no repeated iterations, no multi-access group) keeps the single-shot
+  // calibration.  A loop-carried access (streams=true but pipelined=false)
+  // must fall through to the serial formulas: the acc-chain amortizes the
+  // startup, so its marginal cost is below the single-shot value.
+  if (!astats.streams && astats.concurrency <= 1) {
+    const double formNs = estimateFormSNs(astats, fit);
+    if (formNs > 0.0) {
+      note("forms", formNs, "forms");
+      return formNs;
+    }
+  }
   // Below one 128 B SIMT cache line the transfer is latency bound: the cost is
   // set by how many warps each issue an access instruction and by whether
   // several of them contend for the same half line, not by the byte count.

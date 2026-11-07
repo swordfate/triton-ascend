@@ -542,6 +542,15 @@ static void mapContiguousMemoryCompletion(
       continue;
     if (access.elementBits / 8 <= 0)
       continue;
+    // The FormS tables were calibrated with dynamically-all-true masks:
+    // every element active at runtime, whole-block SIMD predication, normal
+    // MTE transfer.  A statically-computable partial mask (activeElementRatio
+    // provably < 1.0) makes the backend generate sub-line scattered writes
+    // that pay a read-modify-write penalty the all-true calibration never
+    // saw.  Such stores fall through so the RMW completion can apply.
+    if (access.store && access.masked &&
+        access.activeElementRatio < 1.0 - 1.0e-9)
+      continue;
     const auto shape = accessShape(access);
     if (!shape)
       continue;
@@ -580,8 +589,14 @@ static void mapContiguousMemoryCompletion(
     // flat at ~120 ns in N, matching the shared-latency shape).  Such a
     // group therefore streams even without a loop; a lone single access
     // keeps the latency price.
+    // An access inside a grid-stride loop body repeats even when the exact
+    // trip count is unknown at compile time (it depends on the runtime grid
+    // size).  Such an access must never use the single-shot FormS tables:
+    // mark it as streaming so the serial/throughput paths own it.
     const bool streams = stage.features.hasLoop || stage.iterationCount > 1 ||
-                         access.count > 1.0 || groupCount > 1;
+                         access.count > 1.0 || groupCount > 1 ||
+                         stage.features.insideGridStrideLoopBody;
+    stats.streams = streams;
     stats.pipelined = streams && !stage.features.hasLoopCarriedDataDependency;
     if (!stats.isValid())
       continue;
