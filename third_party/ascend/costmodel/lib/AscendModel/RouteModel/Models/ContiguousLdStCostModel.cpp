@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
+#include <limits>
 #include <vector>
 
 namespace mlir {
@@ -275,6 +276,11 @@ double formsInterpBy(const std::map<int64_t, double> &table, int64_t by) {
 }
 
 /// FormS single-shot pricing for one lone non-pipelined access.
+///
+/// All families price through physics formulas fitted on the (v5) single-shot
+/// calibration.  Feature names are shared by every family; the profile names
+/// which features each family uses.  Measured by->ns tables remain as a
+/// fallback for profiles calibrated before the formulas existed.
 double estimateFormSNs(const ContiguousAccessStats &astats,
                        const ContiguousFit &fit) {
   const int64_t by = astats.elements * astats.elementBytes;
@@ -282,7 +288,78 @@ double estimateFormSNs(const ContiguousAccessStats &astats,
                      (32.0 * static_cast<double>(astats.warps));
   const double te = static_cast<double>(astats.elements) /
                     (32.0 * static_cast<double>(astats.warps));
+  const double eb = static_cast<double>(astats.elementBytes);
+  const double warps = static_cast<double>(astats.warps);
+  const double nI = std::ceil(std::max(1.0, bpt / 16.0));
   const char *form = astats.masked ? "B" : "A";
+
+  // Physics feature vocabulary.  Unknown name => NaN => the family refuses.
+  auto featureValue = [&](const std::string &f) -> double {
+    if (f == "one")
+      return 1.0;
+    if (f == "te")
+      return te;
+    if (f == "teq")
+      return std::max(0.0, te - 1.0);
+    if (f == "bpt")
+      return bpt;
+    if (f == "eb")
+      return eb;
+    if (f == "log2eb")
+      return std::log2(eb);
+    // Per-thread serialized 16B instructions: the exposed L2 round trip per
+    // warp load chain scales with this, not with bytes.
+    if (f == "nI")
+      return nI;
+    // Total warp instructions across the 4 schedulers of the AIV.
+    if (f == "nImW")
+      return nI * std::max(1.0, warps / 4.0);
+    // LSU line service: 4x64B paths per AIV.
+    if (f == "bw")
+      return static_cast<double>(by) / 256.0;
+    if (f == "lines")
+      return static_cast<double>(by) / 128.0;
+    // Line rounds when the 4 warp schedulers share the stream.
+    if (f == "lnW4")
+      return (static_cast<double>(by) / 128.0) / std::max(1.0, warps / 4.0);
+    if (f == "pw")
+      return (static_cast<double>(by) / 256.0) / warps;
+    if (f == "pwsq")
+      return (static_cast<double>(by) / 256.0) / std::sqrt(warps);
+    if (f == "l2w")
+      return std::log2(warps);
+    if (f == "nIl2w")
+      return nI * std::log2(warps);
+    if (f == "sqte")
+      return std::sqrt(te);
+    // Store-drain rate dummies: bytes scaled per warp count, fitted per W.
+    for (double w : {1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0})
+      if (f == "wdr" + std::to_string(static_cast<int64_t>(w)))
+        return warps == w ? static_cast<double>(by) / 16384.0 : 0.0;
+    return std::numeric_limits<double>::quiet_NaN();
+  };
+  auto evalFormula = [&](const ContiguousFormula &formula) -> double {
+    double ns = 0.0;
+    for (size_t i = 0; i < formula.features.size(); ++i) {
+      const double v = featureValue(formula.features[i]);
+      if (!std::isfinite(v))
+        return 0.0;
+      ns += formula.coefficients[i] * v;
+    }
+    if (!formula.maxFeatures.empty()) {
+      // Bottleneck form max(branches): e.g. store = max(issue, drain).
+      double branch = 0.0;
+      for (size_t i = 0; i < formula.maxFeatures.size(); ++i) {
+        const double v = featureValue(formula.maxFeatures[i]);
+        if (!std::isfinite(v))
+          return 0.0;
+        branch += formula.maxCoefficients[i] * v;
+      }
+      ns = std::max(ns, branch);
+    }
+    return ns;
+  };
+
   if (astats.simd) {
     if (te < 8.0) {
       const std::string key =
@@ -290,39 +367,53 @@ double estimateFormSNs(const ContiguousAccessStats &astats,
       auto it = fit.formSFormulas.find(key);
       if (it == fit.formSFormulas.end())
         return 0.0;
-      double ns = 0.0;
-      bool known = true;
-      for (size_t i = 0; i < it->second.features.size(); ++i) {
-        const double v = it->second.features[i] == "one"     ? 1.0
-                         : it->second.features[i] == "bpt"   ? bpt
-                         : it->second.features[i] == "log2eb"
-                             ? std::log2(static_cast<double>(astats.elementBytes))
-                             : -1.0;
-        if (v < 0.0) {
-          known = false;
-          break;
-        }
-        ns += it->second.coefficients[i] * v;
-      }
-      if (!known || !(ns > 0.0))
-        return 0.0;
-      return std::max(ns, 15.0);
+      const double ns = evalFormula(it->second);
+      return (ns > 0.0) ? std::max(ns, 15.0) : 0.0;
     }
-    const std::string key = (astats.store ? "ldst.store." : "ldst.load.") +
-                            std::string(form) + ".eb" +
-                            std::to_string(astats.elementBytes);
-    auto it = fit.formSTables.find(key);
+    // te>=8: per-width family first, then the merged physics family.
+    const std::string stem = astats.store ? "ldst.store" : "ldst.load";
+    const std::string merged = stem + std::string(".") + form;
+    const std::string specific =
+        merged + ".eb" + std::to_string(astats.elementBytes);
+    for (const std::string &key : {specific, merged}) {
+      auto it = fit.formSFormulas.find(key);
+      if (it != fit.formSFormulas.end()) {
+        const double ns = evalFormula(it->second);
+        if (ns > 0.0)
+          return ns;
+      }
+    }
+    auto it = fit.formSTables.find(specific);
     return it == fit.formSTables.end() ? 0.0 : formsInterpBy(it->second, by);
   }
   static const char *kDts[] = {"",      "int8", "fp16", "",     "fp32",
                                "",      "",     "",     "int64"};
-  const std::string key =
-      (astats.store ? "simt.store." : "simt.load.") + std::string(form) + "." +
-      (astats.elementBytes >= 1 && astats.elementBytes <= 8
-           ? kDts[astats.elementBytes]
-           : "") +
-      ".W" + std::to_string(astats.warps);
-  auto it = fit.formSTables.find(key);
+  const std::string stem = astats.store ? "simt.store" : "simt.load";
+  const std::string merged = stem + std::string(".") + form;
+  const std::string dtype =
+      astats.elementBytes >= 1 && astats.elementBytes <= 8
+          ? kDts[astats.elementBytes]
+          : "";
+  // Per-dtype family first, then the merged-across-dtype family.
+  if (!dtype.empty()) {
+    auto it = fit.formSFormulas.find(merged + "." + dtype);
+    if (it != fit.formSFormulas.end()) {
+      const double ns = evalFormula(it->second);
+      if (ns > 0.0)
+        return ns;
+    }
+  }
+  {
+    auto it = fit.formSFormulas.find(merged);
+    if (it != fit.formSFormulas.end()) {
+      const double ns = evalFormula(it->second);
+      if (ns > 0.0)
+        return ns;
+    }
+  }
+  const std::string tableKey = merged + "." + dtype + ".W" +
+                               std::to_string(astats.warps);
+  auto it = fit.formSTables.find(tableKey);
   return it == fit.formSTables.end() ? 0.0 : formsInterpBy(it->second, by);
 }
 

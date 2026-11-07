@@ -1283,6 +1283,29 @@ static void readContiguousLdStFit(ProfileJSONReader &reader,
   }
   // Optional FormS single-shot (u==1, non-pipelined) pricing.
   if (const auto *forms = block->getObject("forms")) {
+    auto readFormSFormula = [&](const llvm::json::Object *formula,
+                                const std::string &path) {
+      contiguous_ldst::ContiguousFormula parsed;
+      if (const auto *features = formula->getArray("features"))
+        for (const auto &feature : *features)
+          parsed.features.push_back(feature.getAsString().value_or("").str());
+      if (const auto *coefficients = formula->getArray("coefficients"))
+        for (const auto &coefficient : *coefficients)
+          parsed.coefficients.push_back(coefficient.getAsNumber().value_or(0.0));
+      // Optional bottleneck branch: the formula evaluates to
+      // max(first, second), e.g. max(issue, drain) for stores.
+      if (const auto *mf = formula->getArray("max_features"))
+        for (const auto &feature : *mf)
+          parsed.maxFeatures.push_back(feature.getAsString().value_or("").str());
+      if (const auto *mc = formula->getArray("max_coefficients"))
+        for (const auto &coefficient : *mc)
+          parsed.maxCoefficients.push_back(coefficient.getAsNumber().value_or(0.0));
+      if (!parsed.isValid()) {
+        reader.setError(path + " needs matching feature/coefficient lists");
+        return false;
+      }
+      return true;
+    };
     if (const auto *sf = forms->getObject("simd_formulas")) {
       for (const auto &entry : *sf) {
         const std::string path = base + ".forms.simd_formulas." + entry.first.str();
@@ -1292,17 +1315,30 @@ static void readContiguousLdStFit(ProfileJSONReader &reader,
           continue;
         }
         contiguous_ldst::ContiguousFormula parsed;
-        if (const auto *features = formula->getArray("features"))
-          for (const auto &feature : *features)
-            parsed.features.push_back(feature.getAsString().value_or("").str());
-        if (const auto *coefficients = formula->getArray("coefficients"))
-          for (const auto &coefficient : *coefficients)
-            parsed.coefficients.push_back(coefficient.getAsNumber().value_or(0.0));
-        if (!parsed.isValid()) {
-          reader.setError(path + " needs matching feature/coefficient lists");
-          continue;
+        if (readFormSFormula(formula, path))
+          fit.formSFormulas[entry.first.str()] = std::move(parsed);
+      }
+    }
+    // Physics formulas replacing the measured tables: "simt_formulas" keys
+    // like "load.A" (merged across dtype) or "load.A.fp32"; "simd_te8_formulas"
+    // keys like "load.A" (merged across element width) or "load.A.eb4".
+    for (const auto *key : {"simt_formulas", "simd_te8_formulas"}) {
+      if (const auto *sf = forms->getObject(key)) {
+        const std::string prefix = std::string(key) == "simt_formulas"
+                                       ? std::string("simt.")
+                                       : std::string("ldst.");
+        for (const auto &entry : *sf) {
+          const std::string path =
+              base + ".forms." + key + "." + entry.first.str();
+          const auto *formula = entry.second.getAsObject();
+          if (!formula) {
+            reader.setError(path + " must be an object");
+            continue;
+          }
+          contiguous_ldst::ContiguousFormula parsed;
+          if (readFormSFormula(formula, path))
+            fit.formSFormulas[prefix + entry.first.str()] = std::move(parsed);
         }
-        fit.formSFormulas[entry.first.str()] = std::move(parsed);
       }
     }
     auto readTables = [&](const char *key, const char *prefix) {
