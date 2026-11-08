@@ -388,7 +388,13 @@ double estimateFormSNs(const ContiguousAccessStats &astats,
       const double ns = evalFormula(it->second);
       return (ns > 0.0) ? std::max(ns, 15.0) : 0.0;
     }
-    // te>=8: per-width family first, then the merged physics family.
+    // te>=8: per-width family first, then the merged physics family.  The
+    // single-shot families carry the exposed L2 round trip; they apply only
+    // in a single-program context where nothing hides that latency.  Multi-
+    // program grids overlap it across programs and keep the segment
+    // (throughput) pricing.
+    if (!astats.singleShotContext)
+      return 0.0;
     const std::string stem = astats.store ? "ldst.store" : "ldst.load";
     const std::string merged = stem + std::string(".") + form;
     const std::string specific =
@@ -404,6 +410,9 @@ double estimateFormSNs(const ContiguousAccessStats &astats,
     auto it = fit.formSTables.find(specific);
     return it == fit.formSTables.end() ? 0.0 : formsInterpBy(it->second, by);
   }
+  // SIMT accesses never reach this function while the FormS admission is
+  // SIMD-only; the SIMT families stay dormant until their latency
+  // calibration exists (probe_lnf_variants.py is the starting point).
   static const char *kDts[] = {"",      "int8", "fp16", "",     "fp32",
                                "",      "",     "",     "int64"};
   const std::string stem = astats.store ? "simt.store" : "simt.load";

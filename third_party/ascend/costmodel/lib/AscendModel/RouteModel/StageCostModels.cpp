@@ -490,7 +490,8 @@ static void mapContiguousMemoryCompletion(
     const LogicalStage &stage, const StageWorkload &work,
     const StageModeProfile &profile, StageResourceCycles &resources, bool simd,
     int64_t superblockFactor, LayoutCoverage &layout,
-    std::vector<const StageMemoryAccess *> &claimed) {
+    std::vector<const StageMemoryAccess *> &claimed,
+    int64_t logicalProgramCountHint, int64_t physicalCoreCountHint) {
   // Debug switch: ASCEND_MODEL_NO_CONTIG=1 restores the pre-integration
   // behaviour so the same binary can produce both sides of an A/B comparison.
   if (::getenv("ASCEND_MODEL_NO_CONTIG") != nullptr)
@@ -578,6 +579,25 @@ static void mapContiguousMemoryCompletion(
     stats.store = access.store;
     stats.masked = access.masked;
     stats.simd = simd;
+    // Single-shot context: after the SuperBlock merge, few enough physical
+    // programs run on the device that nothing fills a load stall - the
+    // first load's L2 round trip and the final store's write-back drain
+    // are exposed.  Multi-program grids (merged count > cores) pipeline
+    // the latency across programs and keep throughput pricing.
+    const int64_t mergedPrograms =
+        (logicalProgramCountHint + superblockFactor - 1) / superblockFactor;
+    stats.singleShotContext =
+        logicalProgramCountHint > 0 && physicalCoreCountHint > 0 &&
+        mergedPrograms <= physicalCoreCountHint;
+    if (::getenv("ASCEND_MODEL_CONTIG_DEBUG") != nullptr)
+      std::fprintf(stderr,
+                   "[contig-hint] hint=%lld merged=%lld cores=%lld ssc=%d "
+                   "store=%d simd=%d\n",
+                   static_cast<long long>(logicalProgramCountHint),
+                   static_cast<long long>(mergedPrograms),
+                   static_cast<long long>(physicalCoreCountHint),
+                   stats.singleShotContext ? 1 : 0, int(stats.store),
+                   int(simd));
     const auto groupKey = std::make_tuple(access.store, shape->second,
                                           int64_t(access.elementBits / 8),
                                           access.masked);
@@ -1557,7 +1577,8 @@ static std::optional<StageResourceCycles>
 mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
             StageMode mode, int64_t superblockFactor, bool wholeSimt,
             std::optional<double> calibratedReduction = std::nullopt,
-            StageMemoryCost fitted = {}) {
+            StageMemoryCost fitted = {}, int64_t logicalProgramCountHint = 0,
+            int64_t physicalCoreCountHint = 0) {
   StageResourceCycles resources;
   // Accesses already priced by a closed-form mechanism (strided-direct or
   // contiguous).  The group curves below yield on them, so nothing is charged
@@ -2079,7 +2100,9 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
     // closed form; the analytical fallback and the group curves below see them
     // as already priced.
     mapContiguousMemoryCompletion(stage, work, profile, resources, simd,
-                                   superblockFactor, layout, closedFormClaimed);
+                                   superblockFactor, layout, closedFormClaimed,
+                                   logicalProgramCountHint,
+                                   physicalCoreCountHint);
     // The store-group curve below must not price a store this pass already did.
     const bool storesClaimedByClosedForm = std::any_of(
         closedFormClaimed.begin(), closedFormClaimed.end(),
@@ -4475,7 +4498,8 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
           executionStage, modeProfile, implementation.mode,
           implementation.superblockFactor,
           implementation.mode == StageMode::SIMT && !implementation.localScope,
-          std::nullopt, fitted);
+          std::nullopt, fitted, partition.logicalProgramCountHint,
+          partition.physicalCoreCountHint);
       if (!resources)
         continue;
       auto mapping =
@@ -4694,7 +4718,9 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
               mapWorkload(stage, modeProfile, implementation.mode,
                           implementation.superblockFactor,
                           implementation.mode == StageMode::SIMT &&
-                              !implementation.localScope);
+                              !implementation.localScope,
+                          std::nullopt, {}, partition.logicalProgramCountHint,
+                          partition.physicalCoreCountHint);
           if (!fullResources)
             continue;
           const double unpartitionedTotal =

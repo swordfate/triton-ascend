@@ -54,6 +54,12 @@ struct ContiguousAccessStats {
   /// throughput fit carries a 1/unroll term, so this is the factor that term
   /// divides by; 1 means the access stands alone.
   int64_t concurrency = 1;
+  /// True when the access runs in a single-program straight-line context: no
+  /// sibling programs co-reside on the device, so nothing hides the first
+  /// load's L2 round trip and the SIMD te>=8 single-shot families apply.
+  /// Multi-program grids overlap the latency across programs and must keep
+  /// the throughput/segment pricing.
+  bool singleShotContext = false;
 
   bool isValid() const { return elements > 0 && elementBytes > 0 && warps > 0; }
 };

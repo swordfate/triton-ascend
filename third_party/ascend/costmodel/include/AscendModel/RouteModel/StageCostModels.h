@@ -119,6 +119,12 @@ struct LogicalStage {
 struct StagePartition {
   bool operationOwnershipComplete = false;
   int64_t modeledOperationCount = 0;
+  /// Launch-grid hint from the kernel metadata: programs that co-reside on
+  /// the device hide each other's load latency; a single program exposes it.
+  int64_t logicalProgramCountHint = 0;
+  /// Vector-core count: the single-shot context test is merged-program
+  /// count (hint / superblock factor) <= this.
+  int64_t physicalCoreCountHint = 0;
   std::vector<LogicalStage> stages;
 };
 

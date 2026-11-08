@@ -3507,6 +3507,8 @@ static llvm::Expected<StageCostModelSummary> evaluateStageModel(
       partitioner.partition(module, *anchorPlan, partitionerOptions);
   if (!partition)
     return partition.takeError();
+  (*partition).logicalProgramCountHint = logicalProgramCountHint;
+  (*partition).physicalCoreCountHint = physicalCoreCountHint;
   if (llvm::Error error = SimtRegisterPressureAnalysis().analyze(
           module, *partition, std::max<unsigned>(1, numWarps)))
     return std::move(error);

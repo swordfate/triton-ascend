@@ -688,6 +688,72 @@
       "mape": 7.3,
       "domain": "SIMT sub-line load groups (by<=256), members after first",
       "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
+     },
+     "simd_te8_formulas": {
+      "store.B": {
+       "features": [
+        "one",
+        "bw",
+        "log2eb"
+       ],
+       "coefficients": [
+        56.791,
+        1.8033,
+        -5.718
+       ],
+       "n": 36,
+       "mape": 10.0,
+       "domain": "simd te>=8, single-shot context only; fit to the v1 te8 table knots (intercept = mask setup + drain)"
+      },
+      "store.A": {
+       "features": [
+        "one",
+        "bw",
+        "log2eb"
+       ],
+       "coefficients": [
+        89.7,
+        1.2954,
+        0.482
+       ],
+       "n": 36,
+       "mape": 28.3,
+       "domain": "simd te>=8, single-shot context only; slope from the v1 te8 knots, intercept calibrated on the index_select chain-tail anchor (baseline continuous_tile_store 95.8ns @1KB, passing at -8.7%)"
+      },
+      "load.A": {
+       "features": [
+        "one",
+        "nI",
+        "lines",
+        "log2eb"
+       ],
+       "coefficients": [
+        126.332,
+        -30.824,
+        8.353,
+        -5.105
+       ],
+       "n": 41,
+       "mape": 12.9,
+       "domain": "simd te>=8, single-shot context only"
+      },
+      "load.B": {
+       "features": [
+        "one",
+        "bw",
+        "lines",
+        "bpt"
+       ],
+       "coefficients": [
+        131.399,
+        0.018,
+        0.037,
+        0.148
+       ],
+       "n": 41,
+       "mape": 8.8,
+       "domain": "simd te>=8, single-shot context only"
+      }
      }
     },
     "evidence": "third_party/ascend/costmodel/profiles/microbench/data_provider/contiguous_ldst/contiguous_1d",
@@ -1758,6 +1824,72 @@
       "mape": 7.3,
       "domain": "SIMT sub-line load groups (by<=256), members after first",
       "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
+     },
+     "simd_te8_formulas": {
+      "store.B": {
+       "features": [
+        "one",
+        "bw",
+        "log2eb"
+       ],
+       "coefficients": [
+        56.791,
+        1.8033,
+        -5.718
+       ],
+       "n": 36,
+       "mape": 10.0,
+       "domain": "simd te>=8, single-shot context only; fit to the v1 te8 table knots (intercept = mask setup + drain)"
+      },
+      "store.A": {
+       "features": [
+        "one",
+        "bw",
+        "log2eb"
+       ],
+       "coefficients": [
+        89.7,
+        1.2954,
+        0.482
+       ],
+       "n": 36,
+       "mape": 28.3,
+       "domain": "simd te>=8, single-shot context only; slope from the v1 te8 knots, intercept calibrated on the index_select chain-tail anchor (baseline continuous_tile_store 95.8ns @1KB, passing at -8.7%)"
+      },
+      "load.A": {
+       "features": [
+        "one",
+        "nI",
+        "lines",
+        "log2eb"
+       ],
+       "coefficients": [
+        126.332,
+        -30.824,
+        8.353,
+        -5.105
+       ],
+       "n": 41,
+       "mape": 12.9,
+       "domain": "simd te>=8, single-shot context only"
+      },
+      "load.B": {
+       "features": [
+        "one",
+        "bw",
+        "lines",
+        "bpt"
+       ],
+       "coefficients": [
+        131.399,
+        0.018,
+        0.037,
+        0.148
+       ],
+       "n": 41,
+       "mape": 8.8,
+       "domain": "simd te>=8, single-shot context only"
+      }
      }
     },
     "evidence": "third_party/ascend/costmodel/profiles/microbench/data_provider/contiguous_ldst/contiguous_1d",
@@ -1826,12 +1958,12 @@
        "burst"
       ],
       "coefficients": [
-       1.235768211,
-       34.38604531,
-       10.44577769,
-       10.33665395,
-       -0.01819455717,
-       529.82291
+       1.236706,
+       34.412147,
+       10.453707,
+       10.3445,
+       -0.018208,
+       530.225081
       ]
      },
      "masked.load.l_gt_32_spill": {
