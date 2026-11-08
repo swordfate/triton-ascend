@@ -521,6 +521,10 @@ struct StageResourceCycles {
   /// separate receipt-owned term; diagnostic decomposition, not extra terms.
   double stridedShortLoadCompletion = 0.0;
   double stridedShortStoreCompletion = 0.0;
+  /// Strided-short store operations claimed by the strided completion
+  /// (diagnostic attribution, already included in `store`).  Drives the
+  /// load-vs-scattered-store coexistence penalty.
+  double stridedShortStoreOperations = 0.0;
   /// Closed-form contiguous load/store cycles claimed by
   /// mapContiguousMemoryCompletion.  Same receipt contract: already included
   /// in load/store, diagnostic decomposition plus route-side ownership input.

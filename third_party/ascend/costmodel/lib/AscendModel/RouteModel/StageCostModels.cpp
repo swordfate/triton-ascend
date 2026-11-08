@@ -471,6 +471,7 @@ static void mapStridedShortMemoryCompletion(
       layout.storeOperations += access.count;
       layout.storeWarpInstructions += warpInstructions;
       resources.stridedShortStoreCompletion += total;
+      resources.stridedShortStoreOperations += access.count;
     } else {
       resources.load += total;
       layout.loadBytes += access.count * shape->first;
@@ -712,6 +713,28 @@ static void mapContiguousMemoryCompletion(
   // they can be recognized as measured-envelope work rather than fallback.
   resources.contiguousClosedFormLoad += totalLoad;
   resources.contiguousClosedFormStore += totalStore;
+  // Load-vs-scattered-store coexistence: a SIMT stage whose body interleaves
+  // contiguous loads with strided (scattered) stores pays drain/issue
+  // interference on every round - the isolated load calibration (bw curve)
+  // never saw a scattered store queue draining underneath it (measured on
+  // the stride-16 scatter: +84ns per load round over the isolated bw price).
+  // The rounds are the interleaved load/store pairs of one stage body.
+  if (!simd && profile.loadStridedStoreCoexistencePenaltyCycles > 0.0 &&
+      resources.stridedShortStoreOperations > 0.0 &&
+      layout.loadOperations > 0.0) {
+    const double rounds = std::min(layout.loadOperations,
+                                   resources.stridedShortStoreOperations);
+    const double penalty =
+        rounds * profile.loadStridedStoreCoexistencePenaltyCycles;
+    if (::getenv("ASCEND_MODEL_CONTIG_DEBUG") != nullptr)
+      std::fprintf(stderr,
+                   "[contig-coexist] loadOps=%.0f stridedStoreOps=%.0f "
+                   "rounds=%.0f penalty=%.1f\n",
+                   layout.loadOperations, resources.stridedShortStoreOperations,
+                   rounds, penalty);
+    resources.load += penalty;
+    resources.contiguousClosedFormLoad += penalty;
+  }
 }
 
 

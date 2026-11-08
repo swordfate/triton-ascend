@@ -3280,6 +3280,15 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
       readStridedShortCompletionFits(reader, *memory, "simt.memory",
                                      simtProfile.stridedShortCompletionFits);
       readContiguousLdStFit(reader, *memory, "simt.memory", simtProfile.contiguous);
+      if (const auto *coexist = memory->getObject(
+              "load_strided_store_coexistence")) {
+        simtProfile.loadStridedStoreCoexistencePenaltyCycles =
+            reader.number(*coexist, "penalty_system_cycles",
+                          "simt.memory.load_strided_store_coexistence");
+        simtProfile.loadStridedStoreCoexistenceEvidence =
+            reader.string(*coexist, "evidence",
+                          "simt.memory.load_strided_store_coexistence");
+      }
     }
     readStageResources(reader, *simt, "simt", microbench, simtProfile);
     if (const auto *resources = simt->getObject("stage_resources")) {

@@ -593,80 +593,6 @@
        "domain": "simt store, all dtypes merged, te<=64, floor 40ns"
       }
      },
-     "simd_te8_formulas": {
-      "load.A": {
-       "features": [
-        "one",
-        "nI",
-        "lines",
-        "log2eb"
-       ],
-       "coefficients": [
-        126.332,
-        -30.824,
-        8.353,
-        -5.105
-       ],
-       "n": 41,
-       "mape": 12.9,
-       "p95": 40.7,
-       "domain": "simd te>=8, floor: production clamps >=15ns"
-      },
-      "load.B": {
-       "features": [
-        "one",
-        "bw",
-        "lines",
-        "bpt"
-       ],
-       "coefficients": [
-        131.399,
-        0.018,
-        0.037,
-        0.148
-       ],
-       "n": 41,
-       "mape": 8.8,
-       "p95": 26.0,
-       "domain": "simd te>=8, floor: production clamps >=15ns"
-      },
-      "store.A": {
-       "features": [
-        "one",
-        "nI",
-        "log2eb",
-        "eb"
-       ],
-       "coefficients": [
-        4.208,
-        2.598,
-        1.059,
-        -0.364
-       ],
-       "n": 34,
-       "mape": 25.9,
-       "p95": 83.7,
-       "domain": "simd te>=8, floor: production clamps >=15ns"
-      },
-      "store.B": {
-       "features": [
-        "one",
-        "teq",
-        "nI",
-        "sqte"
-       ],
-       "coefficients": [
-        38.678,
-        -0.106,
-        3.528,
-        2.467
-       ],
-       "n": 39,
-       "mape": 6.7,
-       "p95": 19.8,
-       "domain": "simd te>=8, floor: production clamps >=15ns"
-      }
-     },
      "small.group.fp16.first": {
       "features": [
        "one",
@@ -1737,80 +1663,6 @@
        "domain": "simt store, all dtypes merged, te<=64, floor 40ns"
       }
      },
-     "simd_te8_formulas": {
-      "load.A": {
-       "features": [
-        "one",
-        "nI",
-        "lines",
-        "log2eb"
-       ],
-       "coefficients": [
-        126.332,
-        -30.824,
-        8.353,
-        -5.105
-       ],
-       "n": 41,
-       "mape": 12.9,
-       "p95": 40.7,
-       "domain": "simd te>=8, floor: production clamps >=15ns"
-      },
-      "load.B": {
-       "features": [
-        "one",
-        "bw",
-        "lines",
-        "bpt"
-       ],
-       "coefficients": [
-        131.399,
-        0.018,
-        0.037,
-        0.148
-       ],
-       "n": 41,
-       "mape": 8.8,
-       "p95": 26.0,
-       "domain": "simd te>=8, floor: production clamps >=15ns"
-      },
-      "store.A": {
-       "features": [
-        "one",
-        "nI",
-        "log2eb",
-        "eb"
-       ],
-       "coefficients": [
-        4.208,
-        2.598,
-        1.059,
-        -0.364
-       ],
-       "n": 34,
-       "mape": 25.9,
-       "p95": 83.7,
-       "domain": "simd te>=8, floor: production clamps >=15ns"
-      },
-      "store.B": {
-       "features": [
-        "one",
-        "teq",
-        "nI",
-        "sqte"
-       ],
-       "coefficients": [
-        38.678,
-        -0.106,
-        3.528,
-        2.467
-       ],
-       "n": 39,
-       "mape": 6.7,
-       "p95": 19.8,
-       "domain": "simd te>=8, floor: production clamps >=15ns"
-      }
-     },
      "small.group.fp16.first": {
       "features": [
        "one",
@@ -2443,6 +2295,10 @@
       "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
      }
     }
+   },
+   "load_strided_store_coexistence": {
+    "penalty_system_cycles": 84.0,
+    "evidence": "strided_scatter_f32_s16 in-context delta: 8 interleaved 1KB-load/stride-16-scatter rounds, measured kernel 4.302us vs isolated-bw model 3.631us; probe_te8/.. scripts, 2026-11-08 card2"
    }
   },
   "stage_resources": {

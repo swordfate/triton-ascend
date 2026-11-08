@@ -338,6 +338,11 @@ struct StageModeProfile {
   /// live in the profile under simd.memory.contiguous_ldst; see
   /// ContiguousLdStCostModel.h.
   contiguous_ldst::ContiguousFit contiguous;
+  /// Per-round penalty for a SIMT stage that interleaves contiguous loads
+  /// with strided (scattered) stores: each round's load pays drain/issue
+  /// interference on top of its isolated calibrated price.  Zero disables.
+  double loadStridedStoreCoexistencePenaltyCycles = 0.0;
+  std::string loadStridedStoreCoexistenceEvidence;
 
   int64_t computedAddressScalarizedLoadMinimumElements = 0;
   int64_t computedAddressScalarizedLoadMaximumElements = 0;
