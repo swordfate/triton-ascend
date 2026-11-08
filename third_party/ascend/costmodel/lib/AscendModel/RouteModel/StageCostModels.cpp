@@ -607,11 +607,17 @@ static void mapContiguousMemoryCompletion(
       const double te = static_cast<double>(stats.elements) /
                         (32.0 * static_cast<double>(stats.warps));
       if (te >= 8.0) {
-        const auto table = profile.contiguous.tables.find(
+        const std::string key =
             (stats.store ? "store.eb" : "load.eb") +
-            std::to_string(stats.elementBytes));
-        if (table == profile.contiguous.tables.end() ||
-            !table->second.isValid())
+            std::to_string(stats.elementBytes);
+        const bool hasFormula =
+            profile.contiguous.te8Formulas.count(key) > 0 ||
+            profile.contiguous.te8Formulas.count(
+                stats.store ? "store" : "load") > 0;
+        const auto table = profile.contiguous.tables.find(key);
+        const bool hasTable =
+            table != profile.contiguous.tables.end() && table->second.isValid();
+        if (!hasFormula && !hasTable)
           continue;
       }
     }

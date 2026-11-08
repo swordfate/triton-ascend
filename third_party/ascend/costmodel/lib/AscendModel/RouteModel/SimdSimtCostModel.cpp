@@ -1283,9 +1283,11 @@ static void readContiguousLdStFit(ProfileJSONReader &reader,
   }
   // Optional FormS single-shot (u==1, non-pipelined) pricing.
   if (const auto *forms = block->getObject("forms")) {
+    // Fills `parsed` in place from one formula object; false on a malformed
+    // entry (the error is recorded, the key is simply not registered).
     auto readFormSFormula = [&](const llvm::json::Object *formula,
-                                const std::string &path) {
-      contiguous_ldst::ContiguousFormula parsed;
+                                const std::string &path,
+                                contiguous_ldst::ContiguousFormula &parsed) {
       if (const auto *features = formula->getArray("features"))
         for (const auto &feature : *features)
           parsed.features.push_back(feature.getAsString().value_or("").str());
@@ -1315,7 +1317,7 @@ static void readContiguousLdStFit(ProfileJSONReader &reader,
           continue;
         }
         contiguous_ldst::ContiguousFormula parsed;
-        if (readFormSFormula(formula, path))
+        if (readFormSFormula(formula, path, parsed))
           fit.formSFormulas[entry.first.str()] = std::move(parsed);
       }
     }
@@ -1336,7 +1338,7 @@ static void readContiguousLdStFit(ProfileJSONReader &reader,
             continue;
           }
           contiguous_ldst::ContiguousFormula parsed;
-          if (readFormSFormula(formula, path))
+          if (readFormSFormula(formula, path, parsed))
             fit.formSFormulas[prefix + entry.first.str()] = std::move(parsed);
         }
       }
@@ -1364,6 +1366,20 @@ static void readContiguousLdStFit(ProfileJSONReader &reader,
     };
     readTables("simd_tables_te8", "ldst.");
     readTables("simt_tables", "simt.");
+    // Physics formulas replacing the legacy te>=8 bilinear knot tables.
+    if (const auto *tf = forms->getObject("te8_formulas")) {
+      for (const auto &entry : *tf) {
+        const std::string path = base + ".forms.te8_formulas." + entry.first.str();
+        const auto *formula = entry.second.getAsObject();
+        if (!formula) {
+          reader.setError(path + " must be an object");
+          continue;
+        }
+        contiguous_ldst::ContiguousFormula parsed;
+        if (readFormSFormula(formula, path, parsed))
+          fit.te8Formulas[entry.first.str()] = std::move(parsed);
+      }
+    }
   }
   if (!fit.isValid() || fit.formulas.empty())
     reader.setError(base + " needs positive limits and at least one formula");

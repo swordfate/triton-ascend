@@ -92,13 +92,11 @@ struct ContiguousFormula {
 
 /// One measured cost table over (elements-per-thread, bytes).
 ///
-/// Past four elements per thread the transfer is governed by the register
-/// allocator's spill placement, which steps rather than curves: the measured
-/// cost of a 8 KiB load reads 318 / 309 / 459 / 918 / 3433 ns for 8 / 16 / 32
-/// / 64 / 128 elements per thread.  No smooth form reproduces that (the best
-/// linear fit is 19% MAPE over a lattice re-measured to 1% repeatability), so
-/// the regime is stored as measured knots and interpolated bilinearly in
-/// (log2 elements-per-thread, log2 bytes).
+/// Legacy format for the te>=8 SIMT stream regime.  The old calibration's
+/// step-shaped values were an artifact of the probe kernel's own te-wide
+/// accumulator spilling, not memory behavior; the regime is now priced by
+/// the te8_formulas physics families (paired-control calibration).  The
+/// table path remains only so old profiles keep loading.
 struct ContiguousTable {
   std::vector<double> teKnots;              ///< elements per thread, ascending
   std::vector<double> byKnots;              ///< bytes, ascending
@@ -136,6 +134,10 @@ struct ContiguousFit {
   /// ("ldst.load.A.eb4" = SIMD te>=8, "simt.load.A.fp32.W4" = SIMT).
   llvm::StringMap<ContiguousFormula> formSFormulas;
   llvm::StringMap<std::map<int64_t, double>> formSTables;
+  /// SIMT te>=8 stream (loop-carried / pipelined) pricing: physics formulas
+  /// ("load.eb4" specific, "load" merged across width) replacing the legacy
+  /// bilinear knot tables; the tables remain as an old-profile fallback.
+  llvm::StringMap<ContiguousFormula> te8Formulas;
 
   bool isValid() const { return maxElements > 0 && maxWarps > 0; }
 };

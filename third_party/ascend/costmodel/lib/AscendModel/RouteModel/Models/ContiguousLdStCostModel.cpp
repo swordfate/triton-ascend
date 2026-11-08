@@ -275,6 +275,88 @@ double formsInterpBy(const std::map<int64_t, double> &table, int64_t by) {
   return lo->second + w * (hi->second - lo->second);
 }
 
+namespace {
+
+/// Shared physics feature vocabulary for the FormS single-shot families and
+/// the te>=8 stream families.  All features derive from the access geometry
+/// alone.  Unknown name => NaN => the family refuses.
+double physicsFeature(llvm::StringRef name, double te, double bpt,
+                      int64_t by, double warps, double eb) {
+  const double nI = std::ceil(std::max(1.0, bpt / 16.0));
+  const std::string f = name.str();
+  if (f == "one")
+    return 1.0;
+  if (f == "te")
+    return te;
+  if (f == "teq")
+    return std::max(0.0, te - 1.0);
+  if (f == "bpt")
+    return bpt;
+  if (f == "eb")
+    return eb;
+  if (f == "log2eb")
+    return std::log2(eb);
+  // Per-thread serialized 16B instructions: the exposed L2 round trip per
+  // warp load chain scales with this, not with bytes.
+  if (f == "nI")
+    return nI;
+  // Total warp instructions across the 4 schedulers of the AIV.
+  if (f == "nImW")
+    return nI * std::max(1.0, warps / 4.0);
+  // LSU line service: 4x64B paths per AIV.
+  if (f == "bw")
+    return static_cast<double>(by) / 256.0;
+  if (f == "lines")
+    return static_cast<double>(by) / 128.0;
+  // Line rounds when the 4 warp schedulers share the stream.
+  if (f == "lnW4")
+    return (static_cast<double>(by) / 128.0) / std::max(1.0, warps / 4.0);
+  if (f == "pw")
+    return (static_cast<double>(by) / 256.0) / warps;
+  if (f == "pwsq")
+    return (static_cast<double>(by) / 256.0) / std::sqrt(warps);
+  if (f == "l2w")
+    return std::log2(warps);
+  if (f == "nIl2w")
+    return nI * std::log2(warps);
+  if (f == "sqte")
+    return std::sqrt(te);
+  // Store-drain rate dummies: bytes scaled per warp count, fitted per W.
+  for (double w : {1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0})
+    if (f == "wdr" + std::to_string(static_cast<int64_t>(w)))
+      return warps == w ? static_cast<double>(by) / 16384.0 : 0.0;
+  return std::numeric_limits<double>::quiet_NaN();
+}
+
+/// Evaluates one formula (with its optional max branch) over the shared
+/// vocabulary; returns 0 on any unknown feature.
+double evalPhysicsFormula(const ContiguousFormula &formula, double te,
+                          double bpt, int64_t by, double warps, double eb) {
+  double ns = 0.0;
+  for (size_t i = 0; i < formula.features.size(); ++i) {
+    const double v =
+        physicsFeature(formula.features[i], te, bpt, by, warps, eb);
+    if (!std::isfinite(v))
+      return 0.0;
+    ns += formula.coefficients[i] * v;
+  }
+  if (!formula.maxFeatures.empty()) {
+    // Bottleneck form max(branches): e.g. store = max(issue, drain).
+    double branch = 0.0;
+    for (size_t i = 0; i < formula.maxFeatures.size(); ++i) {
+      const double v = physicsFeature(formula.maxFeatures[i], te, bpt, by,
+                                      warps, eb);
+      if (!std::isfinite(v))
+        return 0.0;
+      branch += formula.maxCoefficients[i] * v;
+    }
+    ns = std::max(ns, branch);
+  }
+  return ns;
+}
+
+} // namespace
+
 /// FormS single-shot pricing for one lone non-pipelined access.
 ///
 /// All families price through physics formulas fitted on the (v5) single-shot
@@ -290,74 +372,10 @@ double estimateFormSNs(const ContiguousAccessStats &astats,
                     (32.0 * static_cast<double>(astats.warps));
   const double eb = static_cast<double>(astats.elementBytes);
   const double warps = static_cast<double>(astats.warps);
-  const double nI = std::ceil(std::max(1.0, bpt / 16.0));
   const char *form = astats.masked ? "B" : "A";
 
-  // Physics feature vocabulary.  Unknown name => NaN => the family refuses.
-  auto featureValue = [&](const std::string &f) -> double {
-    if (f == "one")
-      return 1.0;
-    if (f == "te")
-      return te;
-    if (f == "teq")
-      return std::max(0.0, te - 1.0);
-    if (f == "bpt")
-      return bpt;
-    if (f == "eb")
-      return eb;
-    if (f == "log2eb")
-      return std::log2(eb);
-    // Per-thread serialized 16B instructions: the exposed L2 round trip per
-    // warp load chain scales with this, not with bytes.
-    if (f == "nI")
-      return nI;
-    // Total warp instructions across the 4 schedulers of the AIV.
-    if (f == "nImW")
-      return nI * std::max(1.0, warps / 4.0);
-    // LSU line service: 4x64B paths per AIV.
-    if (f == "bw")
-      return static_cast<double>(by) / 256.0;
-    if (f == "lines")
-      return static_cast<double>(by) / 128.0;
-    // Line rounds when the 4 warp schedulers share the stream.
-    if (f == "lnW4")
-      return (static_cast<double>(by) / 128.0) / std::max(1.0, warps / 4.0);
-    if (f == "pw")
-      return (static_cast<double>(by) / 256.0) / warps;
-    if (f == "pwsq")
-      return (static_cast<double>(by) / 256.0) / std::sqrt(warps);
-    if (f == "l2w")
-      return std::log2(warps);
-    if (f == "nIl2w")
-      return nI * std::log2(warps);
-    if (f == "sqte")
-      return std::sqrt(te);
-    // Store-drain rate dummies: bytes scaled per warp count, fitted per W.
-    for (double w : {1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0})
-      if (f == "wdr" + std::to_string(static_cast<int64_t>(w)))
-        return warps == w ? static_cast<double>(by) / 16384.0 : 0.0;
-    return std::numeric_limits<double>::quiet_NaN();
-  };
   auto evalFormula = [&](const ContiguousFormula &formula) -> double {
-    double ns = 0.0;
-    for (size_t i = 0; i < formula.features.size(); ++i) {
-      const double v = featureValue(formula.features[i]);
-      if (!std::isfinite(v))
-        return 0.0;
-      ns += formula.coefficients[i] * v;
-    }
-    if (!formula.maxFeatures.empty()) {
-      // Bottleneck form max(branches): e.g. store = max(issue, drain).
-      double branch = 0.0;
-      for (size_t i = 0; i < formula.maxFeatures.size(); ++i) {
-        const double v = featureValue(formula.maxFeatures[i]);
-        if (!std::isfinite(v))
-          return 0.0;
-        branch += formula.maxCoefficients[i] * v;
-      }
-      ns = std::max(ns, branch);
-    }
-    return ns;
+    return evalPhysicsFormula(formula, te, bpt, by, warps, eb);
   };
 
   if (astats.simd) {
@@ -606,19 +624,35 @@ double estimateContiguousCompletionNs(const ContiguousAccessStats &astats,
       }
     }
   }
-  // Measured-table regime: past eight elements per thread on a multi-line
-  // transfer, cost follows the function's spill placement rather than a
-  // curve.  Use the measured knots when the profile carries them.
+  // te>=8 stream regime: physics formulas fitted on the paired-control
+  // calibration (per-width family first, then the merged family).  The
+  // legacy bilinear knot tables remain as an old-profile fallback.
   if (!vectorized && te >= 8.0) {
-    const std::string key =
-        (isStore ? std::string("store.eb") : std::string("load.eb")) +
-        std::to_string(elemBytes);
-    const auto table = fit.tables.find(key);
+    const double by = static_cast<double>(astats.elements) *
+                      static_cast<double>(elemBytes);
+    const double warpsD = static_cast<double>(warps);
+    const double bpt =
+        by / (32.0 * std::max(1.0, warpsD));
+    const double ebD = static_cast<double>(elemBytes);
+    const std::string stem = isStore ? std::string("store") : std::string("load");
+    const std::string merged = stem;
+    const std::string specific = stem + ".eb" + std::to_string(elemBytes);
+    for (const std::string &key : {specific, merged}) {
+      const auto formula = fit.te8Formulas.find(key);
+      if (formula != fit.te8Formulas.end() && formula->second.isValid()) {
+        const double ns =
+            evalPhysicsFormula(formula->second, te, bpt,
+                               static_cast<int64_t>(by), warpsD, ebD);
+        if (ns > 0.0) {
+          note("te8", ns, key);
+          return ns;
+        }
+      }
+    }
+    const auto table = fit.tables.find(specific);
     if (table != fit.tables.end() && table->second.isValid()) {
-      const double by = static_cast<double>(astats.elements) *
-                        static_cast<double>(elemBytes);
       const double tableValue = table->second.interpolate(te, by);
-      note("table", tableValue, key);
+      note("table", tableValue, specific);
       return tableValue;
     }
   }
@@ -642,6 +676,7 @@ double estimateContiguousCompletionNs(const ContiguousAccessStats &astats,
   }
   if (!(ns > 0.0))
     return 0.0;
+  note("seg", ns, key.str());
   return ns;
 }
 
