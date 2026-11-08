@@ -365,160 +365,6 @@
    },
    "contiguous_ldst": {
     "forms": {
-     "te8_formulas": {
-      "load.eb1": {
-       "features": [
-        "one",
-        "nI",
-        "bw",
-        "nIl2w",
-        "nImW"
-       ],
-       "coefficients": [
-        2.448,
-        186.351,
-        40.46,
-        -78.838,
-        -87.732
-       ],
-       "n": 17,
-       "mape": 11.5,
-       "p95": 19.6
-      },
-      "load.eb2": {
-       "features": [
-        "one",
-        "pwsq",
-        "l2w",
-        "nIl2w",
-        "sqte"
-       ],
-       "coefficients": [
-        320.702,
-        51.459,
-        -34.613,
-        -20.07,
-        -94.087
-       ],
-       "n": 17,
-       "mape": 8.5,
-       "p95": 22.4
-      },
-      "load.eb4": {
-       "features": [
-        "one",
-        "lines",
-        "l2w",
-        "nIl2w",
-        "sqte"
-       ],
-       "coefficients": [
-        182.899,
-        3.054,
-        -51.104,
-        -1.182,
-        -9.579
-       ],
-       "n": 15,
-       "mape": 4.6,
-       "p95": 14.6
-      },
-      "load.eb8": {
-       "features": [
-        "one",
-        "lines",
-        "l2w",
-        "nIl2w",
-        "nImW"
-       ],
-       "coefficients": [
-        179.034,
-        3.888,
-        -61.981,
-        -6.291,
-        -10.623
-       ],
-       "n": 9,
-       "mape": 4.8,
-       "p95": 16.3
-      },
-      "store.eb1": {
-       "features": [
-        "one",
-        "nI",
-        "bw",
-        "nIl2w",
-        "nImW"
-       ],
-       "coefficients": [
-        22.633,
-        352.405,
-        236.23,
-        -222.432,
-        -607.435
-       ],
-       "n": 28,
-       "mape": 12.5,
-       "p95": 64.0
-      },
-      "store.eb2": {
-       "features": [
-        "one",
-        "bw",
-        "nIl2w",
-        "sqte",
-        "nImW"
-       ],
-       "coefficients": [
-        38.489,
-        8.393,
-        0.956,
-        -15.265,
-        14.836
-       ],
-       "n": 28,
-       "mape": 5.6,
-       "p95": 15.6
-      },
-      "store.eb4": {
-       "features": [
-        "one",
-        "te",
-        "lines",
-        "nIl2w",
-        "sqte"
-       ],
-       "coefficients": [
-        66.136,
-        1.811,
-        3.945,
-        -4.866,
-        -24.502
-       ],
-       "n": 28,
-       "mape": 7.8,
-       "p95": 26.7
-      },
-      "store.eb8": {
-       "features": [
-        "one",
-        "lines",
-        "pwsq",
-        "nIl2w",
-        "sqte"
-       ],
-       "coefficients": [
-        50.986,
-        3.825,
-        3.233,
-        -6.235,
-        -29.64
-       ],
-       "n": 28,
-       "mape": 5.2,
-       "p95": 14.3
-      }
-     },
      "description": "FormS single-shot pricing v2 (2026-11-08): physics formulas from v5 ABAB-interleaved re-measurement (card2). 128 measured tables -> 16 formulas. SIMT loads: canonical shape one+nI+lnW4+pwsq per (dir,form,dtype); load.B.int8 keeps its own shape (discontinuous byte-enable path). SIMT store: single all-dtype max(issue,drain) with per-W drain rates. SIMD te<8 formulas unchanged from v1.",
      "simd_formulas": {
       "load.A": {
@@ -820,6 +666,102 @@
        "p95": 19.8,
        "domain": "simd te>=8, floor: production clamps >=15ns"
       }
+     },
+     "small.group.fp16.first": {
+      "features": [
+       "one",
+       "lines",
+       "lnW"
+      ],
+      "coefficients": [
+       42.211,
+       0.863,
+       0.982
+      ],
+      "n": 12,
+      "mape": 2.8,
+      "domain": "SIMT sub-line load groups (by<=256), first member",
+      "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
+     },
+     "small.group.fp16.marginal": {
+      "features": [
+       "one",
+       "lines",
+       "lnW"
+      ],
+      "coefficients": [
+       5.36,
+       3.006,
+       2.493
+      ],
+      "n": 60,
+      "mape": 36.1,
+      "domain": "SIMT sub-line load groups (by<=256), members after first",
+      "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
+     },
+     "small.group.fp32.first": {
+      "features": [
+       "one",
+       "lines",
+       "lnW"
+      ],
+      "coefficients": [
+       41.756,
+       0.738,
+       1.18
+      ],
+      "n": 12,
+      "mape": 2.3,
+      "domain": "SIMT sub-line load groups (by<=256), first member",
+      "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
+     },
+     "small.group.fp32.marginal": {
+      "features": [
+       "one",
+       "lines",
+       "lnW"
+      ],
+      "coefficients": [
+       2.998,
+       0.998,
+       2.826
+      ],
+      "n": 60,
+      "mape": 29.8,
+      "domain": "SIMT sub-line load groups (by<=256), members after first",
+      "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
+     },
+     "small.group.int64.first": {
+      "features": [
+       "one",
+       "lines",
+       "lnW"
+      ],
+      "coefficients": [
+       48.937,
+       0.167,
+       2.955
+      ],
+      "n": 9,
+      "mape": 2.4,
+      "domain": "SIMT sub-line load groups (by<=256), first member",
+      "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
+     },
+     "small.group.int64.marginal": {
+      "features": [
+       "one",
+       "lines",
+       "lnW"
+      ],
+      "coefficients": [
+       25.353,
+       -0.145,
+       2.509
+      ],
+      "n": 45,
+      "mape": 7.3,
+      "domain": "SIMT sub-line load groups (by<=256), members after first",
+      "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
      }
     },
     "evidence": "third_party/ascend/costmodel/profiles/microbench/data_provider/contiguous_ldst/contiguous_1d",
@@ -881,6 +823,102 @@
        0.0072844538501135704,
        -7.765914583935799
       ]
+     },
+     "small.group.fp16.first": {
+      "features": [
+       "one",
+       "lines",
+       "lnW"
+      ],
+      "coefficients": [
+       42.211,
+       0.863,
+       0.982
+      ],
+      "n": 12,
+      "mape": 2.8,
+      "domain": "SIMT sub-line load groups (by<=256), first member",
+      "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
+     },
+     "small.group.fp16.marginal": {
+      "features": [
+       "one",
+       "lines",
+       "lnW"
+      ],
+      "coefficients": [
+       5.36,
+       3.006,
+       2.493
+      ],
+      "n": 60,
+      "mape": 36.1,
+      "domain": "SIMT sub-line load groups (by<=256), members after first",
+      "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
+     },
+     "small.group.fp32.first": {
+      "features": [
+       "one",
+       "lines",
+       "lnW"
+      ],
+      "coefficients": [
+       41.756,
+       0.738,
+       1.18
+      ],
+      "n": 12,
+      "mape": 2.3,
+      "domain": "SIMT sub-line load groups (by<=256), first member",
+      "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
+     },
+     "small.group.fp32.marginal": {
+      "features": [
+       "one",
+       "lines",
+       "lnW"
+      ],
+      "coefficients": [
+       2.998,
+       0.998,
+       2.826
+      ],
+      "n": 60,
+      "mape": 29.8,
+      "domain": "SIMT sub-line load groups (by<=256), members after first",
+      "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
+     },
+     "small.group.int64.first": {
+      "features": [
+       "one",
+       "lines",
+       "lnW"
+      ],
+      "coefficients": [
+       48.937,
+       0.167,
+       2.955
+      ],
+      "n": 9,
+      "mape": 2.4,
+      "domain": "SIMT sub-line load groups (by<=256), first member",
+      "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
+     },
+     "small.group.int64.marginal": {
+      "features": [
+       "one",
+       "lines",
+       "lnW"
+      ],
+      "coefficients": [
+       25.353,
+       -0.145,
+       2.509
+      ],
+      "n": 45,
+      "mape": 7.3,
+      "domain": "SIMT sub-line load groups (by<=256), members after first",
+      "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
      }
     }
    }
@@ -1471,160 +1509,6 @@
    },
    "contiguous_ldst": {
     "forms": {
-     "te8_formulas": {
-      "load.eb1": {
-       "features": [
-        "one",
-        "nI",
-        "bw",
-        "nIl2w",
-        "nImW"
-       ],
-       "coefficients": [
-        2.448,
-        186.351,
-        40.46,
-        -78.838,
-        -87.732
-       ],
-       "n": 17,
-       "mape": 11.5,
-       "p95": 19.6
-      },
-      "load.eb2": {
-       "features": [
-        "one",
-        "pwsq",
-        "l2w",
-        "nIl2w",
-        "sqte"
-       ],
-       "coefficients": [
-        320.702,
-        51.459,
-        -34.613,
-        -20.07,
-        -94.087
-       ],
-       "n": 17,
-       "mape": 8.5,
-       "p95": 22.4
-      },
-      "load.eb4": {
-       "features": [
-        "one",
-        "lines",
-        "l2w",
-        "nIl2w",
-        "sqte"
-       ],
-       "coefficients": [
-        182.899,
-        3.054,
-        -51.104,
-        -1.182,
-        -9.579
-       ],
-       "n": 15,
-       "mape": 4.6,
-       "p95": 14.6
-      },
-      "load.eb8": {
-       "features": [
-        "one",
-        "lines",
-        "l2w",
-        "nIl2w",
-        "nImW"
-       ],
-       "coefficients": [
-        179.034,
-        3.888,
-        -61.981,
-        -6.291,
-        -10.623
-       ],
-       "n": 9,
-       "mape": 4.8,
-       "p95": 16.3
-      },
-      "store.eb1": {
-       "features": [
-        "one",
-        "nI",
-        "bw",
-        "nIl2w",
-        "nImW"
-       ],
-       "coefficients": [
-        22.633,
-        352.405,
-        236.23,
-        -222.432,
-        -607.435
-       ],
-       "n": 28,
-       "mape": 12.5,
-       "p95": 64.0
-      },
-      "store.eb2": {
-       "features": [
-        "one",
-        "bw",
-        "nIl2w",
-        "sqte",
-        "nImW"
-       ],
-       "coefficients": [
-        38.489,
-        8.393,
-        0.956,
-        -15.265,
-        14.836
-       ],
-       "n": 28,
-       "mape": 5.6,
-       "p95": 15.6
-      },
-      "store.eb4": {
-       "features": [
-        "one",
-        "te",
-        "lines",
-        "nIl2w",
-        "sqte"
-       ],
-       "coefficients": [
-        66.136,
-        1.811,
-        3.945,
-        -4.866,
-        -24.502
-       ],
-       "n": 28,
-       "mape": 7.8,
-       "p95": 26.7
-      },
-      "store.eb8": {
-       "features": [
-        "one",
-        "lines",
-        "pwsq",
-        "nIl2w",
-        "sqte"
-       ],
-       "coefficients": [
-        50.986,
-        3.825,
-        3.233,
-        -6.235,
-        -29.64
-       ],
-       "n": 28,
-       "mape": 5.2,
-       "p95": 14.3
-      }
-     },
      "description": "FormS single-shot pricing v2 (2026-11-08): physics formulas from v5 ABAB-interleaved re-measurement (card2). 128 measured tables -> 16 formulas. SIMT loads: canonical shape one+nI+lnW4+pwsq per (dir,form,dtype); load.B.int8 keeps its own shape (discontinuous byte-enable path). SIMT store: single all-dtype max(issue,drain) with per-W drain rates. SIMD te<8 formulas unchanged from v1.",
      "simd_formulas": {
       "load.A": {
@@ -1926,6 +1810,102 @@
        "p95": 19.8,
        "domain": "simd te>=8, floor: production clamps >=15ns"
       }
+     },
+     "small.group.fp16.first": {
+      "features": [
+       "one",
+       "lines",
+       "lnW"
+      ],
+      "coefficients": [
+       42.211,
+       0.863,
+       0.982
+      ],
+      "n": 12,
+      "mape": 2.8,
+      "domain": "SIMT sub-line load groups (by<=256), first member",
+      "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
+     },
+     "small.group.fp16.marginal": {
+      "features": [
+       "one",
+       "lines",
+       "lnW"
+      ],
+      "coefficients": [
+       5.36,
+       3.006,
+       2.493
+      ],
+      "n": 60,
+      "mape": 36.1,
+      "domain": "SIMT sub-line load groups (by<=256), members after first",
+      "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
+     },
+     "small.group.fp32.first": {
+      "features": [
+       "one",
+       "lines",
+       "lnW"
+      ],
+      "coefficients": [
+       41.756,
+       0.738,
+       1.18
+      ],
+      "n": 12,
+      "mape": 2.3,
+      "domain": "SIMT sub-line load groups (by<=256), first member",
+      "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
+     },
+     "small.group.fp32.marginal": {
+      "features": [
+       "one",
+       "lines",
+       "lnW"
+      ],
+      "coefficients": [
+       2.998,
+       0.998,
+       2.826
+      ],
+      "n": 60,
+      "mape": 29.8,
+      "domain": "SIMT sub-line load groups (by<=256), members after first",
+      "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
+     },
+     "small.group.int64.first": {
+      "features": [
+       "one",
+       "lines",
+       "lnW"
+      ],
+      "coefficients": [
+       48.937,
+       0.167,
+       2.955
+      ],
+      "n": 9,
+      "mape": 2.4,
+      "domain": "SIMT sub-line load groups (by<=256), first member",
+      "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
+     },
+     "small.group.int64.marginal": {
+      "features": [
+       "one",
+       "lines",
+       "lnW"
+      ],
+      "coefficients": [
+       25.353,
+       -0.145,
+       2.509
+      ],
+      "n": 45,
+      "mape": 7.3,
+      "domain": "SIMT sub-line load groups (by<=256), members after first",
+      "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
      }
     },
     "evidence": "third_party/ascend/costmodel/profiles/microbench/data_provider/contiguous_ldst/contiguous_1d",
@@ -2365,6 +2345,102 @@
       "max_coefficients": [
        0.01318359375
       ]
+     },
+     "small.group.fp16.first": {
+      "features": [
+       "one",
+       "lines",
+       "lnW"
+      ],
+      "coefficients": [
+       42.211,
+       0.863,
+       0.982
+      ],
+      "n": 12,
+      "mape": 2.8,
+      "domain": "SIMT sub-line load groups (by<=256), first member",
+      "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
+     },
+     "small.group.fp16.marginal": {
+      "features": [
+       "one",
+       "lines",
+       "lnW"
+      ],
+      "coefficients": [
+       5.36,
+       3.006,
+       2.493
+      ],
+      "n": 60,
+      "mape": 36.1,
+      "domain": "SIMT sub-line load groups (by<=256), members after first",
+      "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
+     },
+     "small.group.fp32.first": {
+      "features": [
+       "one",
+       "lines",
+       "lnW"
+      ],
+      "coefficients": [
+       41.756,
+       0.738,
+       1.18
+      ],
+      "n": 12,
+      "mape": 2.3,
+      "domain": "SIMT sub-line load groups (by<=256), first member",
+      "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
+     },
+     "small.group.fp32.marginal": {
+      "features": [
+       "one",
+       "lines",
+       "lnW"
+      ],
+      "coefficients": [
+       2.998,
+       0.998,
+       2.826
+      ],
+      "n": 60,
+      "mape": 29.8,
+      "domain": "SIMT sub-line load groups (by<=256), members after first",
+      "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
+     },
+     "small.group.int64.first": {
+      "features": [
+       "one",
+       "lines",
+       "lnW"
+      ],
+      "coefficients": [
+       48.937,
+       0.167,
+       2.955
+      ],
+      "n": 9,
+      "mape": 2.4,
+      "domain": "SIMT sub-line load groups (by<=256), first member",
+      "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
+     },
+     "small.group.int64.marginal": {
+      "features": [
+       "one",
+       "lines",
+       "lnW"
+      ],
+      "coefficients": [
+       25.353,
+       -0.145,
+       2.509
+      ],
+      "n": 45,
+      "mape": 7.3,
+      "domain": "SIMT sub-line load groups (by<=256), members after first",
+      "evidence": "probe_small_group.py u-sweep (2026-11-08 card2)"
      }
     }
    }

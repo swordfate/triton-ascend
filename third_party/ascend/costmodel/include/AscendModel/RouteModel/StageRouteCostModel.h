@@ -413,6 +413,20 @@ struct StageResourceCycles {
   double load = 0.0;
   double store = 0.0;
   bool rowwiseAdditionalLoadSetupsOwnedOnce = false;
+  /// Sub-line (<256B) SIMT load claims by geometry (element bytes, access
+  /// bytes, warps).  A route whose stages each claim one member of what the
+  /// hardware issues as one back-to-back group must amortize the members
+  /// past the first to the measured group-marginal rate; the route-level
+  /// plan sums these and refunds the difference.  Already included in
+  /// `load`.
+  struct SubLineLoadClaim {
+    int64_t count = 0;     ///< claimed members per iteration
+    double sumNs = 0.0;    ///< charged per-iteration total at full price
+    double marginalNs = 0.0; ///< measured group-marginal rate per member
+    double iterations = 1.0; ///< loop trips multiplying the group
+  };
+  std::map<std::tuple<int64_t, int64_t, int64_t>, SubLineLoadClaim>
+      subLineLoadClaims;
   /// Generated-stream attribution.  These cycles are already included in
   /// `load`/`store`; they are diagnostic decomposition, not extra terms.
   double sharedLocalLoad = 0.0;

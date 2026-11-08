@@ -483,12 +483,27 @@ double estimateContiguousCompletionNs(const ContiguousAccessStats &astats,
   // calibration.  A loop-carried access (streams=true but pipelined=false)
   // must fall through to the serial formulas: the acc-chain amortizes the
   // startup, so its marginal cost is below the single-shot value.
-  if (!astats.streams && astats.concurrency <= 1) {
+  // SIMD only: a SIMT load's single-shot price is the warp's exposed L2
+  // round trip, but the route model sums stages serially while the real
+  // program overlaps that latency with the neighboring stages' compute -
+  // charging it per stage double-counts (measured on the 100-case: -4 net
+  // PASS).  SIMT lone loads price by the segment/small-group service rates;
+  // SIMD single-shot formulas are calibration-validated as-is.
+  if (!astats.streams && astats.concurrency <= 1 && astats.simd) {
     const double formNs = estimateFormSNs(astats, fit);
     if (formNs > 0.0) {
       note("forms", formNs, "forms");
       return formNs;
     }
+    if (dbg)
+      std::fprintf(stderr,
+                   "[contig] elem=%lld eb=%d warps=%d by=%.0f te=%.1f vec=%d "
+                   "forms-refused streams=%d conc=%lld masked=%d\n",
+                   static_cast<long long>(astats.elements), elemBytes, warps,
+                   static_cast<double>(astats.elements) * elemBytes, te,
+                   vectorized ? 1 : 0, astats.streams ? 1 : 0,
+                   static_cast<long long>(astats.concurrency),
+                   astats.masked ? 1 : 0);
   }
   // Below one 128 B SIMT cache line the transfer is latency bound: the cost is
   // set by how many warps each issue an access instruction and by whether
@@ -519,6 +534,28 @@ double estimateContiguousCompletionNs(const ContiguousAccessStats &astats,
       if (sum > 0.0) {
         note("small", sum, key);
         return sum;
+      }
+    }
+  }
+  // SIMT tile loads whose per-warp request is sub-line (te < 1: the tile is
+  // spread over warps, each issuing one short request) price at the measured
+  // group-first service rate, not at the full-line segment: the warp group
+  // shares the LSU rounds (u-sweep: 4x32B slices cost ~45ns, while the
+  // full-line segment charges ~134ns for the same 128B tile).  Masked tiles
+  // activate fewer lanes and cost no more.
+  if (!vectorized && !isStore && te < 1.0 && byBytes <= 256.0 &&
+      byBytes >= 128.0) {
+    static const char *kGroupDts[] = {"",     "int8", "fp16", "",    "fp32",
+                                      "",     "",     "",     "int64"};
+    const int64_t ebIdx = static_cast<int64_t>(elemBytes);
+    if (ebIdx >= 1 && ebIdx <= 8 && kGroupDts[ebIdx][0]) {
+      const double serviceNs = evaluateContiguousFormulaByKey(
+          astats, fit,
+          std::string("small.group.") + kGroupDts[ebIdx] + ".first");
+      if (serviceNs > 0.0) {
+        note("tile-service", serviceNs,
+             std::string("small.group.") + kGroupDts[ebIdx] + ".first");
+        return serviceNs;
       }
     }
   }
@@ -678,6 +715,27 @@ double estimateContiguousCompletionNs(const ContiguousAccessStats &astats,
     return 0.0;
   note("seg", ns, key.str());
   return ns;
+}
+
+double evaluateContiguousFormulaByKey(const ContiguousAccessStats &stats,
+                                      const ContiguousFit &fit,
+                                      llvm::StringRef key) {
+  const auto it = fit.formulas.find(key);
+  if (it == fit.formulas.end() || !it->second.isValid())
+    return 0.0;
+  double v[F_COUNT];
+  const AccessForm form = stats.masked ? AccessForm::FormB : AccessForm::FormA;
+  fillFeatures(v, form, stats.elements, static_cast<int>(stats.elementBytes),
+               static_cast<int>(stats.warps), stats.simd, stats.concurrency);
+  const llvm::StringMap<int> &index = featureIndex();
+  double ns = 0.0;
+  for (size_t i = 0; i < it->second.features.size(); ++i) {
+    const auto slot = index.find(it->second.features[i]);
+    if (slot == index.end())
+      return 0.0;
+    ns += it->second.coefficients[i] * v[slot->second];
+  }
+  return ns > 0.0 ? ns : 0.0;
 }
 
 } // namespace contiguous_ldst

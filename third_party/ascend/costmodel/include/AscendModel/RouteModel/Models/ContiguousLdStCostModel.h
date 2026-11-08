@@ -148,6 +148,16 @@ struct ContiguousFit {
 double estimateContiguousCompletionNs(const ContiguousAccessStats &stats,
                                       const ContiguousFit &fit);
 
+/// Evaluates one named segment formula from the contiguous_ldst.formulas
+/// block against the given geometry (no segment dispatch, no small/bw/te8
+/// routing).  Returns 0 when the profile carries no valid formula under the
+/// key.  Used for the sub-line group amortization: the first member of a
+/// same-shape group pays the full calibrated latency, the remaining members
+/// pay the measured group-marginal formula ("small.group.<dtype>.marginal").
+double evaluateContiguousFormulaByKey(const ContiguousAccessStats &stats,
+                                      const ContiguousFit &fit,
+                                      llvm::StringRef key);
+
 } // namespace mlir::ascend::contiguous_ldst
 
 #endif

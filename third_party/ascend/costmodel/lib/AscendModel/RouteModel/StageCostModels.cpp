@@ -14,6 +14,7 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
+#include <cstdio>
 #include <cstdlib>
 #include <tuple>
 #include <algorithm>
@@ -523,6 +524,10 @@ static void mapContiguousMemoryCompletion(
 
   // Same-shape streams in one iteration are priced as one group: the formula
   // is evaluated once at that concurrency, then scaled by the group size.
+  // Sub-line SIMT load groups amortize further: the members share the LSU
+  // issue rounds, so the first pays the calibrated latency and the rest pay
+  // the measured group-marginal rate (u-swept calibration: a u x 64B group
+  // costs ~52 + (u-1) x 26ns, not u x 52ns).
   double totalLoad = 0.0;
   double totalStore = 0.0;
   for (const StageMemoryAccess &access : work.memoryAccesses) {
@@ -623,10 +628,55 @@ static void mapContiguousMemoryCompletion(
     }
     // Sub-cacheline accesses have their own measured segments (small.<dir>.
     // eb<n>.<main|deg|line64>), so they are claimed here rather than skipped.
-    const double ns = contiguous_ldst::estimateContiguousCompletionNs(stats, profile.contiguous);
+    const int64_t byBytes = shape->second * int64_t(access.elementBits / 8);
+    const double ns = contiguous_ldst::estimateContiguousCompletionNs(
+        stats, profile.contiguous);
     // Outside the calibrated domain the analytical fallback keeps the bytes.
     if (!(ns > 0.0))
       continue;
+    // Register sub-line SIMT load claims for the route-level group refund:
+    // the stages of one straight-line route each claim one member of what
+    // the hardware issues as one back-to-back same-shape group, so the
+    // route plan amortizes the members past the first.  Looped (streams)
+    // stages are excluded: their pipelined/throughput formulas already
+    // carry concurrency terms, so a route-level refund would amortize
+    // twice (measured: rowred/layer_norm regressed, indirect_index -
+    // straight-line - improved).
+    if (!stats.streams && !stats.store && !simd && byBytes <= 256) {
+      auto &claim = resources.subLineLoadClaims[std::make_tuple(
+          int64_t(access.elementBits / 8), byBytes,
+          int64_t(profile.activeWarpCount))];
+      // Members per iteration: the same-shape group size within one loop
+      // trip (groupCount sums access.count over the group, so divide the
+      // trip count out).  A looped single access registers one member and
+      // never amortizes; only co-issued same-shape accesses do.
+      const int64_t trips = std::max<int64_t>(1, int64_t(access.count));
+      const int64_t members = std::max<int64_t>(1, groupCount / trips);
+      if (claim.count == 0) {
+        // Measured group-marginal rate for this geometry, evaluated once.
+        static const char *kGroupDts[] = {"",      "int8", "fp16", "",
+                                          "fp32",  "",     "",     "",
+                                          "int64"};
+        const int64_t ebBytes = access.elementBits / 8;
+        if (ebBytes >= 1 && ebBytes <= 8 && kGroupDts[ebBytes][0])
+          claim.marginalNs = contiguous_ldst::evaluateContiguousFormulaByKey(
+              stats, profile.contiguous,
+              std::string("small.group.") + kGroupDts[ebBytes] + ".marginal");
+      }
+      claim.count += members;
+      claim.sumNs += ns * members;
+      claim.iterations =
+          std::max(claim.iterations, static_cast<double>(trips));
+      if (::getenv("ASCEND_MODEL_CONTIG_DEBUG") != nullptr)
+        std::fprintf(stderr,
+                     "[contig-claim] eb=%lld by=%lld W=%lld members=%lld "
+                     "trips=%lld ns=%.1f marginal=%.1f\n",
+                     static_cast<long long>(access.elementBits / 8),
+                     static_cast<long long>(byBytes),
+                     static_cast<long long>(profile.activeWarpCount),
+                     static_cast<long long>(members),
+                     static_cast<long long>(trips), ns, claim.marginalNs);
+    }
     // A group of same-shape accesses inside one iteration shares one latency:
     // the first pays the calibrated cost, the rest stream at a measured rate.
     // groupFactor divides the group wall clock back into the per-program

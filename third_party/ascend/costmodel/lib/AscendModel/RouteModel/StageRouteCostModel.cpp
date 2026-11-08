@@ -3659,6 +3659,9 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
     StageRoutePlan plan;
     plan.candidate = kind;
     plan.routeSuperblockFactor = factor;
+    using SubLineClaim = StageResourceCycles::SubLineLoadClaim;
+    std::map<std::tuple<int64_t, int64_t, int64_t>, SubLineClaim>
+        subLineClaims;
     // Row coalescing can turn a scalar, loaded-index access into a masked
     // vector gather.
     if (kind == StageKernelRouteKind::Mixed &&
@@ -3718,6 +3721,16 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
       plan.scopeHandoffCycles.push_back(scopeHandoffCycles);
       plan.logicalStageCycles.push_back(stageCycles);
       plan.totalCycles += stageCycles;
+      // Accumulate the selected implementations' sub-line SIMT load claims
+      // for the group refund after applyRuntimeSchedule below.
+      for (auto &[key, claim] : selected->resources.subLineLoadClaims)
+        if (claim.count > 0) {
+          auto &dst = subLineClaims[key];
+          dst.count += claim.count;
+          dst.sumNs += claim.sumNs;
+          dst.marginalNs = claim.marginalNs;
+          dst.iterations = std::max(dst.iterations, claim.iterations);
+        }
     }
     if (kind == StageKernelRouteKind::Mixed) {
       {
@@ -3856,6 +3869,36 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
       StageRoutePlan invalid;
       invalid.candidate = kind;
       return invalid;
+    }
+    if (kind != StageKernelRouteKind::Mixed) {
+      // Sub-line SIMT load group amortization: independent index-style loads
+      // land in separate stages, each claiming its member at the full
+      // isolated latency, but the hardware issues them as one back-to-back
+      // group sharing the LSU rounds (measured: a u x 64B group costs
+      // ~52 + (u-1) x 26ns, not u x 52ns).  Refund the members past the
+      // first down to the measured marginal rate.  Applied after
+      // applyRuntimeSchedule, which rebuilds plan.totalCycles from the
+      // per-stage runtime cycles.
+      for (auto &[key, claim] : subLineClaims) {
+        if (claim.count <= 1 || !(claim.marginalNs > 0.0) ||
+            !(claim.sumNs > 0.0))
+          continue;
+        const double fullUnit = claim.sumNs / static_cast<double>(claim.count);
+        const double refund = static_cast<double>(claim.count - 1) *
+                              std::max(0.0, fullUnit - claim.marginalNs) *
+                              claim.iterations;
+        if (::getenv("ASCEND_MODEL_CONTIG_DEBUG") != nullptr)
+          std::fprintf(stderr,
+                       "[contig-refund] key=(%lld,%lld,%lld) count=%lld "
+                       "iters=%.0f fullUnit=%.1f marginal=%.1f refund=%.1f\n",
+                       static_cast<long long>(std::get<0>(key)),
+                       static_cast<long long>(std::get<1>(key)),
+                       static_cast<long long>(std::get<2>(key)),
+                       static_cast<long long>(claim.count), claim.iterations,
+                       fullUnit, claim.marginalNs, refund);
+        if (refund > 0.0)
+          plan.totalCycles -= refund;
+      }
     }
     plan.legal = true;
     return plan;
