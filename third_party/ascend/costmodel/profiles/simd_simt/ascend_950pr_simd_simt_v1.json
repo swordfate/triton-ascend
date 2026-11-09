@@ -909,69 +909,45 @@
        "p95": 14.3
       }
      },
-     "simd.load.mask": {
+     "simd.load": {
       "features": [
        "one",
        "log2_by",
        "inv_n",
-       "by_div_256"
+       "bw",
+       "mask"
       ],
       "coefficients": [
-       107.4261,
-       3.4927,
-       33.1412,
-       0.7774
+       91.0407,
+       3.5736,
+       63.1191,
+       0.7822,
+       15.13
       ],
-      "n": 31,
-      "mape": 3.03
+      "n": 63,
+      "mape": 2.87,
+      "domain": "all SIMD loads (mask indicator covers nomask + dynamically-all-true-mask)"
      },
-     "simd.load.nomask": {
-      "features": [
-       "one",
-       "log2_by",
-       "inv_n",
-       "by_div_256"
-      ],
-      "coefficients": [
-       89.7835,
-       3.657,
-       92.9022,
-       0.7863
-      ],
-      "n": 32,
-      "mape": 2.6
-     },
-     "simd.store.mask": {
+     "simd.store": {
       "features": [
        "one",
        "by",
        "log2_by",
-       "sq_by"
+       "sq_by",
+       "mask",
+       "mask_by"
       ],
       "coefficients": [
-       12.9931,
-       0.0104,
+       -37.7017,
+       0.0083,
        6.3883,
-       -0.9234
+       -0.9234,
+       50.6948,
+       0.0021
       ],
-      "n": 15,
-      "mape": 3.99
-     },
-     "simd.store.nomask": {
-      "features": [
-       "one",
-       "n",
-       "log2eb",
-       "sq_by"
-      ],
-      "coefficients": [
-       -61.6624,
-       0.0032,
-       4.0882,
-       0.8457
-      ],
-      "n": 5,
-      "mape": 1.04
+      "n": 20,
+      "mape": 3.97,
+      "domain": "all SIMD stores (mask indicator + mask-by interaction)"
      }
     },
     "evidence": "third_party/ascend/costmodel/profiles/microbench/data_provider/contiguous_ldst/contiguous_1d",
@@ -2263,69 +2239,45 @@
        "p95": 14.3
       }
      },
-     "simd.load.mask": {
+     "simd.load": {
       "features": [
        "one",
        "log2_by",
        "inv_n",
-       "by_div_256"
+       "bw",
+       "mask"
       ],
       "coefficients": [
-       107.4261,
-       3.4927,
-       33.1412,
-       0.7774
+       91.0407,
+       3.5736,
+       63.1191,
+       0.7822,
+       15.13
       ],
-      "n": 31,
-      "mape": 3.03
+      "n": 63,
+      "mape": 2.87,
+      "domain": "all SIMD loads (mask indicator covers nomask + dynamically-all-true-mask)"
      },
-     "simd.load.nomask": {
-      "features": [
-       "one",
-       "log2_by",
-       "inv_n",
-       "by_div_256"
-      ],
-      "coefficients": [
-       89.7835,
-       3.657,
-       92.9022,
-       0.7863
-      ],
-      "n": 32,
-      "mape": 2.6
-     },
-     "simd.store.mask": {
+     "simd.store": {
       "features": [
        "one",
        "by",
        "log2_by",
-       "sq_by"
+       "sq_by",
+       "mask",
+       "mask_by"
       ],
       "coefficients": [
-       12.9931,
-       0.0104,
+       -37.7017,
+       0.0083,
        6.3883,
-       -0.9234
+       -0.9234,
+       50.6948,
+       0.0021
       ],
-      "n": 15,
-      "mape": 3.99
-     },
-     "simd.store.nomask": {
-      "features": [
-       "one",
-       "n",
-       "log2eb",
-       "sq_by"
-      ],
-      "coefficients": [
-       -61.6624,
-       0.0032,
-       4.0882,
-       0.8457
-      ],
-      "n": 5,
-      "mape": 1.04
+      "n": 20,
+      "mape": 3.97,
+      "domain": "all SIMD stores (mask indicator + mask-by interaction)"
      }
     },
     "evidence": "third_party/ascend/costmodel/profiles/microbench/data_provider/contiguous_ldst/contiguous_1d",

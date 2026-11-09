@@ -281,7 +281,8 @@ namespace {
 /// the te>=8 stream families.  All features derive from the access geometry
 /// alone.  Unknown name => NaN => the family refuses.
 double physicsFeature(llvm::StringRef name, double te, double bpt,
-                      int64_t by, double warps, double eb) {
+                      int64_t by, double warps, double eb,
+                      bool masked = false) {
   const double nI = std::ceil(std::max(1.0, bpt / 16.0));
   const std::string f = name.str();
   if (f == "one")
@@ -338,17 +339,22 @@ double physicsFeature(llvm::StringRef name, double te, double bpt,
     const double n = static_cast<double>(by) / eb;
     return 1.0 / std::max(1.0, n);
   }
+  if (f == "mask")
+    return masked ? 1.0 : 0.0;
+  if (f == "mask_by")
+    return masked ? static_cast<double>(by) : 0.0;
   return std::numeric_limits<double>::quiet_NaN();
 }
 
 /// Evaluates one formula (with its optional max branch) over the shared
 /// vocabulary; returns 0 on any unknown feature.
 double evalPhysicsFormula(const ContiguousFormula &formula, double te,
-                          double bpt, int64_t by, double warps, double eb) {
+                          double bpt, int64_t by, double warps, double eb,
+                          bool masked = false) {
   double ns = 0.0;
   for (size_t i = 0; i < formula.features.size(); ++i) {
     const double v =
-        physicsFeature(formula.features[i], te, bpt, by, warps, eb);
+        physicsFeature(formula.features[i], te, bpt, by, warps, eb, masked);
     if (!std::isfinite(v))
       return 0.0;
     ns += formula.coefficients[i] * v;
@@ -358,7 +364,7 @@ double evalPhysicsFormula(const ContiguousFormula &formula, double te,
     double branch = 0.0;
     for (size_t i = 0; i < formula.maxFeatures.size(); ++i) {
       const double v = physicsFeature(formula.maxFeatures[i], te, bpt, by,
-                                      warps, eb);
+                                      warps, eb, masked);
       if (!std::isfinite(v))
         return 0.0;
       branch += formula.maxCoefficients[i] * v;
@@ -388,22 +394,37 @@ double estimateFormSNs(const ContiguousAccessStats &astats,
   const char *form = astats.masked ? "B" : "A";
 
   auto evalFormula = [&](const ContiguousFormula &formula) -> double {
-    return evalPhysicsFormula(formula, te, bpt, by, warps, eb);
+    return evalPhysicsFormula(formula, te, bpt, by, warps, eb,
+                              astats.masked);
   };
 
   if (astats.simd) {
     // SIMD: no threads, use physical (byte/element) formulas directly.
     // No te<8/te≥8 split — the physical formulas cover the full range.
-    const std::string maskKey = astats.masked ? "mask" : "nomask";
-    const std::string physKey =
-        (astats.store ? std::string("simd.store.") : std::string("simd.load.")) +
-        maskKey;
-    auto physIt = fit.formSFormulas.find(physKey);
-    if (physIt != fit.formSFormulas.end()) {
-      const double ns = evalFormula(physIt->second);
-      if (ns > 0.0) {
-        // note not available in this scope
-        return std::max(ns, 15.0);
+    // Load uses one merged formula with a mask indicator feature.
+    // Store uses separate nomask/mask formulas (43% cost difference).
+    if (!astats.store) {
+      auto physIt = fit.formSFormulas.find("simd.load");
+      if (physIt != fit.formSFormulas.end()) {
+        const double ns = evalFormula(physIt->second);
+        if (ns > 0.0)
+          return std::max(ns, 15.0);
+      }
+    } else {
+      // Try merged simd.store first, then per-mask fallback.
+      auto physIt = fit.formSFormulas.find("simd.store");
+      if (physIt != fit.formSFormulas.end()) {
+        const double ns = evalFormula(physIt->second);
+        if (ns > 0.0)
+          return std::max(ns, 15.0);
+      }
+      const std::string storeKey = astats.masked ? "simd.store.mask"
+                                                 : "simd.store.nomask";
+      physIt = fit.formSFormulas.find(storeKey);
+      if (physIt != fit.formSFormulas.end()) {
+        const double ns = evalFormula(physIt->second);
+        if (ns > 0.0)
+          return std::max(ns, 15.0);
       }
     }
     // Fallback to legacy te<8/te≥8 formulas for old profiles.
