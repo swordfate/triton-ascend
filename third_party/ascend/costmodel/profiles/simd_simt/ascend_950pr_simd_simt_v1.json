@@ -754,6 +754,224 @@
        "mape": 8.8,
        "domain": "simd te>=8, single-shot context only"
       }
+     },
+     "te8_formulas": {
+      "load.eb1": {
+       "features": [
+        "one",
+        "nI",
+        "bw",
+        "nIl2w",
+        "nImW"
+       ],
+       "coefficients": [
+        2.448,
+        186.351,
+        40.46,
+        -78.838,
+        -87.732
+       ],
+       "n": 17,
+       "mape": 11.5,
+       "p95": 19.6
+      },
+      "load.eb2": {
+       "features": [
+        "one",
+        "pwsq",
+        "l2w",
+        "nIl2w",
+        "sqte"
+       ],
+       "coefficients": [
+        320.702,
+        51.459,
+        -34.613,
+        -20.07,
+        -94.087
+       ],
+       "n": 17,
+       "mape": 8.5,
+       "p95": 22.4
+      },
+      "load.eb4": {
+       "features": [
+        "one",
+        "lines",
+        "l2w",
+        "nIl2w",
+        "sqte"
+       ],
+       "coefficients": [
+        182.899,
+        3.054,
+        -51.104,
+        -1.182,
+        -9.579
+       ],
+       "n": 15,
+       "mape": 4.6,
+       "p95": 14.6
+      },
+      "load.eb8": {
+       "features": [
+        "one",
+        "lines",
+        "l2w",
+        "nIl2w",
+        "nImW"
+       ],
+       "coefficients": [
+        179.034,
+        3.888,
+        -61.981,
+        -6.291,
+        -10.623
+       ],
+       "n": 9,
+       "mape": 4.8,
+       "p95": 16.3
+      },
+      "store.eb1": {
+       "features": [
+        "one",
+        "nI",
+        "bw",
+        "nIl2w",
+        "nImW"
+       ],
+       "coefficients": [
+        22.633,
+        352.405,
+        236.23,
+        -222.432,
+        -607.435
+       ],
+       "n": 28,
+       "mape": 12.5,
+       "p95": 64.0
+      },
+      "store.eb2": {
+       "features": [
+        "one",
+        "bw",
+        "nIl2w",
+        "sqte",
+        "nImW"
+       ],
+       "coefficients": [
+        38.489,
+        8.393,
+        0.956,
+        -15.265,
+        14.836
+       ],
+       "n": 28,
+       "mape": 5.6,
+       "p95": 15.6
+      },
+      "store.eb4": {
+       "features": [
+        "one",
+        "te",
+        "lines",
+        "nIl2w",
+        "sqte"
+       ],
+       "coefficients": [
+        66.136,
+        1.811,
+        3.945,
+        -4.866,
+        -24.502
+       ],
+       "n": 28,
+       "mape": 7.8,
+       "p95": 26.7
+      },
+      "store.eb8": {
+       "features": [
+        "one",
+        "lines",
+        "pwsq",
+        "nIl2w",
+        "sqte"
+       ],
+       "coefficients": [
+        50.986,
+        3.825,
+        3.233,
+        -6.235,
+        -29.64
+       ],
+       "n": 28,
+       "mape": 5.2,
+       "p95": 14.3
+      }
+     },
+     "simd.load.mask": {
+      "features": [
+       "one",
+       "log2_by",
+       "inv_n",
+       "by_div_256"
+      ],
+      "coefficients": [
+       107.4261,
+       3.4927,
+       33.1412,
+       0.7774
+      ],
+      "n": 31,
+      "mape": 3.03
+     },
+     "simd.load.nomask": {
+      "features": [
+       "one",
+       "log2_by",
+       "inv_n",
+       "by_div_256"
+      ],
+      "coefficients": [
+       89.7835,
+       3.657,
+       92.9022,
+       0.7863
+      ],
+      "n": 32,
+      "mape": 2.6
+     },
+     "simd.store.mask": {
+      "features": [
+       "one",
+       "by",
+       "log2_by",
+       "sq_by"
+      ],
+      "coefficients": [
+       12.9931,
+       0.0104,
+       6.3883,
+       -0.9234
+      ],
+      "n": 15,
+      "mape": 3.99
+     },
+     "simd.store.nomask": {
+      "features": [
+       "one",
+       "n",
+       "log2eb",
+       "sq_by"
+      ],
+      "coefficients": [
+       -61.6624,
+       0.0032,
+       4.0882,
+       0.8457
+      ],
+      "n": 5,
+      "mape": 1.04
      }
     },
     "evidence": "third_party/ascend/costmodel/profiles/microbench/data_provider/contiguous_ldst/contiguous_1d",
@@ -1890,6 +2108,224 @@
        "mape": 8.8,
        "domain": "simd te>=8, single-shot context only"
       }
+     },
+     "te8_formulas": {
+      "load.eb1": {
+       "features": [
+        "one",
+        "nI",
+        "bw",
+        "nIl2w",
+        "nImW"
+       ],
+       "coefficients": [
+        2.448,
+        186.351,
+        40.46,
+        -78.838,
+        -87.732
+       ],
+       "n": 17,
+       "mape": 11.5,
+       "p95": 19.6
+      },
+      "load.eb2": {
+       "features": [
+        "one",
+        "pwsq",
+        "l2w",
+        "nIl2w",
+        "sqte"
+       ],
+       "coefficients": [
+        320.702,
+        51.459,
+        -34.613,
+        -20.07,
+        -94.087
+       ],
+       "n": 17,
+       "mape": 8.5,
+       "p95": 22.4
+      },
+      "load.eb4": {
+       "features": [
+        "one",
+        "lines",
+        "l2w",
+        "nIl2w",
+        "sqte"
+       ],
+       "coefficients": [
+        182.899,
+        3.054,
+        -51.104,
+        -1.182,
+        -9.579
+       ],
+       "n": 15,
+       "mape": 4.6,
+       "p95": 14.6
+      },
+      "load.eb8": {
+       "features": [
+        "one",
+        "lines",
+        "l2w",
+        "nIl2w",
+        "nImW"
+       ],
+       "coefficients": [
+        179.034,
+        3.888,
+        -61.981,
+        -6.291,
+        -10.623
+       ],
+       "n": 9,
+       "mape": 4.8,
+       "p95": 16.3
+      },
+      "store.eb1": {
+       "features": [
+        "one",
+        "nI",
+        "bw",
+        "nIl2w",
+        "nImW"
+       ],
+       "coefficients": [
+        22.633,
+        352.405,
+        236.23,
+        -222.432,
+        -607.435
+       ],
+       "n": 28,
+       "mape": 12.5,
+       "p95": 64.0
+      },
+      "store.eb2": {
+       "features": [
+        "one",
+        "bw",
+        "nIl2w",
+        "sqte",
+        "nImW"
+       ],
+       "coefficients": [
+        38.489,
+        8.393,
+        0.956,
+        -15.265,
+        14.836
+       ],
+       "n": 28,
+       "mape": 5.6,
+       "p95": 15.6
+      },
+      "store.eb4": {
+       "features": [
+        "one",
+        "te",
+        "lines",
+        "nIl2w",
+        "sqte"
+       ],
+       "coefficients": [
+        66.136,
+        1.811,
+        3.945,
+        -4.866,
+        -24.502
+       ],
+       "n": 28,
+       "mape": 7.8,
+       "p95": 26.7
+      },
+      "store.eb8": {
+       "features": [
+        "one",
+        "lines",
+        "pwsq",
+        "nIl2w",
+        "sqte"
+       ],
+       "coefficients": [
+        50.986,
+        3.825,
+        3.233,
+        -6.235,
+        -29.64
+       ],
+       "n": 28,
+       "mape": 5.2,
+       "p95": 14.3
+      }
+     },
+     "simd.load.mask": {
+      "features": [
+       "one",
+       "log2_by",
+       "inv_n",
+       "by_div_256"
+      ],
+      "coefficients": [
+       107.4261,
+       3.4927,
+       33.1412,
+       0.7774
+      ],
+      "n": 31,
+      "mape": 3.03
+     },
+     "simd.load.nomask": {
+      "features": [
+       "one",
+       "log2_by",
+       "inv_n",
+       "by_div_256"
+      ],
+      "coefficients": [
+       89.7835,
+       3.657,
+       92.9022,
+       0.7863
+      ],
+      "n": 32,
+      "mape": 2.6
+     },
+     "simd.store.mask": {
+      "features": [
+       "one",
+       "by",
+       "log2_by",
+       "sq_by"
+      ],
+      "coefficients": [
+       12.9931,
+       0.0104,
+       6.3883,
+       -0.9234
+      ],
+      "n": 15,
+      "mape": 3.99
+     },
+     "simd.store.nomask": {
+      "features": [
+       "one",
+       "n",
+       "log2eb",
+       "sq_by"
+      ],
+      "coefficients": [
+       -61.6624,
+       0.0032,
+       4.0882,
+       0.8457
+      ],
+      "n": 5,
+      "mape": 1.04
      }
     },
     "evidence": "third_party/ascend/costmodel/profiles/microbench/data_provider/contiguous_ldst/contiguous_1d",

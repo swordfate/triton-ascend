@@ -325,6 +325,19 @@ double physicsFeature(llvm::StringRef name, double te, double bpt,
   for (double w : {1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0})
     if (f == "wdr" + std::to_string(static_cast<int64_t>(w)))
       return warps == w ? static_cast<double>(by) / 16384.0 : 0.0;
+  // SIMD physical quantities: no threads, byte and element counts directly.
+  if (f == "by_bytes")
+    return static_cast<double>(by);
+  if (f == "log2_by")
+    return std::log2(std::max(1.0, static_cast<double>(by)));
+  if (f == "sq_by")
+    return std::sqrt(static_cast<double>(by));
+  if (f == "n_elements")
+    return static_cast<double>(by) / eb;
+  if (f == "inv_n") {
+    const double n = static_cast<double>(by) / eb;
+    return 1.0 / std::max(1.0, n);
+  }
   return std::numeric_limits<double>::quiet_NaN();
 }
 
@@ -379,6 +392,21 @@ double estimateFormSNs(const ContiguousAccessStats &astats,
   };
 
   if (astats.simd) {
+    // SIMD: no threads, use physical (byte/element) formulas directly.
+    // No te<8/te≥8 split — the physical formulas cover the full range.
+    const std::string maskKey = astats.masked ? "mask" : "nomask";
+    const std::string physKey =
+        (astats.store ? std::string("simd.store.") : std::string("simd.load.")) +
+        maskKey;
+    auto physIt = fit.formSFormulas.find(physKey);
+    if (physIt != fit.formSFormulas.end()) {
+      const double ns = evalFormula(physIt->second);
+      if (ns > 0.0) {
+        // note not available in this scope
+        return std::max(ns, 15.0);
+      }
+    }
+    // Fallback to legacy te<8/te≥8 formulas for old profiles.
     if (te < 8.0) {
       const std::string key =
           astats.store ? "store" : (std::string("load.") + form);
@@ -388,11 +416,7 @@ double estimateFormSNs(const ContiguousAccessStats &astats,
       const double ns = evalFormula(it->second);
       return (ns > 0.0) ? std::max(ns, 15.0) : 0.0;
     }
-    // te>=8: per-width family first, then the merged physics family.  The
-    // single-shot families carry the exposed L2 round trip; they apply only
-    // in a single-program context where nothing hides that latency.  Multi-
-    // program grids overlap it across programs and keep the segment
-    // (throughput) pricing.
+    // te>=8: per-width family first, then the merged physics family.
     if (!astats.singleShotContext)
       return 0.0;
     const std::string stem = astats.store ? "ldst.store" : "ldst.load";
