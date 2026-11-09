@@ -365,7 +365,7 @@
    },
    "contiguous_ldst": {
     "forms": {
-     "description": "FormS single-shot pricing v2 (2026-11-08): physics formulas from v5 ABAB-interleaved re-measurement (card2). 128 measured tables -> 16 formulas. SIMT loads: canonical shape one+nI+lnW4+pwsq per (dir,form,dtype); load.B.int8 keeps its own shape (discontinuous byte-enable path). SIMT store: single all-dtype max(issue,drain) with per-W drain rates. SIMD te<8 formulas unchanged from v1.",
+     "description": "FormS single-shot pricing v3 (2026-11-08): SIMT loads refitted with te/bpt thread-physics features, 8 formulas keyed load.<A|B>.<dtype> (A=unmasked, B=dynamic-true-mask); SIMT store merged across 4 dtypes and both mask forms, registered as store.A/store.B for the dispatcher. SIMD merged load/store with mask indicator.",
      "simd_formulas": {
       "load.A": {
        "features": [
@@ -411,160 +411,276 @@
        "n": 24,
        "mape": 6.33,
        "domain": "te<8, A/B merged, floor clamp 15ns"
+      },
+      "simd.load": {
+       "features": [
+        "one",
+        "log2_by",
+        "inv_n",
+        "bw",
+        "mask"
+       ],
+       "coefficients": [
+        91.0407,
+        3.5736,
+        63.1191,
+        0.7822,
+        15.13
+       ],
+       "n": 63,
+       "mape": 2.87,
+       "domain": "all SIMD loads (mask indicator covers nomask + dynamically-all-true-mask)"
+      },
+      "simd.store": {
+       "features": [
+        "one",
+        "by",
+        "log2_by",
+        "sq_by",
+        "mask",
+        "mask_by"
+       ],
+       "coefficients": [
+        -37.7017,
+        0.0083,
+        6.3883,
+        -0.9234,
+        50.6948,
+        0.0021
+       ],
+       "n": 20,
+       "mape": 3.97,
+       "domain": "all SIMD stores (mask indicator + mask-by interaction)"
       }
      },
      "simt_formulas": {
       "load.A.int8": {
        "features": [
         "one",
-        "nI",
-        "lnW4",
-        "pwsq"
+        "te2",
+        "bw",
+        "sqte",
+        "te_lnW4",
+        "te_div_W",
+        "max0_te8"
        ],
        "coefficients": [
-        28.917,
-        105.374,
-        -9.313,
-        42.627
+        109.8373,
+        0.1069,
+        4.3034,
+        16.3716,
+        -0.1589,
+        -4.4397,
+        7.5376
        ],
-       "n": 50,
-       "mape": 13.9,
-       "p95": 35.9,
-       "domain": "simt, te<=64, W<=64"
+       "n": 49,
+       "mape": 9.23,
+       "domain": "simt, te<=64, W<=64, te/bpt physics features"
       },
       "load.A.fp16": {
        "features": [
         "one",
-        "nI",
+        "te",
         "lnW4",
-        "pwsq"
+        "pwsq",
+        "te_invW",
+        "max0_te8",
+        "max0_te4"
        ],
        "coefficients": [
-        169.184,
-        -49.378,
-        -3.665,
-        36.962
+        112.3455,
+        5.233,
+        -4.5884,
+        33.6306,
+        -2.7341,
+        -13.5254,
+        5.4495
        ],
-       "n": 52,
-       "mape": 11.5,
-       "p95": 33.1,
-       "domain": "simt, te<=64, W<=64"
+       "n": 49,
+       "mape": 9.37,
+       "domain": "simt, te<=64, W<=64, te/bpt physics features"
       },
       "load.A.fp32": {
        "features": [
         "one",
-        "nI",
+        "invW",
         "lnW4",
-        "pwsq"
+        "pwsq",
+        "te_invW",
+        "max0_te8",
+        "max0_te2",
+        "log2te"
        ],
        "coefficients": [
-        11.065,
-        116.508,
-        -8.234,
-        39.273
+        170.3635,
+        -51.1383,
+        -9.5208,
+        29.5249,
+        -7.9741,
+        9.521,
+        32.4097,
+        14.5219
        ],
        "n": 55,
-       "mape": 14.5,
-       "p95": 39.1,
-       "domain": "simt, te<=64, W<=64"
+       "mape": 10.12,
+       "domain": "simt, te<=64, W<=64, te/bpt physics features"
       },
       "load.A.int64": {
        "features": [
         "one",
-        "nI",
+        "bw",
+        "invW",
         "lnW4",
-        "pwsq"
+        "te_invW",
+        "by_invW",
+        "max0_te4"
        ],
        "coefficients": [
-        22.912,
-        115.414,
-        -8.065,
-        37.636
+        129.2052,
+        4.2042,
+        -31.1567,
+        -6.399,
+        -17.1966,
+        0.3378,
+        18.4097
        ],
-       "n": 56,
-       "mape": 14.1,
-       "p95": 35.6,
-       "domain": "simt, te<=64, W<=64"
+       "n": 55,
+       "mape": 7.6,
+       "domain": "simt, te<=64, W<=64, te/bpt physics features"
       },
       "load.B.int8": {
        "features": [
         "one",
-        "teq",
+        "te3",
         "pwsq",
-        "sqte"
+        "sqte",
+        "max0_te8",
+        "max0_te2"
        ],
        "coefficients": [
-        142.764,
-        9.56,
-        79.116,
-        -48.577
+        178.3601,
+        -0.0023,
+        78.9237,
+        -70.7426,
+        17.3151,
+        5.2167
        ],
-       "n": 49,
-       "mape": 21.1,
-       "p95": 61.7,
-       "domain": "simt, te<=64, W<=64"
+       "n": 48,
+       "mape": 18.59,
+       "domain": "simt, te<=64, W<=64, te/bpt physics features"
       },
       "load.B.fp16": {
        "features": [
         "one",
-        "nI",
+        "bpt",
+        "by_bytes",
+        "invW",
         "lnW4",
-        "pwsq"
+        "te_invW",
+        "max0_te8"
        ],
        "coefficients": [
-        -21.809,
-        170.282,
-        -7.191,
-        36.112
+        139.4692,
+        11.0597,
+        0.0166,
+        -28.0485,
+        -7.3547,
+        -7.896,
+        14.3059
        ],
-       "n": 53,
-       "mape": 10.8,
-       "p95": 26.2,
-       "domain": "simt, te<=64, W<=64"
+       "n": 52,
+       "mape": 8.73,
+       "domain": "simt, te<=64, W<=64, te/bpt physics features"
       },
       "load.B.fp32": {
        "features": [
         "one",
-        "nI",
+        "by_bytes",
+        "invW",
         "lnW4",
-        "pwsq"
+        "sqte",
+        "te_lnW4",
+        "max0_te4"
        ],
        "coefficients": [
-        -15.274,
-        162.312,
-        -8.719,
-        37.062
+        104.8086,
+        0.0161,
+        -84.3247,
+        -8.1004,
+        101.2939,
+        0.0886,
+        39.5006
        ],
-       "n": 54,
-       "mape": 12.4,
-       "p95": 42.8,
-       "domain": "simt, te<=64, W<=64"
+       "n": 53,
+       "mape": 8.16,
+       "domain": "simt, te<=64, W<=64, te/bpt physics features"
       },
       "load.B.int64": {
        "features": [
         "one",
-        "nI",
+        "te3",
+        "W",
+        "invW",
         "lnW4",
-        "pwsq"
+        "pwsq",
+        "max0_te2",
+        "log2te"
        ],
        "coefficients": [
-        58.043,
-        119.192,
-        -8.119,
-        37.867
+        198.3822,
+        -0.0005,
+        1.0985,
+        -63.5157,
+        -7.3546,
+        29.9504,
+        67.4872,
+        10.7659
        ],
        "n": 55,
-       "mape": 14.1,
-       "p95": 39.5,
-       "domain": "simt, te<=64, W<=64"
+       "mape": 9.44,
+       "domain": "simt, te<=64, W<=64, te/bpt physics features"
       },
-      "store": {
+      "store.A": {
        "features": [
         "one",
         "nImW"
        ],
        "coefficients": [
-        40.0,
+        40,
+        1.937
+       ],
+       "max_features": [
+        "one",
+        "wdr1",
+        "wdr2",
+        "wdr4",
+        "wdr8",
+        "wdr16",
+        "wdr32",
+        "wdr64"
+       ],
+       "max_coefficients": [
+        34.897,
+        404.094,
+        363.196,
+        554.94,
+        546.352,
+        521.947,
+        465.685,
+        254.923
+       ],
+       "n": 405,
+       "mape": 30.5,
+       "mape_by_ge_4096": 19.7,
+       "domain": "simt store, all dtypes merged, te<=64, floor 40ns"
+      },
+      "store.B": {
+       "features": [
+        "one",
+        "nImW"
+       ],
+       "coefficients": [
+        40,
         1.937
        ],
        "max_features": [
@@ -702,7 +818,7 @@
         -5.718
        ],
        "n": 36,
-       "mape": 10.0,
+       "mape": 10,
        "domain": "simd te>=8, single-shot context only; fit to the v1 te8 table knots (intercept = mask setup + drain)"
       },
       "store.A": {
@@ -849,7 +965,7 @@
        ],
        "n": 28,
        "mape": 12.5,
-       "p95": 64.0
+       "p95": 64
       },
       "store.eb2": {
        "features": [
@@ -908,46 +1024,6 @@
        "mape": 5.2,
        "p95": 14.3
       }
-     },
-     "simd.load": {
-      "features": [
-       "one",
-       "log2_by",
-       "inv_n",
-       "bw",
-       "mask"
-      ],
-      "coefficients": [
-       91.0407,
-       3.5736,
-       63.1191,
-       0.7822,
-       15.13
-      ],
-      "n": 63,
-      "mape": 2.87,
-      "domain": "all SIMD loads (mask indicator covers nomask + dynamically-all-true-mask)"
-     },
-     "simd.store": {
-      "features": [
-       "one",
-       "by",
-       "log2_by",
-       "sq_by",
-       "mask",
-       "mask_by"
-      ],
-      "coefficients": [
-       -37.7017,
-       0.0083,
-       6.3883,
-       -0.9234,
-       50.6948,
-       0.0021
-      ],
-      "n": 20,
-      "mape": 3.97,
-      "domain": "all SIMD stores (mask indicator + mask-by interaction)"
      }
     },
     "evidence": "third_party/ascend/costmodel/profiles/microbench/data_provider/contiguous_ldst/contiguous_1d",
@@ -1695,7 +1771,7 @@
    },
    "contiguous_ldst": {
     "forms": {
-     "description": "FormS single-shot pricing v2 (2026-11-08): physics formulas from v5 ABAB-interleaved re-measurement (card2). 128 measured tables -> 16 formulas. SIMT loads: canonical shape one+nI+lnW4+pwsq per (dir,form,dtype); load.B.int8 keeps its own shape (discontinuous byte-enable path). SIMT store: single all-dtype max(issue,drain) with per-W drain rates. SIMD te<8 formulas unchanged from v1.",
+     "description": "FormS single-shot pricing v3 (2026-11-08): SIMT loads refitted with te/bpt thread-physics features, 8 formulas keyed load.<A|B>.<dtype> (A=unmasked, B=dynamic-true-mask); SIMT store merged across 4 dtypes and both mask forms, registered as store.A/store.B for the dispatcher. SIMD merged load/store with mask indicator.",
      "simd_formulas": {
       "load.A": {
        "features": [
@@ -1741,160 +1817,276 @@
        "n": 24,
        "mape": 6.33,
        "domain": "te<8, A/B merged, floor clamp 15ns"
+      },
+      "simd.load": {
+       "features": [
+        "one",
+        "log2_by",
+        "inv_n",
+        "bw",
+        "mask"
+       ],
+       "coefficients": [
+        91.0407,
+        3.5736,
+        63.1191,
+        0.7822,
+        15.13
+       ],
+       "n": 63,
+       "mape": 2.87,
+       "domain": "all SIMD loads (mask indicator covers nomask + dynamically-all-true-mask)"
+      },
+      "simd.store": {
+       "features": [
+        "one",
+        "by",
+        "log2_by",
+        "sq_by",
+        "mask",
+        "mask_by"
+       ],
+       "coefficients": [
+        -37.7017,
+        0.0083,
+        6.3883,
+        -0.9234,
+        50.6948,
+        0.0021
+       ],
+       "n": 20,
+       "mape": 3.97,
+       "domain": "all SIMD stores (mask indicator + mask-by interaction)"
       }
      },
      "simt_formulas": {
       "load.A.int8": {
        "features": [
         "one",
-        "nI",
-        "lnW4",
-        "pwsq"
+        "te2",
+        "bw",
+        "sqte",
+        "te_lnW4",
+        "te_div_W",
+        "max0_te8"
        ],
        "coefficients": [
-        28.917,
-        105.374,
-        -9.313,
-        42.627
+        109.8373,
+        0.1069,
+        4.3034,
+        16.3716,
+        -0.1589,
+        -4.4397,
+        7.5376
        ],
-       "n": 50,
-       "mape": 13.9,
-       "p95": 35.9,
-       "domain": "simt, te<=64, W<=64"
+       "n": 49,
+       "mape": 9.23,
+       "domain": "simt, te<=64, W<=64, te/bpt physics features"
       },
       "load.A.fp16": {
        "features": [
         "one",
-        "nI",
+        "te",
         "lnW4",
-        "pwsq"
+        "pwsq",
+        "te_invW",
+        "max0_te8",
+        "max0_te4"
        ],
        "coefficients": [
-        169.184,
-        -49.378,
-        -3.665,
-        36.962
+        112.3455,
+        5.233,
+        -4.5884,
+        33.6306,
+        -2.7341,
+        -13.5254,
+        5.4495
        ],
-       "n": 52,
-       "mape": 11.5,
-       "p95": 33.1,
-       "domain": "simt, te<=64, W<=64"
+       "n": 49,
+       "mape": 9.37,
+       "domain": "simt, te<=64, W<=64, te/bpt physics features"
       },
       "load.A.fp32": {
        "features": [
         "one",
-        "nI",
+        "invW",
         "lnW4",
-        "pwsq"
+        "pwsq",
+        "te_invW",
+        "max0_te8",
+        "max0_te2",
+        "log2te"
        ],
        "coefficients": [
-        11.065,
-        116.508,
-        -8.234,
-        39.273
+        170.3635,
+        -51.1383,
+        -9.5208,
+        29.5249,
+        -7.9741,
+        9.521,
+        32.4097,
+        14.5219
        ],
        "n": 55,
-       "mape": 14.5,
-       "p95": 39.1,
-       "domain": "simt, te<=64, W<=64"
+       "mape": 10.12,
+       "domain": "simt, te<=64, W<=64, te/bpt physics features"
       },
       "load.A.int64": {
        "features": [
         "one",
-        "nI",
+        "bw",
+        "invW",
         "lnW4",
-        "pwsq"
+        "te_invW",
+        "by_invW",
+        "max0_te4"
        ],
        "coefficients": [
-        22.912,
-        115.414,
-        -8.065,
-        37.636
+        129.2052,
+        4.2042,
+        -31.1567,
+        -6.399,
+        -17.1966,
+        0.3378,
+        18.4097
        ],
-       "n": 56,
-       "mape": 14.1,
-       "p95": 35.6,
-       "domain": "simt, te<=64, W<=64"
+       "n": 55,
+       "mape": 7.6,
+       "domain": "simt, te<=64, W<=64, te/bpt physics features"
       },
       "load.B.int8": {
        "features": [
         "one",
-        "teq",
+        "te3",
         "pwsq",
-        "sqte"
+        "sqte",
+        "max0_te8",
+        "max0_te2"
        ],
        "coefficients": [
-        142.764,
-        9.56,
-        79.116,
-        -48.577
+        178.3601,
+        -0.0023,
+        78.9237,
+        -70.7426,
+        17.3151,
+        5.2167
        ],
-       "n": 49,
-       "mape": 21.1,
-       "p95": 61.7,
-       "domain": "simt, te<=64, W<=64"
+       "n": 48,
+       "mape": 18.59,
+       "domain": "simt, te<=64, W<=64, te/bpt physics features"
       },
       "load.B.fp16": {
        "features": [
         "one",
-        "nI",
+        "bpt",
+        "by_bytes",
+        "invW",
         "lnW4",
-        "pwsq"
+        "te_invW",
+        "max0_te8"
        ],
        "coefficients": [
-        -21.809,
-        170.282,
-        -7.191,
-        36.112
+        139.4692,
+        11.0597,
+        0.0166,
+        -28.0485,
+        -7.3547,
+        -7.896,
+        14.3059
        ],
-       "n": 53,
-       "mape": 10.8,
-       "p95": 26.2,
-       "domain": "simt, te<=64, W<=64"
+       "n": 52,
+       "mape": 8.73,
+       "domain": "simt, te<=64, W<=64, te/bpt physics features"
       },
       "load.B.fp32": {
        "features": [
         "one",
-        "nI",
+        "by_bytes",
+        "invW",
         "lnW4",
-        "pwsq"
+        "sqte",
+        "te_lnW4",
+        "max0_te4"
        ],
        "coefficients": [
-        -15.274,
-        162.312,
-        -8.719,
-        37.062
+        104.8086,
+        0.0161,
+        -84.3247,
+        -8.1004,
+        101.2939,
+        0.0886,
+        39.5006
        ],
-       "n": 54,
-       "mape": 12.4,
-       "p95": 42.8,
-       "domain": "simt, te<=64, W<=64"
+       "n": 53,
+       "mape": 8.16,
+       "domain": "simt, te<=64, W<=64, te/bpt physics features"
       },
       "load.B.int64": {
        "features": [
         "one",
-        "nI",
+        "te3",
+        "W",
+        "invW",
         "lnW4",
-        "pwsq"
+        "pwsq",
+        "max0_te2",
+        "log2te"
        ],
        "coefficients": [
-        58.043,
-        119.192,
-        -8.119,
-        37.867
+        198.3822,
+        -0.0005,
+        1.0985,
+        -63.5157,
+        -7.3546,
+        29.9504,
+        67.4872,
+        10.7659
        ],
        "n": 55,
-       "mape": 14.1,
-       "p95": 39.5,
-       "domain": "simt, te<=64, W<=64"
+       "mape": 9.44,
+       "domain": "simt, te<=64, W<=64, te/bpt physics features"
       },
-      "store": {
+      "store.A": {
        "features": [
         "one",
         "nImW"
        ],
        "coefficients": [
-        40.0,
+        40,
+        1.937
+       ],
+       "max_features": [
+        "one",
+        "wdr1",
+        "wdr2",
+        "wdr4",
+        "wdr8",
+        "wdr16",
+        "wdr32",
+        "wdr64"
+       ],
+       "max_coefficients": [
+        34.897,
+        404.094,
+        363.196,
+        554.94,
+        546.352,
+        521.947,
+        465.685,
+        254.923
+       ],
+       "n": 405,
+       "mape": 30.5,
+       "mape_by_ge_4096": 19.7,
+       "domain": "simt store, all dtypes merged, te<=64, floor 40ns"
+      },
+      "store.B": {
+       "features": [
+        "one",
+        "nImW"
+       ],
+       "coefficients": [
+        40,
         1.937
        ],
        "max_features": [
@@ -2032,7 +2224,7 @@
         -5.718
        ],
        "n": 36,
-       "mape": 10.0,
+       "mape": 10,
        "domain": "simd te>=8, single-shot context only; fit to the v1 te8 table knots (intercept = mask setup + drain)"
       },
       "store.A": {
@@ -2179,7 +2371,7 @@
        ],
        "n": 28,
        "mape": 12.5,
-       "p95": 64.0
+       "p95": 64
       },
       "store.eb2": {
        "features": [
@@ -2238,46 +2430,6 @@
        "mape": 5.2,
        "p95": 14.3
       }
-     },
-     "simd.load": {
-      "features": [
-       "one",
-       "log2_by",
-       "inv_n",
-       "bw",
-       "mask"
-      ],
-      "coefficients": [
-       91.0407,
-       3.5736,
-       63.1191,
-       0.7822,
-       15.13
-      ],
-      "n": 63,
-      "mape": 2.87,
-      "domain": "all SIMD loads (mask indicator covers nomask + dynamically-all-true-mask)"
-     },
-     "simd.store": {
-      "features": [
-       "one",
-       "by",
-       "log2_by",
-       "sq_by",
-       "mask",
-       "mask_by"
-      ],
-      "coefficients": [
-       -37.7017,
-       0.0083,
-       6.3883,
-       -0.9234,
-       50.6948,
-       0.0021
-      ],
-      "n": 20,
-      "mape": 3.97,
-      "domain": "all SIMD stores (mask indicator + mask-by interaction)"
      }
     },
     "evidence": "third_party/ascend/costmodel/profiles/microbench/data_provider/contiguous_ldst/contiguous_1d",
@@ -2817,7 +2969,7 @@
     }
    },
    "load_strided_store_coexistence": {
-    "penalty_system_cycles": 84.0,
+    "penalty_system_cycles": 84,
     "evidence": "strided_scatter_f32_s16 in-context delta: 8 interleaved 1KB-load/stride-16-scatter rounds, measured kernel 4.302us vs isolated-bw model 3.631us; probe_te8/.. scripts, 2026-11-08 card2"
    }
   },

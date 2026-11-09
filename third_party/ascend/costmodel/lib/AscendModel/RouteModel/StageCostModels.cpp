@@ -619,11 +619,11 @@ static void mapContiguousMemoryCompletion(
     // trip count is unknown at compile time (it depends on the runtime grid
     // size).  Such an access must never use the single-shot FormS tables:
     // mark it as streaming so the serial/throughput paths own it.
-    const bool streams = stage.features.hasLoop || stage.iterationCount > 1 ||
+    const bool repeated = stage.features.hasLoop || stage.iterationCount > 1 ||
                          access.count > 1.0 || groupCount > 1 ||
                          stage.features.insideGridStrideLoopBody;
-    stats.streams = streams;
-    stats.pipelined = streams && !stage.features.hasLoopCarriedDataDependency;
+    stats.repeated = repeated;
+    stats.cross_iter_pipelined = repeated && !stage.features.hasLoopCarriedDataDependency;
     if (!stats.isValid())
       continue;
     // te is a power of two for every unmasked SIMT access (both the element
@@ -658,12 +658,12 @@ static void mapContiguousMemoryCompletion(
     // Register sub-line SIMT load claims for the route-level group refund:
     // the stages of one straight-line route each claim one member of what
     // the hardware issues as one back-to-back same-shape group, so the
-    // route plan amortizes the members past the first.  Looped (streams)
+    // route plan amortizes the members past the first.  Looped (repeated)
     // stages are excluded: their pipelined/throughput formulas already
     // carry concurrency terms, so a route-level refund would amortize
     // twice (measured: rowred/layer_norm regressed, indirect_index -
     // straight-line - improved).
-    if (!stats.streams && !stats.store && !simd && byBytes <= 256) {
+    if (!stats.repeated && !stats.store && !simd && byBytes <= 256) {
       auto &claim = resources.subLineLoadClaims[std::make_tuple(
           int64_t(access.elementBits / 8), byBytes,
           int64_t(profile.activeWarpCount))];

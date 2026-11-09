@@ -44,12 +44,12 @@ struct ContiguousAccessStats {
   /// True when the enclosing loop carries no data dependency across iterations,
   /// so consecutive accesses pipeline and the throughput curves apply instead of
   /// the latency ones.
-  bool pipelined = false;
+  bool cross_iter_pipelined = false;
   /// True when the access repeats (inside a loop, repeated iterations, or a
   /// same-shape group), regardless of whether it can pipeline.  A loop-carried
-  /// access has streams=true but pipelined=false: its marginal cost belongs to
-  /// the serial formulas, not the single-shot FormS tables.
-  bool streams = false;
+  /// access has repeated=true but cross_iter_cross_iter_pipelined=false: its marginal cost
+  /// belongs to the serial formulas, not the single-shot formulas.
+  bool repeated = false;
   /// Number of same-shape accesses issued back to back in one iteration.  The
   /// throughput fit carries a 1/unroll term, so this is the factor that term
   /// divides by; 1 means the access stands alone.

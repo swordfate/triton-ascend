@@ -322,6 +322,34 @@ double physicsFeature(llvm::StringRef name, double te, double bpt,
     return nI * std::log2(warps);
   if (f == "sqte")
     return std::sqrt(te);
+  if (f == "te2")
+    return te * te;
+  if (f == "te3")
+    return te * te * te;
+  if (f == "log2te")
+    return std::log2(std::max(0.01, te));
+  if (f == "W")
+    return warps;
+  if (f == "invW")
+    return 1.0 / std::max(1.0, warps);
+  if (f == "invW2")
+    return 1.0 / (warps * warps);
+  if (f == "te_invW")
+    return te / std::max(1.0, warps);
+  if (f == "te_div_W")
+    return te / warps;
+  if (f == "te_lnW4")
+    return te * (static_cast<double>(by) / 128.0) / std::max(1.0, warps / 4.0);
+  if (f == "by_invW")
+    return static_cast<double>(by) / std::max(1.0, warps);
+  if (f == "max0_te2")
+    return std::max(0.0, te - 2.0);
+  if (f == "max0_te4")
+    return std::max(0.0, te - 4.0);
+  if (f == "max0_te8")
+    return std::max(0.0, te - 8.0);
+  if (f == "max0_te16")
+    return std::max(0.0, te - 16.0);
   // Store-drain rate dummies: bytes scaled per warp count, fitted per W.
   for (double w : {1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0})
     if (f == "wdr" + std::to_string(static_cast<int64_t>(w)))
@@ -534,7 +562,7 @@ double estimateContiguousCompletionNs(const ContiguousAccessStats &astats,
 
   // FormS: a lone single-shot access with NO repetition context (no loop,
   // no repeated iterations, no multi-access group) keeps the single-shot
-  // calibration.  A loop-carried access (streams=true but pipelined=false)
+  // calibration.  A loop-carried access (repeated=true but cross_iter_pipelined=false)
   // must fall through to the serial formulas: the acc-chain amortizes the
   // startup, so its marginal cost is below the single-shot value.
   // SIMD only: a SIMT load's single-shot price is the warp's exposed L2
@@ -543,7 +571,7 @@ double estimateContiguousCompletionNs(const ContiguousAccessStats &astats,
   // charging it per stage double-counts (measured on the 100-case: -4 net
   // PASS).  SIMT lone loads price by the segment/small-group service rates;
   // SIMD single-shot formulas are calibration-validated as-is.
-  if (!astats.streams && astats.concurrency <= 1 && astats.simd) {
+  if (!astats.repeated && astats.concurrency <= 1 && astats.simd) {
     const double formNs = estimateFormSNs(astats, fit);
     if (formNs > 0.0) {
       note("forms", formNs, "forms");
@@ -555,7 +583,7 @@ double estimateContiguousCompletionNs(const ContiguousAccessStats &astats,
                    "forms-refused streams=%d conc=%lld masked=%d\n",
                    static_cast<long long>(astats.elements), elemBytes, warps,
                    static_cast<double>(astats.elements) * elemBytes, te,
-                   vectorized ? 1 : 0, astats.streams ? 1 : 0,
+                   vectorized ? 1 : 0, astats.repeated ? 1 : 0,
                    static_cast<long long>(astats.concurrency),
                    astats.masked ? 1 : 0);
   }
@@ -664,7 +692,7 @@ double estimateContiguousCompletionNs(const ContiguousAccessStats &astats,
   const double pipelinedBytes =
       static_cast<double>(astats.elements) * astats.elementBytes;
   const double throughputLimit = vectorized ? 16384.0 : 8192.0;
-  if (astats.pipelined && pipelinedBytes <= throughputLimit) {
+  if (astats.cross_iter_pipelined && pipelinedBytes <= throughputLimit) {
     // regimes cover different domains (a >4 KiB unmasked load has no latency
     // slot but does have throughput curves).
     std::string bwKey;
