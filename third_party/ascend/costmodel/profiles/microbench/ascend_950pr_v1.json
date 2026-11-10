@@ -3454,6 +3454,26 @@
       "source_kind": "isolated_microbenchmark",
       "source": "Triton kernel slope fit: grid=1, 4 independent chains, chain=1 vs chain=8 work points, healthy card; see data_provider/arithmetic/measured_20261027.json",
       "confidence": "medium"
+    },
+    "simt.grid_stride.dot.fp16.flops_8192.factor_1.body_cost": {
+      "description": "Completion-inclusive cost of one independent FP16 16x16x16 dot in a serialized SIMT/F1 dynamic grid-stride body after subtracting the paired direct-memory control.",
+      "value": 532.7620737969304,
+      "scope": "56_AIV_num_warps_4_factor_1_dynamic_grid_stride_fp16_dot_8192_flops",
+      "unit": "system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "source_kind": "isolated_microbenchmark",
+      "confidence": "medium",
+      "source": "triton-ascend-costmodel-tests@5120234 paired grid-dot/direct-memory controls; fresh-process SIMT/F1 windows at Q=1,2; nonnegative-startup constrained fit"
+    },
+    "simt.grid_stride.dot.fp16.flops_8192.factor_1.startup_cost": {
+      "description": "Factor-1 dot-specific startup floor after the route boundary owns kernel establishment.",
+      "value": 1,
+      "scope": "56_AIV_num_warps_4_factor_1_dynamic_grid_stride_fp16_dot_8192_flops",
+      "unit": "system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "source_kind": "isolated_microbenchmark",
+      "confidence": "medium",
+      "source": "triton-ascend-costmodel-tests@5120234 paired grid-dot/direct-memory controls; one-cycle positive floor avoids assigning route establishment twice"
     }
   }
 }
