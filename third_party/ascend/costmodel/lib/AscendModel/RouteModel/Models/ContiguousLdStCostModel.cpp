@@ -743,38 +743,11 @@ double estimateContiguousCompletionNs(const ContiguousAccessStats &astats,
       }
     }
   }
-  // te>=8 stream regime: physics formulas fitted on the paired-control
-  // calibration (per-width family first, then the merged family).  The
-  // legacy bilinear knot tables remain as an old-profile fallback.
-  if (!vectorized && te >= 8.0) {
-    const double by = static_cast<double>(astats.elements) *
-                      static_cast<double>(elemBytes);
-    const double warpsD = static_cast<double>(warps);
-    const double bpt =
-        by / (32.0 * std::max(1.0, warpsD));
-    const double ebD = static_cast<double>(elemBytes);
-    const std::string stem = isStore ? std::string("store") : std::string("load");
-    const std::string merged = stem;
-    const std::string specific = stem + ".eb" + std::to_string(elemBytes);
-    for (const std::string &key : {specific, merged}) {
-      const auto formula = fit.te8Formulas.find(key);
-      if (formula != fit.te8Formulas.end() && formula->second.isValid()) {
-        const double ns =
-            evalPhysicsFormula(formula->second, te, bpt,
-                               static_cast<int64_t>(by), warpsD, ebD);
-        if (ns > 0.0) {
-          note("te8", ns, key);
-          return ns;
-        }
-      }
-    }
-    const auto table = fit.tables.find(specific);
-    if (table != fit.tables.end() && table->second.isValid()) {
-      const double tableValue = table->second.interpolate(te, by);
-      note("table", tableValue, specific);
-      return tableValue;
-    }
-  }
+  // te>=8 streaming SIMT accesses deliberately fall through to the segment
+  // formulas below: the te8 physics fits are pure transfer marginals and the
+  // max(segment) floor described by the re-integration commit was never
+  // implemented, so returning them directly under-priced the loop-start
+  // latency and kernel-end drain (reduce_sum_epilogue F4 flipped).
   if (key.empty())
     return 0.0;
 
