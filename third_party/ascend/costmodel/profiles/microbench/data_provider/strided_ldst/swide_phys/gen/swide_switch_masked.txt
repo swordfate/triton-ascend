@@ -1,0 +1,32 @@
+  case SwideFormula::SimtLoadSwideMaskedRows16W38:  // terms: h_div_w, L256, mx2048, mx128, S64, S4096, gap
+    return fit.intercept + c[0] * f.h_div_w + c[1] * f.L256 + c[2] * f.mx2048 + c[3] * f.mx128 + c[4] * f.S64 + c[5] * f.S4096 + c[6] * f.gap;
+  case SwideFormula::SimtLoadSwideMaskedRows16Wgt8:  // terms: iters_x_W, cseg_mod32, mx32, mx128, S256, inv_sectors
+    return fit.intercept + c[0] * f.iters_x_W + c[1] * f.cseg_mod32 + c[2] * f.mx32 + c[3] * f.mx128 + c[4] * f.S256 + c[5] * f.inv_sectors;
+  case SwideFormula::SimtLoadSwideMaskedRows16Wle2:  // terms: cseg_x_invW, inv_n, S4096, W2, span, L256, L2048, L1024, run_x_W
+    return fit.intercept + c[0] * f.cseg_x_invW + c[1] * f.inv_n + c[2] * f.S4096 + c[3] * f.W2 + c[4] * f.span + c[5] * f.L256 + c[6] * f.L2048 + c[7] * f.L1024 + c[8] * f.run_x_W;
+  case SwideFormula::SimtLoadSwideMaskedRows2:  // terms: W2, S32, cseg_mod32, n2W, bytes_per_lane
+    return fit.intercept + c[0] * f.W2 + c[1] * f.S32 + c[2] * f.cseg_mod32 + c[3] * f.n2W + c[4] * f.bytes_per_lane;
+  case SwideFormula::SimtLoadSwideMaskedRows64W38:  // terms: cseg_x_invW, L32, cseg_mod32, log_n
+    return fit.intercept + c[0] * f.cseg_x_invW + c[1] * f.L32 + c[2] * f.cseg_mod32 + c[3] * f.log_n;
+  case SwideFormula::SimtLoadSwideMaskedRows64Wgt8:  // terms: n2W, W2, h_pos, inv_n, cseg_x_invW, S32
+    return fit.intercept + c[0] * f.n2W + c[1] * f.W2 + c[2] * f.h_pos + c[3] * f.inv_n + c[4] * f.cseg_x_invW + c[5] * f.S32;
+  case SwideFormula::SimtLoadSwideMaskedRows64Wle2:  // terms: n2W, cseg_x_invW, h, W, bytes_per_lane, run_x_W, cseg_x_minW4, L32
+    return fit.intercept + c[0] * f.n2W + c[1] * f.cseg_x_invW + c[2] * f.h + c[3] * f.W + c[4] * f.bytes_per_lane + c[5] * f.run_x_W + c[6] * f.cseg_x_minW4 + c[7] * f.L32;
+  case SwideFormula::SimtLoadSwideMaskedRows8:  // terms: L256, maxW16, mx2048, minW2, span_div_run, n2W, L2048, L512, S256, cseg_mod32
+    return fit.intercept + c[0] * f.L256 + c[1] * f.maxW16 + c[2] * f.mx2048 + c[3] * f.minW2 + c[4] * f.span_div_run + c[5] * f.n2W + c[6] * f.L2048 + c[7] * f.L512 + c[8] * f.S256 + c[9] * f.cseg_mod32;
+  case SwideFormula::SimtStoreSwideMaskedRows16W38:  // terms: L64, mis32, L32, mx128, inv_n, S128
+    return fit.intercept + c[0] * f.L64 + c[1] * f.mis32 + c[2] * f.L32 + c[3] * f.mx128 + c[4] * f.inv_n + c[5] * f.S128;
+  case SwideFormula::SimtStoreSwideMaskedRows16Wgt8:  // terms: iters_x_W, cseg_mod32, W2, S256, inv_n
+    return fit.intercept + c[0] * f.iters_x_W + c[1] * f.cseg_mod32 + c[2] * f.W2 + c[3] * f.S256 + c[4] * f.inv_n;
+  case SwideFormula::SimtStoreSwideMaskedRows16Wle2:  // terms: bytes_per_lane, mis32, L256, duty2
+    return fit.intercept + c[0] * f.bytes_per_lane + c[1] * f.mis32 + c[2] * f.L256 + c[3] * f.duty2;
+  case SwideFormula::SimtStoreSwideMaskedRows2:  // terms: maxW8, h, W2, h_pos, lines_per_seg, bytes_per_segline
+    return fit.intercept + c[0] * f.maxW8 + c[1] * f.h + c[2] * f.W2 + c[3] * f.h_pos + c[4] * f.lines_per_seg + c[5] * f.bytes_per_segline;
+  case SwideFormula::SimtStoreSwideMaskedRows64W38:  // terms: L32, duty2, L256, logW, bytes_per_lane, duty, L2048, rows_x_duty
+    return fit.intercept + c[0] * f.L32 + c[1] * f.duty2 + c[2] * f.L256 + c[3] * f.logW + c[4] * f.bytes_per_lane + c[5] * f.duty + c[6] * f.L2048 + c[7] * f.rows_x_duty;
+  case SwideFormula::SimtStoreSwideMaskedRows64Wgt8:  // terms: iters_x_W, mis32, mx128, bytes_per_lane, W2, S512, S32, S2048
+    return fit.intercept + c[0] * f.iters_x_W + c[1] * f.mis32 + c[2] * f.mx128 + c[3] * f.bytes_per_lane + c[4] * f.W2 + c[5] * f.S512 + c[6] * f.S32 + c[7] * f.S2048;
+  case SwideFormula::SimtStoreSwideMaskedRows64Wle2:  // terms: L256, mis32, duty2, run_x_W, L2048, duty, is32, L64
+    return fit.intercept + c[0] * f.L256 + c[1] * f.mis32 + c[2] * f.duty2 + c[3] * f.run_x_W + c[4] * f.L2048 + c[5] * f.duty + c[6] * f.is32 + c[7] * f.L64;
+  case SwideFormula::SimtStoreSwideMaskedRows8:  // terms: maxW8, bytes_per_lane, W2, S256, cseg_x_invW, cseg_mod32, maxW4
+    return fit.intercept + c[0] * f.maxW8 + c[1] * f.bytes_per_lane + c[2] * f.W2 + c[3] * f.S256 + c[4] * f.cseg_x_invW + c[5] * f.cseg_mod32 + c[6] * f.maxW4;

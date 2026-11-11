@@ -1,0 +1,28 @@
+  case SwideFormula::SimdLoadSwideRowsLe4:  // terms: n, rows_x_duty, duty2, S128, lines_per_seg, run
+    return fit.intercept + c[0] * f.n + c[1] * f.rows_x_duty + c[2] * f.duty2 + c[3] * f.S128 + c[4] * f.lines_per_seg + c[5] * f.run;
+  case SwideFormula::SimdLoadSwideRowsGt4:  // terms: n, rows_x_duty, total_lines, S256, duty, sqrt_n
+    return fit.intercept + c[0] * f.n + c[1] * f.rows_x_duty + c[2] * f.total_lines + c[3] * f.S256 + c[4] * f.duty + c[5] * f.sqrt_n;
+  case SwideFormula::SimdStoreSwideRowsLe2:  // terms: duty, mis32, rows_x_duty, inv_n, gap, S2048, S4096, L4096, mx512, mx128, elem_per_line, sqrt_n, mx256
+    return fit.intercept + c[0] * f.duty + c[1] * f.mis32 + c[2] * f.rows_x_duty + c[3] * f.inv_n + c[4] * f.gap + c[5] * f.S2048 + c[6] * f.S4096 + c[7] * f.L4096 + c[8] * f.mx512 + c[9] * f.mx128 + c[10] * f.elem_per_line + c[11] * f.sqrt_n + c[12] * f.mx256;
+  case SwideFormula::SimdStoreSwideRowsGt2:  // terms: rows_x_duty, duty2, total_lines, mis32, L128, mx4096, rows2, mx1024, run, duty, cseg, mx512, mx2048, mx256, elem_per_line, mx128
+    return fit.intercept + c[0] * f.rows_x_duty + c[1] * f.duty2 + c[2] * f.total_lines + c[3] * f.mis32 + c[4] * f.L128 + c[5] * f.mx4096 + c[6] * f.rows2 + c[7] * f.mx1024 + c[8] * f.run + c[9] * f.duty + c[10] * f.cseg + c[11] * f.mx512 + c[12] * f.mx2048 + c[13] * f.mx256 + c[14] * f.elem_per_line + c[15] * f.mx128;
+  case SwideFormula::SimtLoadSwideRows2:  // terms: maxW16, maxW4, cseg_x_invW, cseg_mod32, minW8, h_div_w, h_pos
+    return fit.intercept + c[0] * f.maxW16 + c[1] * f.maxW4 + c[2] * f.cseg_x_invW + c[3] * f.cseg_mod32 + c[4] * f.minW8 + c[5] * f.h_div_w + c[6] * f.h_pos;
+  case SwideFormula::SimtLoadSwideRows8:  // terms: L256, maxW16, L2048, h_div_w, L512, L4096, L128, S4096, cseg, S2048, maxW8, bytes_per_lane, h
+    return fit.intercept + c[0] * f.L256 + c[1] * f.maxW16 + c[2] * f.L2048 + c[3] * f.h_div_w + c[4] * f.L512 + c[5] * f.L4096 + c[6] * f.L128 + c[7] * f.S4096 + c[8] * f.cseg + c[9] * f.S2048 + c[10] * f.maxW8 + c[11] * f.bytes_per_lane + c[12] * f.h;
+  case SwideFormula::SimtLoadSwideRows64Wle2:  // terms: n2W, mx64, S64, h, cseg_mod32
+    return fit.intercept + c[0] * f.n2W + c[1] * f.mx64 + c[2] * f.S64 + c[3] * f.h + c[4] * f.cseg_mod32;
+  case SwideFormula::SimtLoadSwideRows64W38:  // terms: cseg_x_invW, bytes_per_lane, S128, cseg_mod32, n2W, elem_per_lane, elem_per_warp, h_div_w, iters, bytes_per_warp, q, W, S64, span
+    return fit.intercept + c[0] * f.cseg_x_invW + c[1] * f.bytes_per_lane + c[2] * f.S128 + c[3] * f.cseg_mod32 + c[4] * f.n2W + c[5] * f.elem_per_lane + c[6] * f.elem_per_warp + c[7] * f.h_div_w + c[8] * f.iters + c[9] * f.bytes_per_warp + c[10] * f.q + c[11] * f.W + c[12] * f.S64 + c[13] * f.span;
+  case SwideFormula::SimtLoadSwideRows64Wgt8:  // terms: n2W, h_pos, L2048, mx256, S2048, W, cseg, mx1024
+    return fit.intercept + c[0] * f.n2W + c[1] * f.h_pos + c[2] * f.L2048 + c[3] * f.mx256 + c[4] * f.S2048 + c[5] * f.W + c[6] * f.cseg + c[7] * f.mx1024;
+  case SwideFormula::SimtStoreSwideRows2:  // terms: maxW8, S4096, h_pos, n2W, maxW16, minW16
+    return fit.intercept + c[0] * f.maxW8 + c[1] * f.S4096 + c[2] * f.h_pos + c[3] * f.n2W + c[4] * f.maxW16 + c[5] * f.minW16;
+  case SwideFormula::SimtStoreSwideRows8:  // terms: maxW8, bytes_per_lane, mis32, maxW16, minW16, h_div_w, mx128, mx64
+    return fit.intercept + c[0] * f.maxW8 + c[1] * f.bytes_per_lane + c[2] * f.mis32 + c[3] * f.maxW16 + c[4] * f.minW16 + c[5] * f.h_div_w + c[6] * f.mx128 + c[7] * f.mx64;
+  case SwideFormula::SimtStoreSwideRows64Wle2:  // terms: bytes_per_lane, L128, n2W, L256, duty2, r16_x_segW, mis32, S128
+    return fit.intercept + c[0] * f.bytes_per_lane + c[1] * f.L128 + c[2] * f.n2W + c[3] * f.L256 + c[4] * f.duty2 + c[5] * f.r16_x_segW + c[6] * f.mis32 + c[7] * f.S128;
+  case SwideFormula::SimtStoreSwideRows64W38:  // terms: L128, r16_x_segW, L256, mis32, L512, bytes_per_lane, duty2, duty
+    return fit.intercept + c[0] * f.L128 + c[1] * f.r16_x_segW + c[2] * f.L256 + c[3] * f.mis32 + c[4] * f.L512 + c[5] * f.bytes_per_lane + c[6] * f.duty2 + c[7] * f.duty;
+  case SwideFormula::SimtStoreSwideRows64Wgt8:  // terms: duty2, L256, W, bytes_per_lane, mis32, L128, L2048, duty
+    return fit.intercept + c[0] * f.duty2 + c[1] * f.L256 + c[2] * f.W + c[3] * f.bytes_per_lane + c[4] * f.mis32 + c[5] * f.L128 + c[6] * f.L2048 + c[7] * f.duty;
