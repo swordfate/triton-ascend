@@ -472,6 +472,16 @@ static void mapContiguousV2Completion(
 
   if (hasLoop) {
     // ---- Formula B: one evaluation for the whole loop body --------------
+    // Fitted domain (CALIBRATED_RANGES.md §1): K swept 2..128 with exactly
+    // one access instance per iteration.  K==1 stages (AutoBlockify shells,
+    // straight-line bodies) degenerate the formula to P+m per access and
+    // stay on the legacy curves; accesses with count > 1 instances per
+    // iteration are a throughput regime this formula does not describe.
+    if (K < 2 || K > 128)
+      return;
+    for (const StageMemoryAccess *access : eligible)
+      if (access->count > 1.0)
+        return;
     int64_t loadBytes = 0, storeBytes = 0, maxBytes = 0;
     int64_t loadElems = 0, storeElems = 0;
     for (const StageMemoryAccess *access : eligible) {
