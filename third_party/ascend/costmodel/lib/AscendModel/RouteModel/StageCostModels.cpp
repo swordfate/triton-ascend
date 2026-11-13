@@ -438,6 +438,11 @@ static void mapContiguousV2Completion(
   // fits cover and the only one that beat legacy end-to-end).
   if (hasLoop || !simd)
     return;
+  // The group prices are grid=1-calibrated and the P-axis knee sits at
+  // ~16 programs (RUNV8: single-program pytest kernels lose ~3-12% to the
+  // legacy analytical rates, every multi-program winner launches >=56).
+  if (programCountHint < 16)
+    return;
   const int64_t K = hasLoop ? std::max<int64_t>(1, stage.iterationCount) : 0;
 
   // Collect eligible contiguous direct accesses.
