@@ -4435,7 +4435,7 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
           executionStage, modeProfile, implementation.mode,
           implementation.superblockFactor,
           implementation.mode == StageMode::SIMT && !implementation.localScope,
-          std::nullopt, fitted);
+          std::nullopt, fitted, programCountHint);
       if (!resources)
         continue;
       auto mapping =
@@ -4659,7 +4659,8 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
               mapWorkload(stage, modeProfile, implementation.mode,
                           implementation.superblockFactor,
                           implementation.mode == StageMode::SIMT &&
-                              !implementation.localScope);
+                              !implementation.localScope,
+                          std::nullopt, {}, programCountHint);
           if (!fullResources)
             continue;
           const double unpartitionedTotal =
