@@ -80,8 +80,12 @@ resolveModeProfile(const HardwareProfile &hardware,
                    bool dependentDotRecurrence) {
   StageModeProfile resolved =
       implementation.mode == StageMode::SIMD ? hardware.simd : hardware.simt;
-  if (implementation.mode == StageMode::SIMD)
+  if (implementation.mode == StageMode::SIMD) {
+    fprintf(stderr, "[cv2-resolve] SIMD contiguousV2.enabled=%d ga=%d\n", (int)resolved.contiguousV2.enabled,
+        (int)resolved.contiguousV2.groupA.size());
     return resolved;
+  }
+
   resolved.prefixScanWarpCount =
       std::max<int64_t>(1, hardware.baseSimtWarpCount);
 
@@ -420,11 +424,6 @@ static void mapContiguousV2Completion(
     std::vector<const StageMemoryAccess *> &claimed,
     int64_t programCountHint) {
   const auto &v2 = profile.contiguousV2;
-  fprintf(stderr, "[v2dbg] stage=%s enabled=%d ga=%d lb=%d hint=%lld syn=%d
-",
-          stage.id.c_str(), (int)v2.enabled, (int)v2.groupA.size(),
-          (int)v2.loopB.size(), (long long)programCountHint,
-          stage.features.synchronizationCount);
   if (!v2.enabled || v2.groupA.empty() && v2.loopB.empty())
     return;
   if (stage.features.synchronizationCount != 0)
@@ -458,10 +457,6 @@ static void mapContiguousV2Completion(
       continue;
     eligible.push_back(&access);
   }
-  fprintf(stderr, "[v2dbg] stage=%s eligible=%d hasLoop=%d K=%lld
-",
-          stage.id.c_str(), (int)eligible.size(), (int)stage.features.hasLoop,
-          (long long)stage.iterationCount);
   if (eligible.empty())
     return;
 
@@ -597,6 +592,7 @@ static void mapContiguousV2Completion(
     const char *direction = first->store ? "store" : "load";
     const std::string key = std::string(direction) + "/" + dtype + "/" +
                             std::to_string(bucket) + "/" + res;
+    fprintf(stderr, "[cv2-hook] key=%s found=%d\n", key.c_str(), (int)(it != v2.groupA.end()));
     auto it = v2.groupA.find(key);
     if (it == v2.groupA.end())
       continue; // unfitted cell: fallbacks keep the bytes
@@ -611,10 +607,10 @@ static void mapContiguousV2Completion(
       total = g.first + (n - 1) * g.marginal;
     if (!(total > 0.0))
       continue;
-    const double pFac =
-        contiguous_v2::pAxisFactor(profile.contiguousV2,
-                    first->store ? "storeonly" : "loadsum",
-                    simd ? "simd" : "simt", res, programCountHint);
+    const double pFac = contiguous_v2::pAxisFactor(
+        profile.contiguousV2,
+        first->store ? "storeonly" : "loadsum",
+        simd ? "simd" : "simt", res, programCountHint);
     const double ns = total * pFac * kCyclesPerNano;
     for (const StageMemoryAccess *access : members) {
       claimed.push_back(access);
@@ -1958,6 +1954,10 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
     mapStridedShortMemoryCompletion(stage, work, profile, resources, simd,
                                     layout, stridedShortAlreadyClaimed);
     // v2 epoch-calibrated contiguous pricing claims before the legacy curves.
+    fprintf(stderr, "[cv2-mw] stage=%s hint=%lld cv2_enabled=%d ga=%d\n", stage.id.c_str(),
+        (long long)programCountHint,
+        (int)profile.contiguousV2.enabled,
+        (int)profile.contiguousV2.groupA.size());
     mapContiguousV2Completion(stage, work, profile, resources, simd, layout,
                               stridedShortAlreadyClaimed, programCountHint);
     // The store-group curve below must not price a store this pass already did.
@@ -4379,7 +4379,7 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
         return llvm::createStringError(std::errc::invalid_argument,
                                        "Stage '%s' has an illegal candidate",
                                        stage.id.c_str());
-      StageModeProfile modeProfile = resolveModeProfile(
+      const StageModeProfile modeProfile = resolveModeProfile(
           profile, implementation,
           stage.costModelKind == StageCostModelKind::LoopCarriedRecurrence &&
               stage.workload.dotFlops > 0.0);
@@ -4387,7 +4387,6 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
           perAivStage(stage, implementation.aivSubblocks);
       const StageMemoryCost fitted = IndirectGatherMemoryCostModel().cost(
           executionStage, profile, implementation);
-      modeProfile.contiguousV2.programCountHint = programCountHint;
       std::optional<StageResourceCycles> resources = mapWorkload(
           executionStage, modeProfile, implementation.mode,
           implementation.superblockFactor,

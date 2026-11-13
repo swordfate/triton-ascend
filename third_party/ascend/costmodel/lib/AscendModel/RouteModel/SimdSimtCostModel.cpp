@@ -2872,6 +2872,9 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
                                        "simd.memory")) {
       auto &cv2 = simdProfile.contiguousV2;
       cv2.enabled = true;
+      fprintf(stderr, "[cv2-parse] enabled=true ga=%d lb=%d sp=%d pa=%d\n",
+        (int)cv2.groupA.size(), (int)cv2.loopB.size(),
+        (int)cv2.sPenalty.size(), (int)cv2.pAxis.size());
       cv2.l2CacheBytes = reader.integer(
           *v2, "l2_cache_bytes", "simd.memory.contiguous_ldst_v2");
       if (const auto *ga = v2->getObject("group_a")) {
@@ -2903,6 +2906,36 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
           cv2.loopB[entry.first.str()] = l;
         }
       }
+            if (const auto *pa = v2->getObject("p_axis")) {
+        for (const auto &entry : *pa) {
+          const auto *o = entry.second.getAsObject();
+          if (!o)
+            continue;
+          std::map<int64_t, double> table;
+          llvm::SmallVector<int64_t, 16> psV;
+          llvm::SmallVector<double, 16> fsV;
+          if (const auto *ps = o->get("P"))
+            if (auto arr = ps->getAsArray())
+              for (const auto &e : *arr) {
+                if (const auto i = e.getAsInteger())
+                  psV.push_back(*i);
+              }
+          if (const auto *fs = o->get("factor"))
+            if (auto arr = fs->getAsArray())
+              for (const auto &e : *arr) {
+                if (const auto n = e.getAsNumber())
+                  fsV.push_back(*n);
+              }
+          for (size_t i = 0; i < psV.size() && i < fsV.size(); ++i)
+            table[psV[i]] = fsV[i];
+          if (!table.empty())
+            cv2.pAxis[entry.first.str()] = table;
+        }
+      }
+      cv2.bwWarmBytesPerNs = reader.optionalNumber(
+          *v2, "bw_warm_bytes_per_ns", 2400.0);
+      cv2.bwColdBytesPerNs = reader.optionalNumber(
+          *v2, "bw_cold_bytes_per_ns", 900.0);
       if (const auto *pa = v2->getObject("p_axis")) {
         for (const auto &entry : *pa) {
           const auto *o = entry.second.getAsObject();
@@ -2933,7 +2966,7 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
           *v2, "bw_warm_bytes_per_ns", 2400.0);
       cv2.bwColdBytesPerNs = reader.optionalNumber(
           *v2, "bw_cold_bytes_per_ns", 900.0);
-      if (const auto *sp = v2->getObject("s_penalty")) {
+if (const auto *sp = v2->getObject("s_penalty")) {
         for (const auto &entry : *sp) {
           if (const auto v = entry.second.getAsNumber())
             cv2.sPenalty[entry.first.str()] = *v;
@@ -3296,6 +3329,9 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
                                        "simt.memory")) {
       auto &cv2 = simtProfile.contiguousV2;
       cv2.enabled = true;
+      fprintf(stderr, "[cv2-parse] enabled=true ga=%d lb=%d sp=%d pa=%d\n",
+        (int)cv2.groupA.size(), (int)cv2.loopB.size(),
+        (int)cv2.sPenalty.size(), (int)cv2.pAxis.size());
       cv2.l2CacheBytes = reader.integer(
           *v2, "l2_cache_bytes", "simd.memory.contiguous_ldst_v2");
       if (const auto *ga = v2->getObject("group_a")) {
@@ -3327,36 +3363,6 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
           cv2.loopB[entry.first.str()] = l;
         }
       }
-      if (const auto *pa = v2->getObject("p_axis")) {
-        for (const auto &entry : *pa) {
-          const auto *o = entry.second.getAsObject();
-          if (!o)
-            continue;
-          std::map<int64_t, double> table;
-          llvm::SmallVector<int64_t, 16> psV;
-          llvm::SmallVector<double, 16> fsV;
-          if (const auto *ps = o->get("P"))
-            if (auto arr = ps->getAsArray())
-              for (const auto &e : *arr) {
-                if (const auto i = e.getAsInteger())
-                  psV.push_back(*i);
-              }
-          if (const auto *fs = o->get("factor"))
-            if (auto arr = fs->getAsArray())
-              for (const auto &e : *arr) {
-                if (const auto n = e.getAsNumber())
-                  fsV.push_back(*n);
-              }
-          for (size_t i = 0; i < psV.size() && i < fsV.size(); ++i)
-            table[psV[i]] = fsV[i];
-          if (!table.empty())
-            cv2.pAxis[entry.first.str()] = table;
-        }
-      }
-      cv2.bwWarmBytesPerNs = reader.optionalNumber(
-          *v2, "bw_warm_bytes_per_ns", 2400.0);
-      cv2.bwColdBytesPerNs = reader.optionalNumber(
-          *v2, "bw_cold_bytes_per_ns", 900.0);
       if (const auto *sp = v2->getObject("s_penalty")) {
         for (const auto &entry : *sp) {
           if (const auto v = entry.second.getAsNumber())
