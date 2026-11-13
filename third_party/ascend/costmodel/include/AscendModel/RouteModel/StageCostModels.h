@@ -653,7 +653,8 @@ class StageCostEvaluator {
 public:
   llvm::Expected<StageCostTable>
   evaluate(const StagePartition &partition, const HardwareProfile &profile,
-           bool collectCalibrationEstimates = true) const;
+           bool collectCalibrationEstimates,
+           int64_t programCountHint = 1) const;
 };
 
 } // namespace mlir::ascend

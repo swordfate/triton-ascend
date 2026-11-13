@@ -420,6 +420,11 @@ static void mapContiguousV2Completion(
     std::vector<const StageMemoryAccess *> &claimed,
     int64_t programCountHint) {
   const auto &v2 = profile.contiguousV2;
+  fprintf(stderr, "[v2dbg] stage=%s enabled=%d ga=%d lb=%d hint=%lld syn=%d
+",
+          stage.id.c_str(), (int)v2.enabled, (int)v2.groupA.size(),
+          (int)v2.loopB.size(), (long long)programCountHint,
+          stage.features.synchronizationCount);
   if (!v2.enabled || v2.groupA.empty() && v2.loopB.empty())
     return;
   if (stage.features.synchronizationCount != 0)
@@ -453,6 +458,10 @@ static void mapContiguousV2Completion(
       continue;
     eligible.push_back(&access);
   }
+  fprintf(stderr, "[v2dbg] stage=%s eligible=%d hasLoop=%d K=%lld
+",
+          stage.id.c_str(), (int)eligible.size(), (int)stage.features.hasLoop,
+          (long long)stage.iterationCount);
   if (eligible.empty())
     return;
 
