@@ -1,3 +1,5 @@
+#include <map>
+#include "AscendModel/RouteModel/ContiguousLdStV2CostModel.h"
 //===- StageCostModels.h - Per-stage analytical models --------*- C++ -*-===//
 //
 // StagePartitioner, StageCostEvaluator, and KernelRouteSolver are separate
@@ -8,8 +10,8 @@
 #ifndef ASCENDMODEL_ROUTEMODEL_STAGECOSTMODELS_H
 #define ASCENDMODEL_ROUTEMODEL_STAGECOSTMODELS_H
 
+#include "AscendModel/RouteModel/PrefixScan/PrefixScanFormulaModel.h"
 #include "AscendModel/RouteModel/Reduction/ReductionProfile.h"
-#include "AscendModel/RouteModel/Models/ContiguousLdStCostModel.h"
 #include "AscendModel/RouteModel/StageRouteCostModel.h"
 
 #include "AscendModel/RouteModel/Models/StridedShortCostModel.h"
@@ -70,8 +72,6 @@ struct StageControlFlowRates {
   bool isFiniteAndNonNegative() const;
 };
 
-void mergeReductionResidualWorkload(StageWorkload &into, StageWorkload from);
-
 struct LogicalStage {
   std::string id;
   StageCostModelKind costModelKind = StageCostModelKind::ScalarIssue;
@@ -119,13 +119,8 @@ struct LogicalStage {
 struct StagePartition {
   bool operationOwnershipComplete = false;
   int64_t modeledOperationCount = 0;
-  /// Launch-grid hint from the kernel metadata: programs that co-reside on
-  /// the device hide each other's load latency; a single program exposes it.
-  int64_t logicalProgramCountHint = 0;
-  /// Vector-core count: the single-shot context test is merged-program
-  /// count (hint / superblock factor) <= this.
-  int64_t physicalCoreCountHint = 0;
   std::vector<LogicalStage> stages;
+  std::vector<StageDependency> dependencies;
 };
 
 struct StageOperationRate {
@@ -147,6 +142,7 @@ struct StageOperationRate {
 /// Applied independently to each scan geometry and occurrence.
 struct CalibratedPrefixScanProfile {
   bool enabled = false;
+  std::vector<PrefixScanFormula> formulas;
   double prefixScanDependencyFactor = 1.0;
   double prefixScanDependencyFactor1d = 1.0;
   double prefixScanDependencyFactor1dSmall = 1.0;
@@ -298,7 +294,13 @@ struct StageAtomicRate {
   bool isValid() const;
 };
 
+
 struct StageModeProfile {
+  /// v2 epoch-calibrated contiguous pricing (contiguous_ldst_v2 block).
+  contiguous_v2::ContiguousV2Params contiguousV2;
+
+  /// Warps per logical SIMT scan, excluding other SuperBlock programs.
+  int64_t prefixScanWarpCount = 0;
   /// Resolved by the evaluator; not an independently editable profile knob.
   int64_t activeWarpCount = 0;
   double setupCycles = 0.0;
@@ -340,16 +342,6 @@ struct StageModeProfile {
   double independentLoadGroupBytesPerCycle = 0.0;
   int64_t independentLoadGroupMinimumOperations = 0;
   int64_t independentLoadGroupMaximumOperations = 0;
-  /// Closed-form contiguous (stride == 1) load/store fits.  The coefficients
-  /// live in the profile under simd.memory.contiguous_ldst; see
-  /// ContiguousLdStCostModel.h.
-  contiguous_ldst::ContiguousFit contiguous;
-  /// Per-round penalty for a SIMT stage that interleaves contiguous loads
-  /// with strided (scattered) stores: each round's load pays drain/issue
-  /// interference on top of its isolated calibrated price.  Zero disables.
-  double loadStridedStoreCoexistencePenaltyCycles = 0.0;
-  std::string loadStridedStoreCoexistenceEvidence;
-
   int64_t computedAddressScalarizedLoadMinimumElements = 0;
   int64_t computedAddressScalarizedLoadMaximumElements = 0;
   double computedAddressScalarizedLoadCyclesPerElement = 0.0;

@@ -28,6 +28,7 @@ namespace mlir::ascend {
 
 enum class StageMode { SIMD, SIMT };
 enum class StageKernelRouteKind { AllSIMD, AllSIMT, Mixed };
+enum class StageDependencyKind { IntraIterationData, LoopCarriedData };
 enum class StageScheduleKind {
   StraightLine,
   IndependentPipelined,
@@ -136,6 +137,28 @@ struct WholeSimdCompletionCurve {
 };
 
 llvm::StringRef stringifyStageMode(StageMode mode);
+
+llvm::StringRef stringifyStageDependencyKind(StageDependencyKind kind);
+
+/// One explicit same-iteration or loop-carried data dependency between
+/// logical Stage instances. Stage IDs, rather than vector indices, keep
+/// reports stable after StageKindClassifier assigns final semantic names.
+struct StageDependency {
+  std::string loopStage;
+  std::string sourceStage;
+  std::string targetStage;
+  StageDependencyKind kind = StageDependencyKind::LoopCarriedData;
+  int64_t iterationDistance = 1;
+  /// Retained report keys for compatibility; same-iteration edges use the
+  /// synthetic name `inter_stage_ssa` and index zero.
+  int64_t carriedValueIndex = 0;
+  std::string carriedValueName;
+  int64_t carriedValueBytes = 0;
+  std::string sourceLocation;
+
+  bool isValid() const;
+  llvm::json::Object toJSON() const;
+};
 
 struct StageImplementation {
   StageMode mode = StageMode::SIMD;
@@ -303,6 +326,11 @@ struct AddressPatternSummary {
   llvm::json::Object toJSON() const;
 };
 
+/// Semantic TTIR dot key. A physical resource observation may be used only
+/// after its lowering contract has been admitted for the current target.
+using DotShapeKey = std::tuple<int64_t, int64_t, int64_t, int64_t, std::string,
+                               std::string, std::string, std::string>;
+
 /// Mode-independent work owned exactly once by one Stage.  Values are
 /// logical elements/bytes, not mode-specific instructions or cycles.
 struct StageWorkload {
@@ -363,10 +391,17 @@ struct StageWorkload {
   std::map<std::tuple<int64_t, int64_t, int64_t>, double>
       segmentedIndirectStoreCounts;
   std::map<int64_t, double> predicateCounts;
-  std::map<std::tuple<int64_t, int64_t, int64_t, int64_t, bool, std::string,
-                      std::string, int64_t, int64_t, int64_t>,
-           double>
-      prefixScanCounts;
+  // Geometry, direction, combine class/type, rank/axis/bits, complete shape,
+  // exact returned combine op, and simple binary-region proof. The value is
+  // the sole dynamic occurrence count; no parallel fact list is maintained.
+  using PrefixScanKey =
+      std::tuple<int64_t, int64_t, int64_t, int64_t, bool, std::string,
+                 std::string, int64_t, int64_t, int64_t, std::vector<int64_t>,
+                 std::string, bool>;
+  std::map<PrefixScanKey, double> prefixScanCounts;
+  /// Mean combine-region work per occurrence; prefixScanCounts owns
+  /// multiplicity.
+  std::map<PrefixScanKey, StageWorkload> prefixScanCombineWorkloads;
   /// Dynamic row-reduction operations per Stage iteration.
   double reductionOperations = 0.0;
   double shuffleLaneSteps = 0.0;
@@ -388,6 +423,10 @@ struct StageWorkload {
   double dotOperations = 0.0;
   /// Per-matrix FLOP shape -> dynamic matrix instances.
   std::map<int64_t, double> dotFlopCounts;
+  /// (M, N, K, batch, lhs type, rhs type, accumulator type, precision) ->
+  /// source-level dot invocations per Stage iteration. Diagnostic only: the
+  /// cost is still owned by dotFlopCounts/dotFlops exactly once.
+  std::map<DotShapeKey, double> dotShapeCounts;
   /// TTIR operand provenance/layout key -> (FLOPs per dot, occurrences).
   /// Does not assert a physical shared-memory instruction count.
   std::map<std::string, std::pair<int64_t, double>> dotOperandPaths;
@@ -403,6 +442,13 @@ struct StageWorkload {
   double scalarStoreCount = 0.0;
   bool paysKernelSetup = false;
 
+  /// Compose work using the existing per-operation counting rules.
+  void merge(StageWorkload from);
+  /// Scale dynamic multiplicities; per-occurrence scan regions stay unchanged.
+  void scale(double factor);
+  /// Refresh the derived issue total after direct workload updates.
+  void recomputeIssueElements();
+
   bool isFiniteAndNonNegative() const;
   llvm::json::Object toJSON() const;
 };
@@ -413,20 +459,6 @@ struct StageResourceCycles {
   double load = 0.0;
   double store = 0.0;
   bool rowwiseAdditionalLoadSetupsOwnedOnce = false;
-  /// Sub-line (<256B) SIMT load claims by geometry (element bytes, access
-  /// bytes, warps).  A route whose stages each claim one member of what the
-  /// hardware issues as one back-to-back group must amortize the members
-  /// past the first to the measured group-marginal rate; the route-level
-  /// plan sums these and refunds the difference.  Already included in
-  /// `load`.
-  struct SubLineLoadClaim {
-    int64_t count = 0;     ///< claimed members per iteration
-    double sumNs = 0.0;    ///< charged per-iteration total at full price
-    double marginalNs = 0.0; ///< measured group-marginal rate per member
-    double iterations = 1.0; ///< loop trips multiplying the group
-  };
-  std::map<std::tuple<int64_t, int64_t, int64_t>, SubLineLoadClaim>
-      subLineLoadClaims;
   /// Generated-stream attribution.  These cycles are already included in
   /// `load`/`store`; they are diagnostic decomposition, not extra terms.
   double sharedLocalLoad = 0.0;
@@ -472,6 +504,9 @@ struct StageResourceCycles {
   /// Portion of shuffle attributed to tt.scan dependency levels.
   double scanShuffle = 0.0;
   double dot = 0.0;
+  /// True when `dot` includes the qualified SIMD physical resource formula.
+  /// No completion or ready latency is implied.
+  bool dotPhysicalResourceFormulaApplied = false;
   /// Diagnostic attribution only: already included in dot, not additive.
   double dotOperandGroup = 0.0;
   double dotInputLoadsCovered = 0.0;
@@ -491,6 +526,9 @@ struct StageResourceCycles {
   /// issue across all sequences and the longest dependent scan chain.
   double prefixScanIssue = 0.0;
   double prefixScanCriticalPath = 0.0;
+  /// Sum of scan completion costs per Stage iteration.
+  double scanCompletionCycles = 0.0;
+  std::map<std::string, double> scanFormulaCounts;
   /// Completion-inclusive body cost from an isolated dynamic grid-stride
   /// prefix-scan sweep. It replaces the decomposed scan/load/store estimate.
   double gridStridePrefixScanBody = 0.0;
@@ -521,19 +559,10 @@ struct StageResourceCycles {
   /// separate receipt-owned term; diagnostic decomposition, not extra terms.
   double stridedShortLoadCompletion = 0.0;
   double stridedShortStoreCompletion = 0.0;
-  /// Strided-short store operations claimed by the strided completion
-  /// (diagnostic attribution, already included in `store`).  Drives the
-  /// load-vs-scattered-store coexistence penalty.
-  double stridedShortStoreOperations = 0.0;
-  /// Closed-form contiguous load/store cycles claimed by
-  /// mapContiguousMemoryCompletion.  Same receipt contract: already included
-  /// in load/store, diagnostic decomposition plus route-side ownership input.
-  double contiguousClosedFormLoad = 0.0;
-  double contiguousClosedFormStore = 0.0;
   double criticalPath = 0.0;
   bool indirectMemoryAnalyticalFallback = false;
 
-  std::array<std::pair<llvm::StringRef, double>, 55> keyedValues() const;
+  std::array<std::pair<llvm::StringRef, double>, 54> keyedValues() const;
   bool isFiniteAndNonNegative() const;
   llvm::json::Object toJSON() const;
   /// Preserve every non-zero resource while omitting default-valued
@@ -666,6 +695,8 @@ struct SimtRegisterPressure {
 struct LogicalStageCost {
   std::string id;
   std::string model;
+  /// Ordered outer-to-inner split-loop shells containing this Stage.
+  std::vector<std::string> enclosingLoopStages;
   StageScheduleKind schedule = StageScheduleKind::StraightLine;
   int64_t iterationCount = 1;
   StageModelFeatures features;
@@ -843,6 +874,9 @@ struct StageCostTable {
   double mixedParentMemoryCyclesPerExcessIteration = 0.0;
   std::string mixedParentMemoryCompletionEvidence;
   std::vector<LogicalStageCost> stages;
+  std::vector<StageDependency> dependencies;
+  /// Apply the generic predecessor/resource schedule to recurrence loops.
+  bool stageDependencyScheduleEnabled = false;
 };
 
 struct ScopeHandoffCost {
@@ -942,6 +976,7 @@ struct StageCostModelSummary {
   std::string profileVersion;
   std::vector<LogicalStageCost> stages;
   ScopeHandoffCost scopeHandoff;
+  std::vector<StageDependency> dependencies;
   StageRoutePlan allSimd;
   StageRoutePlan allSimt;
   /// Auditable pure-SIMT plans for each legal whole-kernel factor.

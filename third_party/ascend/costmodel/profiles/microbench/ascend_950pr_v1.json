@@ -1,7 +1,7 @@
 {
   "$schema": "./microbenchmark_profile_schema.json",
   "schema_version": 1,
-  "profile_version": "ascend-950pr-shared-microbench-20261008-v29-simd-structural-completion",
+  "profile_version": "ascend-950pr-shared-microbench-20261026-v32-factor-scoped-grid-dot-controls",
   "target": "Ascend950PR/dav-c310",
   "description": "Model-neutral target facts and microbenchmark evidence. Model-specific scale, penalties, coverage, gates, and fallback priors are intentionally excluded.",
   "measurements": {
@@ -2113,17 +2113,17 @@
       "cycle_domain": "SYS_CNT",
       "source_kind": "isolated_microbenchmark",
       "confidence": "high",
-      "source": "data_provider/950pr_simd_structural_completion_20261008.json; development Q=1,16; holdout Q=2,4,8,12 max absolute error 7.02%"
+      "source": "data_provider/950pr_simd_structural_completion_20261008.json plus triton-ascend-costmodel-tests@5120234 paired grid-dot/direct-memory controls; fresh-process Q=4,6,8 dot increments retain the steady body within 9%"
     },
     "simd.grid_stride.dot.fp16.flops_8192.startup_cost": {
       "description": "One-time completion residual for an AutoBlockify SIMD dynamic grid-stride dot shell after kernel boundary and non-dot Stage resources.",
-      "value": 3035.872752766348,
+      "value": 2490.331721515966,
       "scope": "28_AIC_dynamic_grid_stride_fp16_dot_8192_flops",
       "unit": "system_cycle",
       "cycle_domain": "SYS_CNT",
       "source_kind": "isolated_microbenchmark",
       "confidence": "high",
-      "source": "data_provider/950pr_simd_structural_completion_20261008.json; development Q=1,16; holdout Q=2,4,8,12"
+      "source": "triton-ascend-costmodel-tests@5120234 paired grid-dot/direct-memory controls; signed completion ownership fitted jointly at Q=4,6,8 after preserving the independent MAC/MTE1 resource formula"
     },
     "simt.grid_stride.dot.fp16.flops_8192.body_cost": {
       "description": "Completion-inclusive cost of one independent FP16 16x16x16 dot in a dynamic grid-stride body after subtracting separately modeled loads, stores and issue.",
@@ -2145,25 +2145,45 @@
       "confidence": "medium",
       "source": "bench_grid_stride_dot_costmodel.py; fresh Level1 Auto-selected SIMT development endpoints Q=1 and Q=8; Q=2,4,6 are untouched validation points with <=2% expected error; serialized source loop, no cross-stage pipeline overlap"
     },
+    "simt.grid_stride.dot.fp16.flops_8192.factor_1.body_cost": {
+      "description": "Completion-inclusive cost of one independent FP16 16x16x16 dot in a serialized SIMT/F1 dynamic grid-stride body after subtracting the paired direct-memory control.",
+      "value": 532.7620737969304,
+      "scope": "56_AIV_num_warps_4_factor_1_dynamic_grid_stride_fp16_dot_8192_flops",
+      "unit": "system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "source_kind": "isolated_microbenchmark",
+      "confidence": "medium",
+      "source": "triton-ascend-costmodel-tests@5120234 paired grid-dot/direct-memory controls; fresh-process SIMT/F1 windows at Q=1,2; nonnegative-startup constrained fit"
+    },
+    "simt.grid_stride.dot.fp16.flops_8192.factor_1.startup_cost": {
+      "description": "Factor-1 dot-specific startup floor after the route boundary owns kernel establishment.",
+      "value": 1,
+      "scope": "56_AIV_num_warps_4_factor_1_dynamic_grid_stride_fp16_dot_8192_flops",
+      "unit": "system_cycle",
+      "cycle_domain": "SYS_CNT",
+      "source_kind": "isolated_microbenchmark",
+      "confidence": "medium",
+      "source": "triton-ascend-costmodel-tests@5120234 paired grid-dot/direct-memory controls; one-cycle positive floor avoids assigning route establishment twice"
+    },
     "simt.grid_stride.indirect_dot.fp16.warps_8.flops_8192.factor_1.body_adjustment": {
       "description": "Per-Q signed adjustment for composing one eight-warp loaded-index gather and one 8192-FLOP FP16 dot in the same serialized source grid-stride body at factor 1.",
-      "value": 132.246521204371,
+      "value": 319.5150365930696,
       "scope": "56_AIV_num_warps_4_factor_1_dynamic_grid_stride_indirect_warps_8_dot_flops_8192",
       "unit": "system_cycle",
       "cycle_domain": "SYS_CNT",
       "source_kind": "isolated_microbenchmark",
       "confidence": "high",
-      "source": "data_provider/950pr_simt_grid_stride_resource_composition_20261006.json; development Q=1,3,5,8; untouched Q=2,4 max error 1.86%"
+      "source": "triton-ascend-costmodel-tests@5120234 paired gather-dot/gather-only SIMT/F1 controls at Q=1,2; Q=4 is a held-out source-program-count check"
     },
     "simt.grid_stride.indirect_dot.fp16.warps_8.flops_8192.factor_1.startup_adjustment": {
       "description": "One-time signed inclusion-exclusion adjustment paired with the factor-1 gather-dot body adjustment; this is accounting, not a negative hardware latency.",
-      "value": -808.886871006111,
+      "value": -259.28115938,
       "scope": "56_AIV_num_warps_4_factor_1_dynamic_grid_stride_indirect_warps_8_dot_flops_8192",
       "unit": "system_cycle",
       "cycle_domain": "SYS_CNT",
       "source_kind": "isolated_microbenchmark",
       "confidence": "high",
-      "source": "data_provider/950pr_simt_grid_stride_resource_composition_20261006.json; residual against the uncorrected generic Stage formula"
+      "source": "triton-ascend-costmodel-tests@5120234 paired gather-dot/gather-only SIMT/F1 controls; signed inclusion-exclusion residual after independently modeled gather and dot resources"
     },
     "simt.grid_stride.indirect_dot.fp16.warps_8.flops_8192.factor_2.body_adjustment": {
       "description": "Per-Q signed adjustment for composing one eight-warp loaded-index gather and one 8192-FLOP FP16 dot in the same serialized source grid-stride body at factor 2.",
@@ -2177,13 +2197,13 @@
     },
     "simt.grid_stride.indirect_dot.fp16.warps_8.flops_8192.factor_2.startup_adjustment": {
       "description": "One-time signed inclusion-exclusion adjustment paired with the factor-2 gather-dot body adjustment; this is accounting, not a negative hardware latency.",
-      "value": -946.580061155978,
+      "value": -452.562234350196,
       "scope": "56_AIV_num_warps_4_factor_2_dynamic_grid_stride_indirect_warps_8_dot_flops_8192",
       "unit": "system_cycle",
       "cycle_domain": "SYS_CNT",
       "source_kind": "isolated_microbenchmark",
       "confidence": "high",
-      "source": "data_provider/950pr_simt_grid_stride_resource_composition_20261006.json; residual against the uncorrected generic Stage formula"
+      "source": "data_provider/950pr_simt_grid_stride_resource_composition_20261006.json retains the independently measured body slope; the one-time ownership term uses two fresh Auto-selected F2 Q=4 windows, with Q=2 held out below 0.6% error"
     },
     "simt.grid_stride.indirect_dot.fp16.warps_8.flops_8192.factor_4.body_adjustment": {
       "description": "Per-Q signed adjustment for composing one eight-warp loaded-index gather and one 8192-FLOP FP16 dot in the same serialized source grid-stride body at factor 4.",
@@ -3454,26 +3474,6 @@
       "source_kind": "isolated_microbenchmark",
       "source": "Triton kernel slope fit: grid=1, 4 independent chains, chain=1 vs chain=8 work points, healthy card; see data_provider/arithmetic/measured_20261027.json",
       "confidence": "medium"
-    },
-    "simt.grid_stride.dot.fp16.flops_8192.factor_1.body_cost": {
-      "description": "Completion-inclusive cost of one independent FP16 16x16x16 dot in a serialized SIMT/F1 dynamic grid-stride body after subtracting the paired direct-memory control.",
-      "value": 532.7620737969304,
-      "scope": "56_AIV_num_warps_4_factor_1_dynamic_grid_stride_fp16_dot_8192_flops",
-      "unit": "system_cycle",
-      "cycle_domain": "SYS_CNT",
-      "source_kind": "isolated_microbenchmark",
-      "confidence": "medium",
-      "source": "triton-ascend-costmodel-tests@5120234 paired grid-dot/direct-memory controls; fresh-process SIMT/F1 windows at Q=1,2; nonnegative-startup constrained fit"
-    },
-    "simt.grid_stride.dot.fp16.flops_8192.factor_1.startup_cost": {
-      "description": "Factor-1 dot-specific startup floor after the route boundary owns kernel establishment.",
-      "value": 1,
-      "scope": "56_AIV_num_warps_4_factor_1_dynamic_grid_stride_fp16_dot_8192_flops",
-      "unit": "system_cycle",
-      "cycle_domain": "SYS_CNT",
-      "source_kind": "isolated_microbenchmark",
-      "confidence": "medium",
-      "source": "triton-ascend-costmodel-tests@5120234 paired grid-dot/direct-memory controls; one-cycle positive floor avoids assigning route establishment twice"
     }
   }
 }

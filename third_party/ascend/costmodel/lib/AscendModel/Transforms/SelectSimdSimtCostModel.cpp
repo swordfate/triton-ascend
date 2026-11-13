@@ -198,7 +198,14 @@ struct SelectSimdSimtCostModelPass
       analysisModule = *parsedAnalysisModule;
     }
 
+    // Resolve launch facts in a private route-neutral view as well as in the
+    // transformed analysis view. Do not specialize the production TTIR.
+    OwningOpRef<ModuleOp> loopWorkloadModule;
+    if (parsedAnalysisModule)
+      loopWorkloadModule = cast<ModuleOp>(module->clone());
     SimdSimtCostModelOptions options;
+    options.loopWorkloadModule =
+        loopWorkloadModule ? *loopWorkloadModule : analysisModule;
     options.profilePath = profilePath.getValue();
     options.actualTarget = actualTarget.getValue();
     options.numWarps =
@@ -225,7 +232,17 @@ struct SelectSimdSimtCostModelPass
     if (auto capability =
             llvm::json::parse(routeTransformCapabilityJSON.getValue()))
       if (auto *object = capability->getAsObject()) {
-        if (failed(attachRuntimeScalarValues(analysisModule, *object))) {
+        if (auto requested =
+                object->getBoolean("dynamic_cv_pipeline_requested"))
+          options.dynamicCVPipelineRequested = *requested;
+        else if (object->get("dynamic_cv_pipeline_requested")) {
+          module.emitError("dynamic_cv_pipeline_requested must be a boolean");
+          signalPassFailure();
+          return;
+        }
+        if (failed(attachRuntimeScalarValues(analysisModule, *object)) ||
+            (loopWorkloadModule &&
+             failed(attachRuntimeScalarValues(*loopWorkloadModule, *object)))) {
           module.emitError("invalid runtime scalar values in route capability");
           signalPassFailure();
           return;
@@ -407,6 +424,7 @@ struct SelectSimdSimtCostModelPass
     reportJSON["analysis_ir_source"] = analysisModule == module
                                            ? "route_neutral_ttir"
                                            : "post_auto_blockify_v1_ttir";
+    reportJSON["loop_workload_ir_source"] = "route_neutral_ttir";
     if (auto capability =
             llvm::json::parse(routeTransformCapabilityJSON.getValue())) {
       reportJSON["route_transform_capability"] = std::move(*capability);

@@ -5,6 +5,8 @@
 //===----------------------------------------------------------------------===//
 
 #include "AscendModel/RouteModel/SimdSimtCostModel.h"
+#include "AscendModel/RouteModel/ContiguousLdStV2CostModel.h"
+#include "AscendModel/Analysis/LoopWorkloadAnalysis.h"
 #include "AscendModel/Analysis/SimtAnchorAnalysis.h"
 #include "AscendModel/Analysis/SimtRegisterPressureAnalysis.h"
 #include "AscendModel/Analysis/StagePartitioner.h"
@@ -198,6 +200,28 @@ struct KernelTimingProfile {
     }
   };
 
+  struct StageDependencyCompletion {
+    bool enabled = false;
+    std::string target;
+    std::string loweringContract;
+    double taskEnvelopeSystemCycles = 0.0;
+    double dynamicCVFirstFillSystemCycles = 0.0;
+    double dynamicCVPerIterationDeltaSystemCycles = 0.0;
+    std::string scheduleContract;
+    std::string fullKernelValidationSHA256;
+    std::string evidence;
+
+    bool isValid() const {
+      return !enabled ||
+             (target == "Ascend950PR_9579" && !loweringContract.empty() &&
+              finitePositive(
+                  {taskEnvelopeSystemCycles, dynamicCVFirstFillSystemCycles}) &&
+              finiteValues({dynamicCVPerIterationDeltaSystemCycles}) &&
+              !scheduleContract.empty() &&
+              fullKernelValidationSHA256.size() == 64 && !evidence.empty());
+    }
+  };
+
   struct TinyStraightLineSimtMemoryCompletion {
     bool enabled = false;
     int64_t maximumElementsPerAccess = 0;
@@ -370,6 +394,7 @@ struct KernelTimingProfile {
   SimtNonAffineRank1MemoryCompletion simtNonAffineRank1MemoryCompletion;
   Rank2InterleavedPrefixScanCompletion rank2InterleavedPrefixScanCompletion;
   SimtStaticLoopDirectMemoryCompletion simtStaticLoopDirectMemoryCompletion;
+  StageDependencyCompletion stageDependencyCompletion;
   double systemCounterFrequencyMHz = 0.0;
   std::string evidence;
 
@@ -444,6 +469,7 @@ struct KernelTimingProfile {
            simtNonAffineRank1MemoryCompletion.isValid() &&
            rank2InterleavedPrefixScanCompletion.isValid() &&
            simtStaticLoopDirectMemoryCompletion.isValid() &&
+           stageDependencyCompletion.isValid() &&
            finiteNonNegative(
                {scalarPrologueSystemCycles, scalarEpilogueSystemCycles}) &&
            finitePositive({systemCounterFrequencyMHz}) && !evidence.empty();
@@ -1206,187 +1232,7 @@ static std::string resolveProfileReference(llvm::StringRef ownerPath,
   return resolved.str().str();
 }
 
-/// Reads simd.memory.contiguous_ldst / simt.memory.contiguous_ldst.
-static void readContiguousLdStFit(ProfileJSONReader &reader,
-                                 const llvm::json::Object &memory,
-                                 llvm::StringRef context,
-                                 contiguous_ldst::ContiguousFit &fit) {
-  const auto *block = memory.getObject("contiguous_ldst");
-  if (!block)
-    return;
-  const std::string base = (context + ".contiguous_ldst").str();
-  fit.maxElements = reader.integer(*block, "max_elements", base);
-  fit.maxWarps = reader.integer(*block, "max_warps", base);
-  if (reader.string(*block, "evidence", base).empty())
-    reader.setError(base + ".evidence must identify calibration data");
-  const auto *formulas = reader.object(*block, "formulas", base);
-  if (!formulas) {
-    reader.setError(base + ".formulas is required");
-    return;
-  }
-  for (const auto &entry : *formulas) {
-    const auto *formula = entry.second.getAsObject();
-    const std::string path = base + ".formulas." + entry.first.str();
-    if (!formula) {
-      reader.setError(path + " must be an object");
-      continue;
-    }
-    contiguous_ldst::ContiguousFormula parsed;
-    if (const auto *features = formula->getArray("features"))
-      for (const auto &feature : *features)
-        parsed.features.push_back(feature.getAsString().value_or("").str());
-    if (const auto *coefficients = formula->getArray("coefficients"))
-      for (const auto &coefficient : *coefficients)
-        parsed.coefficients.push_back(coefficient.getAsNumber().value_or(0.0));
-    if (const auto *mf = formula->getArray("max_features"))
-      for (const auto &feature : *mf)
-        parsed.maxFeatures.push_back(feature.getAsString().value_or("").str());
-    if (const auto *mc = formula->getArray("max_coefficients"))
-      for (const auto &coefficient : *mc)
-        parsed.maxCoefficients.push_back(coefficient.getAsNumber().value_or(0.0));
-    if (!parsed.isValid()) {
-      reader.setError(path + " needs matching finite feature/coefficient lists");
-      continue;
-    }
-    fit.formulas[entry.first.str()] = std::move(parsed);
-  }
-  // Optional measured tables for the large per-thread regime.
-  if (const auto *tables = block->getObject("tables")) {
-    for (const auto &entry : *tables) {
-      const std::string path = base + ".tables." + entry.first.str();
-      const auto *table = entry.second.getAsObject();
-      if (!table) {
-        reader.setError(path + " must be an object");
-        continue;
-      }
-      contiguous_ldst::ContiguousTable parsed;
-      if (const auto *te = table->getArray("te_knots"))
-        for (const auto &knot : *te)
-          parsed.teKnots.push_back(knot.getAsNumber().value_or(0.0));
-      if (const auto *by = table->getArray("by_knots"))
-        for (const auto &knot : *by)
-          parsed.byKnots.push_back(knot.getAsNumber().value_or(0.0));
-      if (const auto *rows = table->getArray("cost_ns"))
-        for (const auto &row : *rows) {
-          std::vector<double> values;
-          if (const auto *cells = row.getAsArray())
-            for (const auto &cell : *cells)
-              values.push_back(cell.getAsNumber().value_or(0.0));
-          parsed.costsNs.push_back(std::move(values));
-        }
-      if (!parsed.isValid()) {
-        reader.setError(path + " needs ascending knots and a full cost grid");
-        continue;
-      }
-      fit.tables[entry.first.str()] = std::move(parsed);
-    }
-  }
-  // Optional FormS single-shot (u==1, non-pipelined) pricing.
-  if (const auto *forms = block->getObject("forms")) {
-    // Fills `parsed` in place from one formula object; false on a malformed
-    // entry (the error is recorded, the key is simply not registered).
-    auto readFormSFormula = [&](const llvm::json::Object *formula,
-                                const std::string &path,
-                                contiguous_ldst::ContiguousFormula &parsed) {
-      if (const auto *features = formula->getArray("features"))
-        for (const auto &feature : *features)
-          parsed.features.push_back(feature.getAsString().value_or("").str());
-      if (const auto *coefficients = formula->getArray("coefficients"))
-        for (const auto &coefficient : *coefficients)
-          parsed.coefficients.push_back(coefficient.getAsNumber().value_or(0.0));
-      // Optional bottleneck branch: the formula evaluates to
-      // max(first, second), e.g. max(issue, drain) for stores.
-      if (const auto *mf = formula->getArray("max_features"))
-        for (const auto &feature : *mf)
-          parsed.maxFeatures.push_back(feature.getAsString().value_or("").str());
-      if (const auto *mc = formula->getArray("max_coefficients"))
-        for (const auto &coefficient : *mc)
-          parsed.maxCoefficients.push_back(coefficient.getAsNumber().value_or(0.0));
-      if (!parsed.isValid()) {
-        reader.setError(path + " needs matching feature/coefficient lists");
-        return false;
-      }
-      return true;
-    };
-    if (const auto *sf = forms->getObject("simd_formulas")) {
-      for (const auto &entry : *sf) {
-        const std::string path = base + ".forms.simd_formulas." + entry.first.str();
-        const auto *formula = entry.second.getAsObject();
-        if (!formula) {
-          reader.setError(path + " must be an object");
-          continue;
-        }
-        contiguous_ldst::ContiguousFormula parsed;
-        if (readFormSFormula(formula, path, parsed))
-          fit.formSFormulas[entry.first.str()] = std::move(parsed);
-      }
-    }
-    // Physics formulas replacing the measured tables: "simt_formulas" keys
-    // like "load.A" (merged across dtype) or "load.A.fp32"; "simd_te8_formulas"
-    // keys like "load.A" (merged across element width) or "load.A.eb4".
-    for (const auto *key : {"simt_formulas", "simd_te8_formulas"}) {
-      if (const auto *sf = forms->getObject(key)) {
-        const std::string prefix = std::string(key) == "simt_formulas"
-                                       ? std::string("simt.")
-                                       : std::string("ldst.");
-        for (const auto &entry : *sf) {
-          const std::string path =
-              base + ".forms." + key + "." + entry.first.str();
-          const auto *formula = entry.second.getAsObject();
-          if (!formula) {
-            reader.setError(path + " must be an object");
-            continue;
-          }
-          contiguous_ldst::ContiguousFormula parsed;
-          if (readFormSFormula(formula, path, parsed))
-            fit.formSFormulas[prefix + entry.first.str()] = std::move(parsed);
-        }
-      }
-    }
-    auto readTables = [&](const char *key, const char *prefix) {
-      const auto *tblock = forms->getObject(key);
-      if (!tblock)
-        return;
-      for (const auto &entry : *tblock) {
-        const auto *table = entry.second.getAsObject();
-        if (!table)
-          continue;
-        std::map<int64_t, double> parsed;
-        for (const auto &cell : *table) {
-          int64_t by = 0;
-          if (!llvm::to_integer(cell.first, by))
-            continue;
-          if (const auto ns = cell.second.getAsNumber())
-            parsed[by] = *ns;
-        }
-        if (!parsed.empty())
-          fit.formSTables[std::string(prefix) + entry.first.str()] =
-              std::move(parsed);
-      }
-    };
-    readTables("simd_tables_te8", "ldst.");
-    readTables("simt_tables", "simt.");
-    // Physics formulas replacing the legacy te>=8 bilinear knot tables.
-    if (const auto *tf = forms->getObject("te8_formulas")) {
-      for (const auto &entry : *tf) {
-        const std::string path = base + ".forms.te8_formulas." + entry.first.str();
-        const auto *formula = entry.second.getAsObject();
-        if (!formula) {
-          reader.setError(path + " must be an object");
-          continue;
-        }
-        contiguous_ldst::ContiguousFormula parsed;
-        if (readFormSFormula(formula, path, parsed))
-          fit.te8Formulas[entry.first.str()] = std::move(parsed);
-      }
-    }
-  }
-  if (!fit.isValid() || fit.formulas.empty())
-    reader.setError(base + " needs positive limits and at least one formula");
-}
-
 static void readStridedShortCompletionFits(
-
     ProfileJSONReader &reader, const llvm::json::Object &memory,
     llvm::StringRef context,
     std::map<std::string, StridedShortCompletionFit> &out) {
@@ -1822,6 +1668,45 @@ static void readStageResources(ProfileJSONReader &reader,
   if (const auto *scan = resources->getObject("calibrated_prefix_scan")) {
     auto &calibration = profile.calibratedPrefixScan;
     calibration.enabled = true;
+    if (const auto *formulas = scan->getArray("formulas")) {
+      auto parsed = parsePrefixScanFormulas(*formulas);
+      if (!parsed)
+        reader.setError(llvm::toString(parsed.takeError()));
+      else {
+        if (context == "simd") {
+          static const llvm::StringSet<> simdFeatures = {
+              "one",
+              "E",
+              "C",
+              "logE",
+              "f16",
+              "B",
+              "chain",
+              "vecwork",
+              "payload",
+              "tileR",
+              "paddedwork",
+              "doubling",
+              "treework",
+              "direct_group_work",
+              "direct_narrow_group_work",
+              "direct_half_row_groups"};
+          for (const auto &formula : *parsed) {
+            if (formula.projection != "legacy")
+              reader.setError(
+                  "SIMD prefixscan formula cannot use SIMT layout projection");
+            for (const auto &domain : formula.domains)
+              if (domain.warps != 0)
+                reader.setError(
+                    "SIMD prefixscan formula cannot restrict warps");
+            for (const auto &[name, coefficient] : formula.terms)
+              if (!simdFeatures.contains(name))
+                reader.setError("invalid SIMD prefixscan feature: " + name);
+          }
+        }
+        calibration.formulas = std::move(*parsed);
+      }
+    }
     calibration.prefixScanDependencyFactor =
         reader.number(*scan, "dependency_factor", prefix + ".prefix_scan");
     // Optional 1D factor for 1D tt.scan (S = N).  Falls back to the
@@ -2454,6 +2339,13 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
       return llvm::createStringError(
           std::errc::invalid_argument,
           "invalid prefixscan profile schema or target");
+    const bool hasFormulas = (scanRoot->getObject("simd") &&
+                              scanRoot->getObject("simd")->get("formulas")) ||
+                             (scanRoot->getObject("simt") &&
+                              scanRoot->getObject("simt")->get("formulas"));
+    if (hasFormulas && scanRoot->getString("unit") != "system_cycle")
+      return llvm::createStringError(std::errc::invalid_argument,
+                                     "unsupported prefixscan unit");
     for (llvm::StringRef mode :
          {llvm::StringRef("simd"), llvm::StringRef("simt")}) {
       auto *model = root->getObject(mode);
@@ -2599,6 +2491,30 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
     reader.setError("profile.kernel_timing must be an object for schema 19");
   if (kernelTiming) {
     auto &timing = profile.kernelTiming;
+    if (const auto *completion =
+            kernelTiming->getObject("stage_dependency_completion")) {
+      const std::string path =
+          "profile.kernel_timing.stage_dependency_completion";
+      auto &result = timing.stageDependencyCompletion;
+      result.enabled = reader.string(*completion, "status", path) ==
+                       "qualified_stage_dependency_completion_v1";
+      if (!result.enabled)
+        reader.setError(path + " has an unknown qualification status");
+      result.target = reader.string(*completion, "target", path);
+      result.loweringContract =
+          reader.string(*completion, "lowering_contract", path);
+      result.taskEnvelopeSystemCycles =
+          reader.number(*completion, "task_envelope_system_cycles", path);
+      result.dynamicCVFirstFillSystemCycles = reader.number(
+          *completion, "dynamic_cv_first_fill_system_cycles", path);
+      result.dynamicCVPerIterationDeltaSystemCycles = reader.number(
+          *completion, "dynamic_cv_per_iteration_delta_system_cycles", path);
+      result.scheduleContract =
+          reader.string(*completion, "schedule_contract", path);
+      result.fullKernelValidationSHA256 =
+          reader.string(*completion, "full_kernel_validation_sha256", path);
+      result.evidence = reader.string(*completion, "evidence", path);
+    }
     timing.scalarPrologueSystemCycles =
         reader.number(*kernelTiming, "scalar_prologue_system_cycles",
                       "profile.kernel_timing");
@@ -2952,6 +2868,48 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
             "vector_instruction/system_cycle", microbench, reader);
     }
     if (const auto *memory = reader.object(*simd, "memory", "simd")) {
+    if (const auto *v2 = reader.object(*memory, "contiguous_ldst_v2",
+                                       "simd.memory")) {
+      auto &cv2 = simdProfile.contiguousV2;
+      cv2.enabled = true;
+      cv2.l2CacheBytes = reader.integer(
+          *v2, "l2_cache_bytes", "simd.memory.contiguous_ldst_v2");
+      if (const auto *ga = v2->getObject("group_a")) {
+        for (const auto &entry : *ga) {
+          const auto *o = entry.second.getAsObject();
+          if (!o)
+            continue;
+          contiguous_v2::ContiguousV2Group g;
+          g.first = reader.number(*o, "first", "cv2.group_a");
+          g.marginal = reader.number(*o, "marginal", "cv2.group_a");
+          g.cTransfer = reader.number(*o, "c_transfer", "cv2.group_a");
+          g.Q = static_cast<int64_t>(
+              reader.number(*o, "Q", "cv2.group_a"));
+          cv2.groupA[entry.first.str()] = g;
+        }
+      }
+      if (const auto *lb = v2->getObject("loop_b")) {
+        for (const auto &entry : *lb) {
+          const auto *o = entry.second.getAsObject();
+          if (!o)
+            continue;
+          contiguous_v2::ContiguousV2Loop l;
+          l.P = reader.number(*o, "P", "cv2.loop_b");
+          l.m = reader.number(*o, "m", "cv2.loop_b");
+          if (const auto qk = o->getInteger("QK"))
+            l.QK = *qk;
+          l.mHi = reader.optionalNumber(*o, "m_hi", 0.0);
+          l.piecewise = l.QK > 0;
+          cv2.loopB[entry.first.str()] = l;
+        }
+      }
+      if (const auto *sp = v2->getObject("s_penalty")) {
+        for (const auto &entry : *sp) {
+          if (const auto v = entry.second.getAsNumber())
+            cv2.sPenalty[entry.first.str()] = *v;
+        }
+      }
+    }
       simdProfile.loadBytesPerCycle = resolveNumberOrMeasurement(
           *memory, "vector_mte2_bytes_per_system_cycle",
           "load_throughput_measurement", "byte/system_cycle", microbench,
@@ -3118,7 +3076,6 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
       readMaskedStridedCopyCompletion(
           *memory, "masked_strided_store_copy_completion", "simd.memory",
           reader, simdProfile.maskedStridedStoreCopyCompletionByStrideBytes);
-      readContiguousLdStFit(reader, *memory, "simd.memory", simdProfile.contiguous);
     }
     if (const auto *dot = reader.object(*simd, "dot", "simd")) {
       simdProfile.dotSetupCycles = resolveNumberOrMeasurement(
@@ -3127,6 +3084,55 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
       simdProfile.dotFlopsPerCycle = resolveNumberOrMeasurement(
           *dot, "flops_per_system_cycle", "throughput_measurement",
           "flop/system_cycle", microbench, reader, "simd.dot");
+      if (const auto *resource =
+              dot->getObject("physical_tile_resource_formula")) {
+        const std::string context = "simd.dot.physical_tile_resource_formula";
+        const std::string resourceStatus =
+            reader.string(*resource, "status", context);
+        if (resourceStatus != "qualified_physical_resource_formula_v2")
+          reader.setError(context + " is not a qualified formula");
+        simdProfile.dotPhysicalResourceTarget =
+            reader.string(*resource, "target", context);
+        simdProfile.dotPhysicalResourceLoweringContract =
+            reader.string(*resource, "lowering_contract", context);
+        if (const auto *formula = resource->getObject("formula")) {
+          const std::string formulaContext = context + ".formula";
+          StageModeProfile::DotPhysicalResourceFormula value;
+          value.tinyMacFloorCycles = reader.number(
+              *formula, "tiny_mac_floor_system_cycles", formulaContext);
+          value.cubeMacCyclesPerSqrtFlop = reader.number(
+              *formula, "cube_mac_system_cycles_per_sqrt_flop", formulaContext);
+          value.cubeMinimumFlops =
+              reader.number(*formula, "cube_minimum_flops", formulaContext);
+          value.mte1StartupCycles = reader.number(
+              *formula, "mte1_startup_system_cycles", formulaContext);
+          value.mte1BytesExponent =
+              reader.number(*formula, "mte1_bytes_exponent", formulaContext);
+          value.lhsMte1CyclesPerBytePower =
+              reader.number(*formula, "lhs_mte1_system_cycles_per_byte_power",
+                            formulaContext);
+          value.rhsMte1CyclesPerBytePower =
+              reader.number(*formula, "rhs_mte1_system_cycles_per_byte_power",
+                            formulaContext);
+          value.tileSize =
+              reader.integer(*formula, "tile_size", formulaContext);
+          value.narrowNReferenceTiles = reader.number(
+              *formula, "narrow_n_reference_tiles", formulaContext);
+          value.wideNReferenceTiles =
+              reader.number(*formula, "wide_n_reference_tiles", formulaContext);
+          value.narrowNOccupancyExponent = reader.number(
+              *formula, "narrow_n_occupancy_exponent", formulaContext);
+          value.wideNOccupancyExponent = reader.number(
+              *formula, "wide_n_occupancy_exponent", formulaContext);
+          value.evidence = reader.string(*formula, "evidence", formulaContext);
+          if (!value.isValid())
+            reader.setError(formulaContext + " is invalid");
+          else
+            simdProfile.dotPhysicalResourceFormula = std::move(value);
+        }
+        if (!simdProfile.dotPhysicalResourceFormula)
+          reader.setError(context + " requires a valid formula");
+      }
     }
     if (const auto *simdMemory = simd->getObject("memory"))
       readStridedShortCompletionFits(reader, *simdMemory, "simd.memory",
@@ -3256,6 +3262,48 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
             simtProfile.issueWidth * rate;
     }
     if (const auto *memory = reader.object(*simt, "memory", "simt")) {
+    if (const auto *v2 = reader.object(*memory, "contiguous_ldst_v2",
+                                       "simt.memory")) {
+      auto &cv2 = simtProfile.contiguousV2;
+      cv2.enabled = true;
+      cv2.l2CacheBytes = reader.integer(
+          *v2, "l2_cache_bytes", "simd.memory.contiguous_ldst_v2");
+      if (const auto *ga = v2->getObject("group_a")) {
+        for (const auto &entry : *ga) {
+          const auto *o = entry.second.getAsObject();
+          if (!o)
+            continue;
+          contiguous_v2::ContiguousV2Group g;
+          g.first = reader.number(*o, "first", "cv2.group_a");
+          g.marginal = reader.number(*o, "marginal", "cv2.group_a");
+          g.cTransfer = reader.number(*o, "c_transfer", "cv2.group_a");
+          g.Q = static_cast<int64_t>(
+              reader.number(*o, "Q", "cv2.group_a"));
+          cv2.groupA[entry.first.str()] = g;
+        }
+      }
+      if (const auto *lb = v2->getObject("loop_b")) {
+        for (const auto &entry : *lb) {
+          const auto *o = entry.second.getAsObject();
+          if (!o)
+            continue;
+          contiguous_v2::ContiguousV2Loop l;
+          l.P = reader.number(*o, "P", "cv2.loop_b");
+          l.m = reader.number(*o, "m", "cv2.loop_b");
+          if (const auto qk = o->getInteger("QK"))
+            l.QK = *qk;
+          l.mHi = reader.optionalNumber(*o, "m_hi", 0.0);
+          l.piecewise = l.QK > 0;
+          cv2.loopB[entry.first.str()] = l;
+        }
+      }
+      if (const auto *sp = v2->getObject("s_penalty")) {
+        for (const auto &entry : *sp) {
+          if (const auto v = entry.second.getAsNumber())
+            cv2.sPenalty[entry.first.str()] = *v;
+        }
+      }
+    }
       simtProfile.loadWarpInstructionsPerCycle = resolveNumberOrMeasurement(
           *memory, "load_warp_instructions_per_system_cycle",
           "load_throughput_measurement", "warp_instruction/system_cycle",
@@ -3279,16 +3327,6 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
           reader, simtProfile.maskedStridedStoreCopyCompletionByStrideBytes);
       readStridedShortCompletionFits(reader, *memory, "simt.memory",
                                      simtProfile.stridedShortCompletionFits);
-      readContiguousLdStFit(reader, *memory, "simt.memory", simtProfile.contiguous);
-      if (const auto *coexist = memory->getObject(
-              "load_strided_store_coexistence")) {
-        simtProfile.loadStridedStoreCoexistencePenaltyCycles =
-            reader.number(*coexist, "penalty_system_cycles",
-                          "simt.memory.load_strided_store_coexistence");
-        simtProfile.loadStridedStoreCoexistenceEvidence =
-            reader.string(*coexist, "evidence",
-                          "simt.memory.load_strided_store_coexistence");
-      }
     }
     readStageResources(reader, *simt, "simt", microbench, simtProfile);
     if (const auto *resources = simt->getObject("stage_resources")) {
@@ -3507,15 +3545,12 @@ static llvm::Expected<StageCostModelSummary> evaluateStageModel(
       partitioner.partition(module, *anchorPlan, partitionerOptions);
   if (!partition)
     return partition.takeError();
-  (*partition).logicalProgramCountHint = logicalProgramCountHint;
-  (*partition).physicalCoreCountHint = physicalCoreCountHint;
   if (llvm::Error error = SimtRegisterPressureAnalysis().analyze(
           module, *partition, std::max<unsigned>(1, numWarps)))
     return std::move(error);
   if (llvm::Error error = StageResourceLegalityAnalysis().applySimtUbCapacity(
           *partition, profile.hardware.simt.usableUbBytes))
     return std::move(error);
-
   for (LogicalStage &stage : partition->stages) {
     llvm::erase_if(stage.legalSimtFactors, [&](int64_t factor) {
       return !llvm::is_contained(options.wholeKernelSuperblockFactors, factor);
@@ -3687,7 +3722,8 @@ static llvm::Expected<StageCostModelSummary> evaluateStageModel(
       }
       const auto &[geometry, count] = *stage.workload.prefixScanCounts.begin();
       const auto &[extent, sequences, stride, results, reverse, combine,
-                   dataType, rank, dimension, elementBits] = geometry;
+                   dataType, rank, dimension, elementBits, fullShape,
+                   exactCombine, simpleBinary] = geometry;
       if (!std::isfinite(count) || std::abs(count - 1.0) > 1.0e-12 || reverse ||
           combine != "add" || results != 1 || stride != sequences ||
           extent < rank2ScanFit.minimumExtent ||
@@ -3842,6 +3878,8 @@ static llvm::Expected<StageCostModelSummary> evaluateStageModel(
     subwarpIndirectCompositeOwner.reset();
 
   HardwareProfile hardwareProfile = profile.hardware;
+  if (hardwareProfile.simd.dotPhysicalResourceTarget != options.actualTarget)
+    hardwareProfile.simd.dotPhysicalResourceFormula.reset();
   hardwareProfile.baseSimtWarpCount = std::max<int64_t>(1, numWarps);
   hardwareProfile.maximumSimtEstimationFactor =
       partitionerOptions.maximumSuperblockFactor;
@@ -3862,6 +3900,8 @@ static llvm::Expected<StageCostModelSummary> evaluateStageModel(
   costTable->physicalCoreCountHint = physicalCoreCountHint;
   costTable->physicalAiCoreCountHint = physicalAiCoreCountHint;
   costTable->routeCompletions = profile.kernelTiming.routeCompletions;
+  costTable->stageDependencyScheduleEnabled =
+      profile.kernelTiming.stageDependencyCompletion.enabled;
   auto &multiResultScan = costTable->routeCompletions.multiResultPrefixScan;
   if (multiResultScan.enabled) {
     int64_t argumentCount = 0;
@@ -4155,6 +4195,54 @@ static SimdSimtCandidateKind chooseBest(const SimdSimtCandidateScores &scores,
       .second;
 }
 
+/// PreparedTTIR may replace logical program IDs with scheduling IDs. Keep
+/// workload expressions from the route-neutral module only if its algorithm
+/// loops can be correlated with the prepared analysis view.
+static std::string
+correlateLoopTripCountInfos(const std::vector<LoopTripCountInfo> &source,
+                            const std::vector<LoopTripCountInfo> &prepared) {
+  if (source.size() != prepared.size())
+    return "algorithm loop count differs between source and analysis modules";
+  llvm::StringSet<> ids;
+  auto algorithmParents = [](Operation *loop) {
+    llvm::SmallVector<Operation *> parents;
+    for (Operation *parent = loop->getParentOp(); parent;
+         parent = parent->getParentOp()) {
+      auto name = parent->getName().getStringRef();
+      if ((name == "scf.for" || name == "scf.while") &&
+          !parent->hasAttr("ta.auto_blockify_v1.loop"))
+        parents.push_back(parent);
+    }
+    return parents;
+  };
+  for (size_t index = 0; index < source.size(); ++index) {
+    const auto &before = source[index];
+    const auto &after = prepared[index];
+    if (!ids.insert(before.loopId).second)
+      return "ambiguous algorithm loop ID: " + before.loopId;
+    if (before.loopId != after.loopId ||
+        before.operation->getName() != after.operation->getName())
+      return "algorithm loop ID or kind differs: " + before.loopId;
+    if (before.operation->getLoc() != after.operation->getLoc())
+      return "algorithm loop source location differs: " + before.loopId;
+    auto beforeParents = algorithmParents(before.operation);
+    auto afterParents = algorithmParents(after.operation);
+    if (beforeParents.size() != afterParents.size())
+      return "algorithm loop nesting differs: " + before.loopId;
+    for (size_t parentIndex = 0; parentIndex < beforeParents.size();
+         ++parentIndex) {
+      auto parent = llvm::find_if(source, [&](const auto &expression) {
+        return expression.operation == beforeParents[parentIndex];
+      });
+      if (parent == source.end() ||
+          prepared[std::distance(source.begin(), parent)].operation !=
+              afterParents[parentIndex])
+        return "algorithm loop parent identity differs: " + before.loopId;
+    }
+  }
+  return {};
+}
+
 static bool hasGlobalLoad(const StageCostModelSummary &stageModel) {
   return llvm::any_of(stageModel.stages, [](const LogicalStageCost &stage) {
     return stage.workload.loadOperations > 0.0 ||
@@ -4425,6 +4513,168 @@ populateSelectedRouteElapsedPrediction(SimdSimtCostReport &report,
   }
 }
 
+static bool hasRecurrenceStage(const SimdSimtCostReport &report) {
+  return llvm::any_of(report.stageModel.stages,
+                      [](const LogicalStageCost &stage) {
+                        return stage.model == "loop_carried_recurrence";
+                      });
+}
+
+static llvm::json::Object
+stageDependencyFallback(const SimdSimtCostReport &report,
+                        llvm::StringRef reason) {
+  return llvm::json::Object{
+      {"status", "fallback_to_selected_route_elapsed_prediction"},
+      {"reason", reason.str()},
+      {"fallback_source", "selected_route_elapsed_prediction"},
+      {"candidate", stringifySimdSimtCandidate(report.decision)},
+      {"runtime_trip_count_observed", false},
+      {"fallback_prediction", report.selectedRouteElapsed.toJSON()}};
+}
+
+static std::string stageDependencyCompletionRejectionReason(
+    const SimdSimtCostReport &report, const CandidateProfile &profile,
+    const std::vector<LoopTripCountInfo> &expressions,
+    llvm::StringRef correlationFailure) {
+  const auto &completion = profile.kernelTiming.stageDependencyCompletion;
+  const auto &model = report.stageModel;
+  if (!completion.enabled)
+    return "stage_dependency_completion_profile_not_enabled";
+  if (report.actualTarget != completion.target)
+    return "target_not_calibrated";
+  if (completion.loweringContract !=
+      profile.hardware.simd.dotPhysicalResourceLoweringContract)
+    return "lowering_contract_mismatch";
+  if (report.decision != SimdSimtCandidateKind::AllSIMD)
+    return "compiled_route_is_not_all_simd";
+  if (!report.features.autoBlockifyV1Applied)
+    return "auto_blockify_v1_not_applied";
+  if (!model.operationOwnershipComplete || !model.allSimd.legal)
+    return "stage_model_not_complete_or_legal";
+  if (model.allSimd.routeSuperblockFactor != 1 ||
+      model.allSimd.runtimePhysicalProgramCount != 1)
+    return "runtime_schedule_outside_calibrated_domain";
+  if (!correlationFailure.empty())
+    return "loop_workload_correlation_failed";
+  if (expressions.size() != 1)
+    return "requires_exactly_one_algorithm_loop";
+  const auto &expression = expressions.front();
+  if (expression.constantTripCount)
+    return "loop_trip_count_is_static";
+  if (expression.launchBoundTripCount)
+    return "loop_trip_count_is_launch_bound";
+  if (!expression.supported || !expression.operation ||
+      expression.operation->getName().getStringRef() != "scf.for")
+    return "dynamic_loop_expression_not_supported";
+  if (!expression.description.get("trip_count") ||
+      !expression.description.get("effective_trip_count"))
+    return "trip_count_expression_missing";
+  if (!model.allSimd.diagnostic<bool>("stage_dependency_schedule_applied"))
+    return "stage_dependency_schedule_not_applied";
+  if (model.allSimd.diagnostic<std::string>(
+          "stage_dependency_schedule_status") != "symbolic_affine")
+    return "stage_dependency_schedule_not_symbolically_solved";
+  return {};
+}
+
+static void populateStageDependencyCompletion(
+    SimdSimtCostReport &report, const CandidateProfile &profile,
+    const SimdSimtCostModelOptions &options,
+    const std::vector<LoopTripCountInfo> &expressions,
+    llvm::StringRef correlationFailure) {
+  if (!hasRecurrenceStage(report))
+    return;
+  const std::string rejection = stageDependencyCompletionRejectionReason(
+      report, profile, expressions, correlationFailure);
+  if (!rejection.empty()) {
+    report.stageDependencyElapsedPrediction =
+        stageDependencyFallback(report, rejection);
+    return;
+  }
+  const auto &expression = expressions.front();
+  const auto *tripCount = expression.description.get("trip_count");
+  const auto *effectiveTripCount =
+      expression.description.get("effective_trip_count");
+  const StageRoutePlan &plan = report.stageModel.allSimd;
+  const double scheduledCore =
+      plan.diagnostic<double>("stage_dependency_schedule_total_system_cycles");
+  const double scheduledLoop =
+      plan.diagnostic<double>("stage_dependency_schedule_loop_system_cycles");
+  const double fixedSetup = plan.diagnostic<double>(
+      "stage_dependency_schedule_fixed_setup_system_cycles");
+  const double fill =
+      plan.diagnostic<double>("stage_dependency_schedule_fill_system_cycles");
+  const double perIteration = plan.diagnostic<double>(
+      "stage_dependency_schedule_initiation_interval_system_cycles");
+  const double nonrecurrentRouteBody = scheduledCore - scheduledLoop;
+  const double routeOffset =
+      nonrecurrentRouteBody + fixedSetup + fill - perIteration;
+  const auto &completion = profile.kernelTiming.stageDependencyCompletion;
+  const double correctedOffset =
+      routeOffset + completion.taskEnvelopeSystemCycles;
+  if (!tripCount || !effectiveTripCount || !std::isfinite(correctedOffset) ||
+      !std::isfinite(perIteration) || perIteration <= 0.0) {
+    report.stageDependencyElapsedPrediction =
+        stageDependencyFallback(report, "symbolic_schedule_parameters_invalid");
+    return;
+  }
+  llvm::json::Object prediction{
+      {"prediction_scope", "complete_kernel_duration"},
+      {"candidate", kAllSimd},
+      {"loop_id", expression.loopId},
+      {"trip_count_expression", *tripCount},
+      {"effective_trip_count_expression", *effectiveTripCount},
+      {"solution_method", "symbolic_periodic_difference_constraints_v1"},
+      {"offset_system_cycles", correctedOffset},
+      {"per_iteration_system_cycles", perIteration},
+      {"system_counter_frequency_mhz",
+       profile.kernelTiming.systemCounterFrequencyMHz},
+      {"nonrecurrent_route_body_system_cycles", nonrecurrentRouteBody},
+      {"independent_task_envelope_system_cycles",
+       completion.taskEnvelopeSystemCycles},
+      {"generic_fixed_system_cycles_replaced",
+       report.selectedRouteElapsed.fixedSystemCycles},
+      {"runtime_condition", "entry_guard_and_positive_trip_count"},
+      {"dependency_schedule_applied", true},
+      {"symbolic_solution_proven", true},
+      {"offline_schedule_calibration_certified", true},
+      {"schedule_contract", completion.scheduleContract},
+      {"full_kernel_validation_sha256", completion.fullKernelValidationSHA256},
+      {"runtime_trip_count_observed", false},
+      {"route_selection_scope", "compiled_route_only"},
+      {"dynamic_cv_requested", options.dynamicCVPipelineRequested},
+      {"evidence", completion.evidence}};
+  if (options.dynamicCVPipelineRequested) {
+    const double correctedPerIteration =
+        perIteration + completion.dynamicCVPerIterationDeltaSystemCycles;
+    if (!std::isfinite(correctedPerIteration) || correctedPerIteration <= 0.0) {
+      report.stageDependencyElapsedPrediction = stageDependencyFallback(
+          report, "dynamic_cv_symbolic_schedule_parameters_invalid");
+      return;
+    }
+    prediction["status"] = "requested_on_requires_backend_confirmation";
+    prediction["offset_system_cycles"] =
+        correctedOffset + completion.dynamicCVFirstFillSystemCycles;
+    prediction["per_iteration_system_cycles"] = correctedPerIteration;
+    prediction["independent_dynamic_cv_first_fill_system_cycles"] =
+        completion.dynamicCVFirstFillSystemCycles;
+    prediction["independent_dynamic_cv_per_iteration_delta_system_cycles"] =
+        completion.dynamicCVPerIterationDeltaSystemCycles;
+    prediction["backend_effective_dynamic_cv_confirmed"] = false;
+    prediction["formula"] =
+        "(nonrecurrent_route_body + task_envelope + "
+        "dynamic_cv_first_fill + effective_trip_count_expression * "
+        "(route_per_iteration + dynamic_cv_per_iteration_delta)) / "
+        "system_counter_frequency";
+  } else {
+    prediction["status"] = "qualified_off_stage_dependency_prediction";
+    prediction["formula"] =
+        "(offset_system_cycles + effective_trip_count_expression * "
+        "per_iteration_system_cycles) / system_counter_frequency";
+  }
+  report.stageDependencyElapsedPrediction = std::move(prediction);
+}
+
 } // namespace
 
 llvm::StringRef
@@ -4569,6 +4819,13 @@ llvm::json::Object SimdSimtCostReport::toJSON() const {
       stageModel.toJSON(includeDiagnosticStageDetailsInJSON);
   result["stage_report_detail"] =
       includeDiagnosticStageDetailsInJSON ? "diagnostic" : "runtime_compact";
+  result["loop_workload_expressions"] =
+      llvm::json::Array(loopWorkloadExpressions);
+  result["loop_workload_correlation"] =
+      llvm::json::Object(loopWorkloadCorrelation);
+  if (!stageDependencyElapsedPrediction.empty())
+    result["stage_dependency_elapsed_prediction"] =
+        llvm::json::Object(stageDependencyElapsedPrediction);
 
   if (includeFeaturesInJSON)
     result["features"] = features.toJSON();
@@ -4734,6 +4991,40 @@ estimateSimdSimtCandidatesImpl(const SimdSimtFeatureSummary &features,
   }
   populateSelectedRouteElapsedPrediction(report, profile,
                                          report.kernelArgumentCount);
+  ModuleOp expressionModule =
+      options.loopWorkloadModule ? options.loopWorkloadModule : module;
+  const bool separateSource = expressionModule != module;
+  const int64_t sourceProgramCount = separateSource
+                                         ? options.sourceLogicalProgramCountHint
+                                         : options.logicalProgramCountHint;
+  auto expressions =
+      analyzeLoopTripCountInfos(expressionModule, sourceProgramCount);
+  auto preparedExpressions =
+      separateSource
+          ? analyzeLoopTripCountInfos(module, options.logicalProgramCountHint)
+          : expressions;
+  report.loopWorkloadCorrelation["source"] =
+      separateSource ? "route_neutral_module" : "analysis_module";
+  report.loopWorkloadCorrelation["status"] = "identity";
+  std::string correlationFailure;
+  if (separateSource) {
+    correlationFailure =
+        correlateLoopTripCountInfos(expressions, preparedExpressions);
+    report.loopWorkloadCorrelation["status"] =
+        correlationFailure.empty() ? "matched" : "mismatch";
+    report.loopWorkloadCorrelation["checked_identity"] =
+        "loop_id_kind_location_and_algorithm_nesting";
+    if (!correlationFailure.empty()) {
+      report.loopWorkloadCorrelation["reason"] = correlationFailure;
+      report.unsupported.push_back("loop workload correlation: " +
+                                   correlationFailure);
+    }
+  }
+  for (const auto &expression : expressions)
+    report.loopWorkloadExpressions.push_back(
+        llvm::json::Object(expression.description));
+  populateStageDependencyCompletion(report, profile, options, expressions,
+                                    correlationFailure);
   return report;
 }
 

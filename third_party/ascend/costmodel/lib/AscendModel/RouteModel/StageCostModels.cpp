@@ -4,7 +4,6 @@
 #include "AscendModel/RouteModel/Models/IndirectGatherMemoryCostModel.h"
 #include "mlir/IR/BuiltinTypes.h"
 
-#include "AscendModel/RouteModel/Models/ContiguousLdStCostModel.h"
 #include "AscendModel/RouteModel/Models/StridedShortCostModel.h"
 #include "AscendModel/RouteModel/Reduction/ReductionCostModel.h"
 
@@ -14,9 +13,6 @@
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
 
-#include <cstdio>
-#include <cstdlib>
-#include <tuple>
 #include <algorithm>
 #include <array>
 #include <cctype>
@@ -37,7 +33,7 @@ using namespace mlir::ascend;
 namespace {
 
 static double iterations(const LogicalStage &stage) {
-  return static_cast<double>(std::max<int64_t>(1, stage.iterationCount));
+  return static_cast<double>(std::max<int64_t>(0, stage.iterationCount));
 }
 
 /// Resolve an operation-specific rate first.
@@ -86,6 +82,8 @@ resolveModeProfile(const HardwareProfile &hardware,
       implementation.mode == StageMode::SIMD ? hardware.simd : hardware.simt;
   if (implementation.mode == StageMode::SIMD)
     return resolved;
+  resolved.prefixScanWarpCount =
+      std::max<int64_t>(1, hardware.baseSimtWarpCount);
 
   const int64_t activeWarps =
       std::max<int64_t>(1, hardware.baseSimtWarpCount) *
@@ -398,6 +396,223 @@ describeStridedShortAddresses(const StageMemoryAccess &access,
 ///
 /// A straight-line Stage is admissible too: the fits are per-iteration slopes,
 /// which stay defined without a loop to amortise them over.
+//===- v2 contiguous dispatch hook (epoch-calibrated) ---------------------===//
+// Prices contiguous (stride==1) load/store streams with the v2 fitted
+// formulas (profiles .../contiguous_ldst_v2).  Context:
+//   straight-line stages -> Formula A per same-shape group (N=group size)
+//   loop stages          -> Formula B once per body (chain/indpt/store),
+//                           per-iteration contribution = P/K + m
+// Residency: footprint = N*bytes (per program) vs l2_cache_bytes.
+// Cells outside the fitted table keep the pre-existing fallbacks.
+//===----------------------------------------------------------------------===//
+
+static int64_t v2ElementCount(const StageMemoryAccess *a) {
+  int64_t count = 1;
+  for (int64_t extent : a->shape)
+    count *= extent;
+  return count;
+}
+
+static void mapContiguousV2Completion(
+    const LogicalStage &stage, const StageWorkload &work,
+    const StageModeProfile &profile, StageResourceCycles &resources,
+    bool simd, LayoutCoverage &layout,
+    std::vector<const StageMemoryAccess *> &claimed) {
+  const auto &v2 = profile.contiguousV2;
+  if (!v2.enabled || v2.groupA.empty() && v2.loopB.empty())
+    return;
+  if (stage.features.synchronizationCount != 0)
+    return;
+  constexpr double kCyclesPerNano = 1.0; // SYS_CNT at 1 GHz
+  const bool hasLoop = stage.features.hasLoop;
+  const int64_t K = hasLoop ? std::max<int64_t>(1, stage.iterationCount) : 0;
+
+  // Collect eligible contiguous direct accesses.
+  std::vector<const StageMemoryAccess *> eligible;
+  for (const StageMemoryAccess &access : work.memoryAccesses) {
+    if (access.count <= 0.0)
+      continue;
+    const auto layoutClass = access.layoutClass();
+    if (layoutClass != StageMemoryAccess::LayoutClass::ContiguousShort &&
+        layoutClass != StageMemoryAccess::LayoutClass::ContiguousWide)
+      continue;
+    if (!access.hasStaticLayout() || access.elementBits / 8 <= 0)
+      continue;
+    if (access.addressDependsOnLoadedIndex ||
+        access.addressHasNonAffineTensorComputation ||
+        access.addressHasTensorControlFlowSelection)
+      continue;
+    if (access.store && access.masked &&
+        access.activeElementRatio < 1.0 - 1.0e-9)
+      continue; // partial-mask store keeps the RMW completion path
+    if (std::any_of(claimed.begin(), claimed.end(),
+                    [&access](const StageMemoryAccess *c) {
+                      return c == &access;
+                    }))
+      continue;
+    eligible.push_back(&access);
+  }
+  if (eligible.empty())
+    return;
+
+  const auto ebName = [](int64_t eb) -> const char * {
+    switch (eb) {
+    case 1: return "int8";
+    case 2: return "fp16";
+    case 4: return "fp32";
+    case 8: return "int64";
+    default: return nullptr;
+    }
+  };
+
+  if (hasLoop) {
+    // ---- Formula B: one evaluation for the whole loop body --------------
+    int64_t loadBytes = 0, storeBytes = 0, maxBytes = 0;
+    int64_t loadElems = 0, storeElems = 0;
+    for (const StageMemoryAccess *access : eligible) {
+      const int64_t bytes = v2ElementCount(access) * (access->elementBits / 8);
+      if (access->store) {
+        storeBytes += bytes;
+        storeElems += v2ElementCount(access);
+      } else {
+        loadBytes += bytes;
+        loadElems += v2ElementCount(access);
+      }
+      maxBytes = std::max(maxBytes, bytes);
+    }
+    (void)maxBytes;
+    const bool hasLoads = loadBytes > 0;
+    const bool hasStores = storeBytes > 0;
+    const char *body = hasStores ? (hasLoads ? "indpt" : "store")
+                                 : (stage.features.hasLoopCarriedDataDependency
+                                        ? "chain"
+                                        : "indpt");
+    const StageMemoryAccess *dominant = eligible.front();
+    for (const StageMemoryAccess *access : eligible)
+      if (v2ElementCount(access) * (access->elementBits / 8) >
+          v2ElementCount(dominant) * (dominant->elementBits / 8))
+        dominant = access;
+    const char *dtype = ebName(dominant->elementBits / 8);
+    if (!dtype)
+      return;
+    const int64_t domBytes = v2ElementCount(dominant) * (dominant->elementBits / 8);
+    int64_t bucket = 1024;
+    double bestDist = 1e30;
+    for (int64_t b : {1024, 4096, 16384}) {
+      const double d = std::fabs(std::log2((double)domBytes) -
+                                 std::log2((double)b));
+      if (d < bestDist) {
+        bestDist = d;
+        bucket = b;
+      }
+    }
+    const int64_t footprint = K * (loadBytes + storeBytes);
+    const char *res = footprint <= v2.l2CacheBytes ? "warm" : "cold";
+    const std::string key = std::string(body) + "/" + dtype + "/" +
+                            std::to_string(bucket) + "/" + res;
+    auto it = v2.loopB.find(key);
+    if (it == v2.loopB.end())
+      return; // unfitted cell: fallbacks keep the bytes
+    const contiguous_v2::ContiguousV2Loop &loop = it->second;
+    double perIter;
+    if (loop.piecewise && K > loop.QK)
+      perIter = (loop.P + loop.QK * loop.m + (K - loop.QK) * loop.mHi) / K;
+    else
+      perIter = (loop.P + K * loop.m) / K;
+    if (!(perIter > 0.0))
+      return;
+    const double nsPerIter = perIter * kCyclesPerNano;
+    for (const StageMemoryAccess *access : eligible) {
+      claimed.push_back(access);
+      const int64_t bytes = v2ElementCount(access) * (access->elementBits / 8);
+      if (access->store) {
+        resources.store += nsPerIter;
+        layout.storeBytes += bytes;
+        layout.storeOperations += 1.0;
+        layout.storeShapes[std::make_pair(bytes, v2ElementCount(access))] += 1.0;
+      } else {
+        resources.load += nsPerIter;
+        layout.loadBytes += bytes;
+        layout.loadOperations += 1.0;
+        layout.loadShapes[std::make_pair(bytes, v2ElementCount(access))] += 1.0;
+      }
+    }
+    // dependent-store penalty (simt): loads paying for interleaved stores
+    if (!simd && hasStores && hasLoads && loop.m > 0.0) {
+      auto pen = v2.sPenalty.find(dtype);
+      if (pen != v2.sPenalty.end()) {
+        const int64_t sCount = std::max<int64_t>(
+            1, static_cast<int64_t>(work.storeOperations));
+        resources.load += sCount * pen->second * kCyclesPerNano;
+      }
+    }
+    return;
+  }
+
+  // ---- straight-line stages: Formula A per same-shape group ------------
+  std::map<std::tuple<bool, int64_t, int64_t, bool>,
+           std::vector<const StageMemoryAccess *>>
+      groups;
+  for (const StageMemoryAccess *access : eligible) {
+    const auto key = std::make_tuple(
+        access->store, v2ElementCount(access), access->elementBits / 8,
+        access->masked);
+    groups[key].push_back(access);
+  }
+  int64_t footprint = 0;
+  for (const StageMemoryAccess *access : eligible)
+    footprint += v2ElementCount(access) * (access->elementBits / 8);
+  const char *res = footprint <= v2.l2CacheBytes ? "warm" : "cold";
+  for (auto &groupEntry : groups) {
+    auto &members = groupEntry.second;
+    const StageMemoryAccess *first = members.front();
+    const char *dtype = ebName(first->elementBytes);
+    if (!dtype)
+      continue;
+    const int64_t bytes = first->elements * first->elementBytes;
+    int64_t bucket = 1024;
+    double bestDist = 1e30;
+    for (int64_t b : {1024, 4096, 16384}) {
+      const double d = std::fabs(std::log2((double)bytes) -
+                                 std::log2((double)b));
+      if (d < bestDist) {
+        bestDist = d;
+        bucket = b;
+      }
+    }
+    const char *direction = first->store ? "store" : "load";
+    const std::string key = std::string(direction) + "/" + dtype + "/" +
+                            std::to_string(bucket) + "/" + res;
+    auto it = v2.groupA.find(key);
+    if (it == v2.groupA.end())
+      continue; // unfitted cell: fallbacks keep the bytes
+    const contiguous_v2::ContiguousV2Group &g = it->second;
+    const int64_t n = static_cast<int64_t>(members.size());
+    double total;
+    if (g.Q > 0 && n > g.Q)
+      total = g.first + (g.Q - 1) * g.marginal + (n - g.Q) * g.cTransfer;
+    else
+      total = g.first + (n - 1) * g.marginal;
+    if (!(total > 0.0))
+      continue;
+    const double ns = total * kCyclesPerNano;
+    for (const StageMemoryAccess *access : members) {
+      claimed.push_back(access);
+      if (access->store) {
+        resources.store += ns / members.size();
+        layout.storeBytes += bytes;
+        layout.storeOperations += 1.0;
+        layout.storeShapes[std::make_pair(bytes, v2ElementCount(access))] += 1.0;
+      } else {
+        resources.load += ns / members.size();
+        layout.loadBytes += bytes;
+        layout.loadOperations += 1.0;
+        layout.loadShapes[std::make_pair(bytes, v2ElementCount(access))] += 1.0;
+      }
+    }
+  }
+}
+
 static void mapStridedShortMemoryCompletion(
     const LogicalStage &stage, const StageWorkload &work,
     const StageModeProfile &profile, StageResourceCycles &resources, bool simd,
@@ -471,7 +686,6 @@ static void mapStridedShortMemoryCompletion(
       layout.storeOperations += access.count;
       layout.storeWarpInstructions += warpInstructions;
       resources.stridedShortStoreCompletion += total;
-      resources.stridedShortStoreOperations += access.count;
     } else {
       resources.load += total;
       layout.loadBytes += access.count * shape->first;
@@ -481,282 +695,6 @@ static void mapStridedShortMemoryCompletion(
     }
   }
 }
-
-/// Price the contiguous (inner stride == 1) direct accesses of one Stage with
-/// the calibrated closed form.  Masked accesses use the FormB slots.  Accesses
-/// this pass prices are recorded in `layout` and `claimed`, so the group curves
-/// further down do not charge them again.
-static void mapContiguousMemoryCompletion(
-    const LogicalStage &stage, const StageWorkload &work,
-    const StageModeProfile &profile, StageResourceCycles &resources, bool simd,
-    int64_t superblockFactor, LayoutCoverage &layout,
-    std::vector<const StageMemoryAccess *> &claimed,
-    int64_t logicalProgramCountHint, int64_t physicalCoreCountHint) {
-  // Debug switch: ASCEND_MODEL_NO_CONTIG=1 restores the pre-integration
-  // behaviour so the same binary can produce both sides of an A/B comparison.
-  if (::getenv("ASCEND_MODEL_NO_CONTIG") != nullptr)
-    return;
-  if (stage.features.synchronizationCount != 0)
-    return;
-  // The contiguous calibration reports SYS_CNT nanoseconds, and every Stage
-  // resource pool here is system cycles at 1 GHz
-  // (kernelTiming.systemCounterFrequencyMHz == 1000): one calibrated
-  // nanosecond is exactly one system cycle, so no clock conversion applies.
-  constexpr double kCyclesPerNanosecond = 1.0;
-  // The throughput fit carries a 1/unroll term, and unroll means how many
-  // same-shape transfers are in flight in one iteration.  Count them so the
-  // formula is evaluated at the real concurrency instead of at one.
-  std::map<std::tuple<bool, int64_t, int64_t, bool>, int64_t> groupSize;
-  for (const StageMemoryAccess &access : work.memoryAccesses) {
-    if (access.count <= 0.0)
-      continue;
-    const auto layoutClass = access.layoutClass();
-    if (layoutClass != StageMemoryAccess::LayoutClass::ContiguousShort &&
-        layoutClass != StageMemoryAccess::LayoutClass::ContiguousWide)
-      continue;
-    if (!access.hasStaticLayout() || access.elementBits / 8 <= 0)
-      continue;
-    const auto shape = accessShape(access);
-    if (!shape)
-      continue;
-    groupSize[std::make_tuple(access.store, shape->second,
-                              int64_t(access.elementBits / 8),
-                              access.masked)] += static_cast<int64_t>(access.count);
-  }
-
-  // Same-shape streams in one iteration are priced as one group: the formula
-  // is evaluated once at that concurrency, then scaled by the group size.
-  // Sub-line SIMT load groups amortize further: the members share the LSU
-  // issue rounds, so the first pays the calibrated latency and the rest pay
-  // the measured group-marginal rate (u-swept calibration: a u x 64B group
-  // costs ~52 + (u-1) x 26ns, not u x 52ns).
-  double totalLoad = 0.0;
-  double totalStore = 0.0;
-  for (const StageMemoryAccess &access : work.memoryAccesses) {
-    if (access.count <= 0.0)
-      continue;
-    const auto layoutClass = access.layoutClass();
-    if (layoutClass != StageMemoryAccess::LayoutClass::ContiguousShort &&
-        layoutClass != StageMemoryAccess::LayoutClass::ContiguousWide)
-      continue;
-    if (!access.hasStaticLayout())
-      continue;
-    if (access.addressDependsOnLoadedIndex ||
-        access.addressHasNonAffineTensorComputation ||
-        access.addressHasTensorControlFlowSelection)
-      continue;
-    if (access.effectiveRank() > 2)
-      continue;
-    if (access.elementBits / 8 <= 0)
-      continue;
-    // The FormS tables were calibrated with dynamically-all-true masks:
-    // every element active at runtime, whole-block SIMD predication, normal
-    // MTE transfer.  A statically-computable partial mask (activeElementRatio
-    // provably < 1.0) makes the backend generate sub-line scattered writes
-    // that pay a read-modify-write penalty the all-true calibration never
-    // saw.  Such stores fall through so the RMW completion can apply.
-    if (access.store && access.masked &&
-        access.activeElementRatio < 1.0 - 1.0e-9)
-      continue;
-    const auto shape = accessShape(access);
-    if (!shape)
-      continue;
-    contiguous_ldst::ContiguousAccessStats stats;
-    // Whole-kernel SuperBlock groups F logical programs into one physical
-    // program whose F warps issue their same-shape accesses concurrently.
-    // The closed form is calibrated on that group geometry (its W term
-    // already prices the in-group concurrency), so evaluate the merged
-    // access once at elements*F and keep the per-program share below: the
-    // Stage aggregation multiplies per-program resources by F again, which
-    // then restores the group wall clock instead of multiplying a latency
-    // by F.
-    const int64_t groupFactor =
-        simd ? 1 : std::max<int64_t>(1, superblockFactor);
-    stats.elements = shape->second * groupFactor;
-    stats.elementBytes = access.elementBits / 8;
-    // The SIMD formula has no warp term; SIMT segments are calibrated per warp.
-    stats.warps = simd ? 1 : std::max<int64_t>(1, profile.activeWarpCount);
-    stats.store = access.store;
-    stats.masked = access.masked;
-    stats.simd = simd;
-    // Single-shot context: after the SuperBlock merge, few enough physical
-    // programs run on the device that nothing fills a load stall - the
-    // first load's L2 round trip and the final store's write-back drain
-    // are exposed.  Multi-program grids (merged count > cores) pipeline
-    // the latency across programs and keep throughput pricing.
-    const int64_t mergedPrograms =
-        (logicalProgramCountHint + superblockFactor - 1) / superblockFactor;
-    stats.singleShotContext =
-        logicalProgramCountHint > 0 && physicalCoreCountHint > 0 &&
-        mergedPrograms <= physicalCoreCountHint;
-    if (::getenv("ASCEND_MODEL_CONTIG_DEBUG") != nullptr)
-      std::fprintf(stderr,
-                   "[contig-hint] hint=%lld merged=%lld cores=%lld ssc=%d "
-                   "store=%d simd=%d\n",
-                   static_cast<long long>(logicalProgramCountHint),
-                   static_cast<long long>(mergedPrograms),
-                   static_cast<long long>(physicalCoreCountHint),
-                   stats.singleShotContext ? 1 : 0, int(stats.store),
-                   int(simd));
-    const auto groupKey = std::make_tuple(access.store, shape->second,
-                                          int64_t(access.elementBits / 8),
-                                          access.masked);
-    const auto groupIt = groupSize.find(groupKey);
-    const int64_t groupCount =
-        groupIt == groupSize.end() ? int64_t{1}
-                                   : std::max<int64_t>(1, groupIt->second);
-    stats.concurrency = groupCount;
-    // Latency curves assume the loop serialises on the access; without a
-    // dependency across iterations the accesses pipeline instead.
-    // A loop pipelines across iterations; a straight-line stage pipelines a
-    // group of same-shape accesses exactly like the unrolled throughput
-    // calibration (measured on 950PR: a 3x4 KiB SIMD fp32 load group costs
-    // 169 ns total vs bw.simd.load@u=3 = 150 ns, and a 4x64 B SIMT group is
-    // flat at ~120 ns in N, matching the shared-latency shape).  Such a
-    // group therefore streams even without a loop; a lone single access
-    // keeps the latency price.
-    // An access inside a grid-stride loop body repeats even when the exact
-    // trip count is unknown at compile time (it depends on the runtime grid
-    // size).  Such an access must never use the single-shot FormS tables:
-    // mark it as streaming so the serial/throughput paths own it.
-    const bool repeated = stage.features.hasLoop || stage.iterationCount > 1 ||
-                         access.count > 1.0 || groupCount > 1 ||
-                         stage.features.insideGridStrideLoopBody;
-    stats.repeated = repeated;
-    stats.cross_iter_pipelined = repeated && !stage.features.hasLoopCarriedDataDependency;
-    if (!stats.isValid())
-      continue;
-    // te is a power of two for every unmasked SIMT access (both the element
-    // count and the warp count are), so there is no band between the curve
-    // and the table regimes to guard against.
-    if (!stats.simd) {
-      const double te = static_cast<double>(stats.elements) /
-                        (32.0 * static_cast<double>(stats.warps));
-      if (te >= 8.0) {
-        const std::string key =
-            (stats.store ? "store.eb" : "load.eb") +
-            std::to_string(stats.elementBytes);
-        const bool hasFormula =
-            profile.contiguous.te8Formulas.count(key) > 0 ||
-            profile.contiguous.te8Formulas.count(
-                stats.store ? "store" : "load") > 0;
-        const auto table = profile.contiguous.tables.find(key);
-        const bool hasTable =
-            table != profile.contiguous.tables.end() && table->second.isValid();
-        if (!hasFormula && !hasTable)
-          continue;
-      }
-    }
-    // Sub-cacheline accesses have their own measured segments (small.<dir>.
-    // eb<n>.<main|deg|line64>), so they are claimed here rather than skipped.
-    const int64_t byBytes = shape->second * int64_t(access.elementBits / 8);
-    const double ns = contiguous_ldst::estimateContiguousCompletionNs(
-        stats, profile.contiguous);
-    // Outside the calibrated domain the analytical fallback keeps the bytes.
-    if (!(ns > 0.0))
-      continue;
-    // Register sub-line SIMT load claims for the route-level group refund:
-    // the stages of one straight-line route each claim one member of what
-    // the hardware issues as one back-to-back same-shape group, so the
-    // route plan amortizes the members past the first.  Looped (repeated)
-    // stages are excluded: their pipelined/throughput formulas already
-    // carry concurrency terms, so a route-level refund would amortize
-    // twice (measured: rowred/layer_norm regressed, indirect_index -
-    // straight-line - improved).
-    if (!stats.repeated && !stats.store && !simd && byBytes <= 256) {
-      auto &claim = resources.subLineLoadClaims[std::make_tuple(
-          int64_t(access.elementBits / 8), byBytes,
-          int64_t(profile.activeWarpCount))];
-      // Members per iteration: the same-shape group size within one loop
-      // trip (groupCount sums access.count over the group, so divide the
-      // trip count out).  A looped single access registers one member and
-      // never amortizes; only co-issued same-shape accesses do.
-      const int64_t trips = std::max<int64_t>(1, int64_t(access.count));
-      const int64_t members = std::max<int64_t>(1, groupCount / trips);
-      if (claim.count == 0) {
-        // Measured group-marginal rate for this geometry, evaluated once.
-        static const char *kGroupDts[] = {"",      "int8", "fp16", "",
-                                          "fp32",  "",     "",     "",
-                                          "int64"};
-        const int64_t ebBytes = access.elementBits / 8;
-        if (ebBytes >= 1 && ebBytes <= 8 && kGroupDts[ebBytes][0])
-          claim.marginalNs = contiguous_ldst::evaluateContiguousFormulaByKey(
-              stats, profile.contiguous,
-              std::string("small.group.") + kGroupDts[ebBytes] + ".marginal");
-      }
-      claim.count += members;
-      claim.sumNs += ns * members;
-      claim.iterations =
-          std::max(claim.iterations, static_cast<double>(trips));
-      if (::getenv("ASCEND_MODEL_CONTIG_DEBUG") != nullptr)
-        std::fprintf(stderr,
-                     "[contig-claim] eb=%lld by=%lld W=%lld members=%lld "
-                     "trips=%lld ns=%.1f marginal=%.1f\n",
-                     static_cast<long long>(access.elementBits / 8),
-                     static_cast<long long>(byBytes),
-                     static_cast<long long>(profile.activeWarpCount),
-                     static_cast<long long>(members),
-                     static_cast<long long>(trips), ns, claim.marginalNs);
-    }
-    // A group of same-shape accesses inside one iteration shares one latency:
-    // the first pays the calibrated cost, the rest stream at a measured rate.
-    // groupFactor divides the group wall clock back into the per-program
-    // share that the resource pools (and the xF Stage aggregation) expect.
-    const double total =
-        ns / groupFactor * kCyclesPerNanosecond * access.count;
-    const double warpInstructions =
-        access.count * llvm::divideCeil(shape->second, int64_t(32));
-    claimed.push_back(&access);
-    if (access.store) {
-      totalStore += total;
-      layout.storeBytes += access.count * shape->first;
-      layout.storeOperations += access.count;
-      layout.storeWarpInstructions += warpInstructions;
-      layout.storeShapes[*shape] += access.count;
-    } else {
-      totalLoad += total;
-      layout.loadBytes += access.count * shape->first;
-      layout.loadOperations += access.count;
-      layout.loadWarpInstructions += warpInstructions;
-      layout.loadShapes[*shape] += access.count;
-    }
-  }
-  const double sum = totalLoad + totalStore;
-  if (sum <= 0.0)
-    return;
-  // The baseline accumulates load and store additively; this pass keeps the
-  // same convention instead of inventing an overlap factor between them.
-  resources.load += totalLoad;
-  resources.store += totalStore;
-  // Receipt for route-side ownership rules (e.g. the sub-grid load-group
-  // startup transfer): the closed form owns exactly these load cycles, so
-  // they can be recognized as measured-envelope work rather than fallback.
-  resources.contiguousClosedFormLoad += totalLoad;
-  resources.contiguousClosedFormStore += totalStore;
-  // Load-vs-scattered-store coexistence: a SIMT stage whose body interleaves
-  // contiguous loads with strided (scattered) stores pays drain/issue
-  // interference on every round - the isolated load calibration (bw curve)
-  // never saw a scattered store queue draining underneath it (measured on
-  // the stride-16 scatter: +84ns per load round over the isolated bw price).
-  // The rounds are the interleaved load/store pairs of one stage body.
-  if (!simd && profile.loadStridedStoreCoexistencePenaltyCycles > 0.0 &&
-      resources.stridedShortStoreOperations > 0.0 &&
-      layout.loadOperations > 0.0) {
-    const double rounds = std::min(layout.loadOperations,
-                                   resources.stridedShortStoreOperations);
-    const double penalty =
-        rounds * profile.loadStridedStoreCoexistencePenaltyCycles;
-    if (::getenv("ASCEND_MODEL_CONTIG_DEBUG") != nullptr)
-      std::fprintf(stderr,
-                   "[contig-coexist] loadOps=%.0f stridedStoreOps=%.0f "
-                   "rounds=%.0f penalty=%.1f\n",
-                   layout.loadOperations, resources.stridedShortStoreOperations,
-                   rounds, penalty);
-    resources.load += penalty;
-    resources.contiguousClosedFormLoad += penalty;
-  }
-}
-
 
 /// The single string form of a slot: the profile JSON key.
 
@@ -1508,86 +1446,35 @@ static void mapCompositeDotPaths(StageWorkload &work,
 // / general path) keyed off N and the kernel warp count; the segment cost
 // replaces the legacy factor * laneSteps pricing for the whole 1D pool,
 // including its startups.
-static double
-simtPrefixScan1dSegmentCost(const CalibratedPrefixScanProfile &simt,
-                            int64_t numWarps, double n) {
-  const auto &segments = simt.prefixScan1dWarpSegments;
-  auto it = segments.lower_bound(
-      static_cast<unsigned>(std::max<int64_t>(1, numWarps)));
-  if (it == segments.end())
-    it = std::prev(segments.end());
-  const auto &segment = it->second;
-  const double warps = static_cast<double>(it->first);
-  const double threads = 32.0 * warps;
-  if (n <= 32.0)
-    return segment.cLocal;
-  // warpsPerCTA[axis] = ceil(N/32), capped by the kernel warp count.
-  const double chainWarps = std::min(warps, std::ceil(n / 32.0));
-  // Cross-warp Sklansky merge.  Both gates mirror canUseMultiWarpSklansky:
-  // one element per thread (N <= 32*w) and at most warpSize axis warps
-  // (k <= 32, i.e. N <= 1024).  A kernel with more warps than that
-  // (num_warps = 64) drops to the general path already at N = 2048 although
-  // every thread still owns one element, so pricing it as Sklansky would
-  // under-predict it.  ceil(log2 k) is the trip count of the Sklansky
-  // `for (h = 1; h < k; h <<= 1)` loop, so the pricing tracks the real round
-  // count instead of a linear proxy.
-  if (n <= threads && chainWarps <= 32.0) {
-    const double rounds = std::ceil(std::log2(std::max(1.0, chainWarps)));
-    return segment.cFixed + segment.cRound * rounds;
-  }
-  // General path.  The per-element serial slope is charged from N = 0; the
-  // 32*w anchor of the (N - 32*w) form is folded into cGen, so cGen is not
-  // directly comparable with the cross-warp segment constant.
-  return segment.cGen + segment.serialRate * n;
-}
-
-// v3.2 warp-shape-aware SIMT multi-dim (2D) scan cost.  The generic scan
-// lowering (AddPartialReduce) distributes the scan across warps with a serial
-// UB load chain whose cost is additive in the total element count N, plus a
-// per-thread-element hinge that prices register pressure beyond r0.  E is the
-// aggregate scan extent (exact for a single multi-dim scan per Stage) and
-// determines k = warpsPerCTA[axis], the UB chain length.  Extents below one
-// warp (E < 32) take the separate linear regime described inline below.
-static double
-simtPrefixScan2dSegmentCost(const CalibratedPrefixScanProfile &simt,
-                            int64_t numWarps, double extentSum, double n) {
-  const auto &segments = simt.prefixScan2dWarpSegments;
-  auto it = segments.lower_bound(
-      static_cast<unsigned>(std::max<int64_t>(1, numWarps)));
-  if (it == segments.end())
-    it = std::prev(segments.end());
-  const auto &segment = it->second;
-  const double extent = std::max(1.0, extentSum);
-  // Sub-warp extent: the warp owning the axis holds fewer than 32 valid lanes,
-  // so the axis warp never needs a cross-warp chain (k = 1) and the cost
-  // collapses onto a single linear-in-N regime.  Layout-coalesced small scans
-  // (e.g. a 16-element cumsum promoted to an (8,16,16) scan) land here.
-  if (extent < 32.0 && (segment.aSubwarp > 0.0 || segment.bSubwarp > 0.0))
-    return segment.aSubwarp + segment.bSubwarp * n;
-  const double threads = 32.0 * static_cast<double>(it->first);
-  // warpsPerCTA[axis]: warps holding unique data along the scan axis.
-  const double chainWarps =
-      std::min(static_cast<double>(it->first), std::ceil(extent / 32.0));
-  const double chainLoads = n * std::max(1.0, chainWarps) / threads;
-  const double hinge = std::max(0.0, n / threads - segment.r0);
-  return segment.a + segment.b * n + segment.c * chainLoads + segment.d * hinge;
-}
-
 static std::optional<StageResourceCycles>
 mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
             StageMode mode, int64_t superblockFactor, bool wholeSimt,
             std::optional<double> calibratedReduction = std::nullopt,
-            StageMemoryCost fitted = {}, int64_t logicalProgramCountHint = 0,
-            int64_t physicalCoreCountHint = 0) {
+            StageMemoryCost fitted = {}) {
   StageResourceCycles resources;
-  // Accesses already priced by a closed-form mechanism (strided-direct or
-  // contiguous).  The group curves below yield on them, so nothing is charged
-  // twice.
-  std::vector<const StageMemoryAccess *> closedFormClaimed;
+  // Accesses priced by the closed-form strided-direct mechanism.  The masked
+  // strided copy floor yields on them and stays in force for everything else.
+  std::vector<const StageMemoryAccess *> stridedShortAlreadyClaimed;
   StageWorkload work = stage.workload;
+  const bool simd = mode == StageMode::SIMD;
+  const bool independentScan =
+      stage.costModelKind == StageCostModelKind::PrefixScan &&
+      !stage.features.isGridStrideLoopShell &&
+      !stage.features.insideGridStrideLoopBody;
+  std::map<StageWorkload::PrefixScanKey, PrefixScanEstimate> fittedScans;
+  for (const auto &[key, count] : stage.workload.prefixScanCounts) {
+    if (auto scan = estimateFittedScan(key, profile, simd, independentScan)) {
+      fittedScans.emplace(key, std::move(*scan));
+    } else if (auto region =
+                   stage.workload.prefixScanCombineWorkloads.find(key);
+               region != stage.workload.prefixScanCombineWorkloads.end()) {
+      StageWorkload residual = region->second;
+      residual.scale(count);
+      work.merge(std::move(residual));
+    }
+  }
   if (wholeSimt)
     mapCompositeDotPaths(work, profile, superblockFactor, resources);
-  const bool simd = mode == StageMode::SIMD;
   resources.setup = work.paysKernelSetup ? profile.setupCycles : 0.0;
   if (simd) {
     StageWorkload completionWork = work;
@@ -1721,61 +1608,14 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
                        interpolateEnvelopeCost(startupCurve, extent));
       }
     }
-    // Apply the scan formulas independently of direction, combine and result
-    // count. Geometry and element width follow the first scan operand.
-    const auto &calibration = profile.calibratedPrefixScan;
-    if (calibration.enabled && std::get<7>(shape) > 0) {
-      const double n = static_cast<double>(extent) * independentSequences;
-      double completion = 0.0;
-      if (simd && independentSequences == 1) {
-        if (extent <= 64)
-          completion =
-              calibration.prefixScanStartupCycles1dSmall +
-              extent * calibration.prefixScanDependencyFactor1dSmall / 64.0;
-        else
-          completion =
-              calibration.prefixScanStartupCycles1d +
-              extent * std::log2(static_cast<double>(extent)) *
-                  (extent <= 1024
-                       ? calibration.prefixScanDependencyFactor1dMidWork
-                       : calibration.prefixScanDependencyFactor1dTiledWork) /
-                  64.0;
-      } else if (simd) {
-        const int64_t elementBits = std::get<9>(shape);
-        const double elementBytes = elementBits >= 8 ? elementBits / 8 : 0;
-        const double vectorElements =
-            elementBytes > 0.0 ? 256.0 / elementBytes : 64.0;
-        const double steps =
-            extent * std::ceil(independentSequences / vectorElements);
-        completion = calibration.prefixScanStartupCycles +
-                     (steps * calibration.prefixScanDependencyFactor +
-                      std::max(0.0, steps - 256.0) *
-                          calibration.prefixScanDependencyFactorMultiTail) /
-                         64.0;
-        if (std::get<8>(shape) != 0 && elementBytes > 0.0) {
-          const bool rank2 = std::get<7>(shape) == 2;
-          const double rate =
-              rank2 ? calibration.prefixScanTransposeAr2raBytesPerCycle
-                    : calibration.prefixScanTransposeDim01BytesPerCycle;
-          if (rate > 0.0)
-            completion +=
-                (rank2 ? calibration.prefixScanTransposeAr2raFixedCycles
-                       : calibration.prefixScanTransposeDim01FixedCycles) +
-                2.0 * n * elementBytes / rate;
-        }
-      } else if (independentSequences == 1 &&
-                 !calibration.prefixScan1dWarpSegments.empty()) {
-        completion = simtPrefixScan1dSegmentCost(calibration,
-                                                 profile.activeWarpCount, n);
-      } else if (independentSequences > 1 &&
-                 !calibration.prefixScan2dWarpSegments.empty()) {
-        completion = simtPrefixScan2dSegmentCost(
-            calibration, profile.activeWarpCount, extent, n);
-      }
-      if (completion > 0.0) {
-        resources.prefixScanCriticalPath += count * completion;
-        continue;
-      }
+    if (auto fitted = fittedScans.find(shape); fitted != fittedScans.end()) {
+      if (independentScan)
+        resources.scanCompletionCycles += count * fitted->second.cycles;
+      else
+        resources.prefixScanCriticalPath += count * fitted->second.cycles;
+      if (!fitted->second.formulaId.empty())
+        resources.scanFormulaCounts[fitted->second.formulaId] += count;
+      continue;
     }
     if (simd) {
       if (stage.scheduleKind == StageScheduleKind::StraightLine &&
@@ -2095,21 +1935,16 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
     // Runs before the load-group curve below, and before the masked-copy curve
     // further down, so both can see which accesses this pass already priced.
     mapStridedShortMemoryCompletion(stage, work, profile, resources, simd,
-                                    layout, closedFormClaimed);
-    // Contiguous (stride == 1) accesses are claimed by their own calibrated
-    // closed form; the analytical fallback and the group curves below see them
-    // as already priced.
-    mapContiguousMemoryCompletion(stage, work, profile, resources, simd,
-                                   superblockFactor, layout, closedFormClaimed,
-                                   logicalProgramCountHint,
-                                   physicalCoreCountHint);
+                                    layout, stridedShortAlreadyClaimed);
+    // v2 epoch-calibrated contiguous pricing claims before the legacy curves.
+    mapContiguousV2Completion(stage, work, profile, resources, simd, layout,
+                              stridedShortAlreadyClaimed);
     // The store-group curve below must not price a store this pass already did.
     const bool storesClaimedByClosedForm = std::any_of(
-        closedFormClaimed.begin(), closedFormClaimed.end(),
+        stridedShortAlreadyClaimed.begin(), stridedShortAlreadyClaimed.end(),
         [](const StageMemoryAccess *access) { return access->store; });
     if (pipelinedSimd && profile.independentLoadGroupBytesPerCycle > 0.0) {
       std::vector<const StageMemoryAccess *> flatPrefix;
-      bool hasClaimedLoad = false;
       bool reachedFirstLoad = false;
       bool allLoadsRankOne = true;
       for (const StageMemoryAccess &access : work.memoryAccesses) {
@@ -2119,11 +1954,6 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
           continue;
         }
         reachedFirstLoad = true;
-        // A load already priced by a closed-form model must not be charged
-        // again by the independent-load-group envelope: the group curve is a
-        // complete envelope over the same bytes (measured +62% on copy).
-        if (llvm::is_contained(closedFormClaimed, &access))
-          hasClaimedLoad = true;
         auto shape = accessShape(access);
         if (access.count <= 0.0 || !shape || access.elementBits != 32 ||
             !access.isFlatContiguous())
@@ -2169,18 +1999,14 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
           // The one-stream evidence is a flat rank-one grid-stride transfer.
           (operationsPerGroup != 1 || allLoadsRankOne);
       if (groupCovered) {
-        // The kernel-startup term belongs to the stage, not to the group curve:
-        // a closed-form claim removes the group envelope but not the startup.
         resources.setup += profile.independentLoadGroupKernelStartupCycles;
-        if (!hasClaimedLoad) {
-          resources.continuousLoadGroup +=
+        resources.continuousLoadGroup +=
             groupOccurrences *
             (profile.independentLoadGroupIterationStartupCycles +
              bytesPerGroup / profile.independentLoadGroupBytesPerCycle);
-          layout.loadBytes += coveredBytes;
-          layout.loadOperations += coveredOperations;
-          layout.loadWarpInstructions += coveredWarpInstructions;
-        }
+        layout.loadBytes += coveredBytes;
+        layout.loadOperations += coveredOperations;
+        layout.loadWarpInstructions += coveredWarpInstructions;
       }
     }
 
@@ -2260,30 +2086,15 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
     };
     // A count curve describes one uninterrupted sequence.
     std::vector<StageMemoryAccess> accessGroups;
-    // Parallel flag: the group was already priced by a closed-form model
-    // (strided-direct or contiguous).  Claiming follows the identity of the
-    // original access, never a numeric comparison, so two mechanisms cannot
-    // both charge the same bytes.  Groups never merge across claim state: a
-    // partially claimed group would let this curve price bytes a closed form
-    // already owns.
-    std::vector<bool> groupClaimed;
     for (const StageMemoryAccess &access : work.memoryAccesses) {
-      const bool claimed =
-          llvm::is_contained(closedFormClaimed, &access);
       if (!accessGroups.empty() && accessGroups.back().store == access.store &&
           accessGroups.back().layoutKey() == access.layoutKey() &&
-          groupClaimed.back() == claimed &&
-          !hasExchange(access) && !hasExchange(accessGroups.back())) {
+          !hasExchange(access) && !hasExchange(accessGroups.back()))
         accessGroups.back().count += access.count;
-      } else {
+      else
         accessGroups.push_back(access);
-        groupClaimed.push_back(claimed);
-      }
     }
-    for (size_t groupIndex = 0; groupIndex < accessGroups.size(); ++groupIndex) {
-      const auto &access = accessGroups[groupIndex];
-      if (groupClaimed[groupIndex])
-        continue;
+    for (const auto &access : accessGroups) {
       if (!isContinuousMemoryStage(stage.costModelKind) ||
           stage.features.synchronizationCount != 0 || stage.features.hasLoop ||
           stage.features.conditionalBranchCount != 0)
@@ -2298,7 +2109,6 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
       const auto shape = accessShape(access);
       if (!groupCost || !shape)
         continue;
-      // Accesses already priced by a closed form are skipped below by identity.
       // Subtract the covered work in its original normalized unit. The new
       // profile's group envelope is not itself an instruction count.
       const double normalizedWarps =
@@ -2308,11 +2118,13 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
         layout.storeBytes += access.count * shape->first;
         layout.storeOperations += access.count;
         layout.storeWarpInstructions += access.count * normalizedWarps;
+        layout.storeShapes[*shape] += access.count;
       } else {
         resources.continuousLoadGroup += *groupCost;
         layout.loadBytes += access.count * shape->first;
         layout.loadOperations += access.count;
         layout.loadWarpInstructions += access.count * normalizedWarps;
+        layout.loadShapes[*shape] += access.count;
       }
     }
     struct CurvedMemoryCoverage {
@@ -2472,10 +2284,6 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
       if (!profile.maskedLoadStoreRmwResidualCyclesByRowBytesAndActiveRows
                .empty()) {
         for (const StageMemoryAccess &access : work.memoryAccesses) {
-          // Already priced by the contiguous closed form: charging the
-          // read-modify-write residual again would double count it.
-          if (llvm::is_contained(closedFormClaimed, &access))
-            continue;
           if (!access.store || access.count <= 0.0 || !access.masked ||
               access.elementBits != 16 ||
               !access.maskedStoreHasMatchingLoadDependency ||
@@ -2864,9 +2672,67 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
   if (calibratedReduction && work.reductionOperations > 0.0)
     resources.reduction += *calibratedReduction;
   if (work.dotFlops > 0.0) {
-    // A Stage can own multiple tiny dots.
-    resources.dot = work.dotOperations * profile.dotSetupCycles +
-                    work.dotFlops / profile.dotFlopsPerCycle;
+    // The physical formula contributes resource work, not independent
+    // completion latency. Leave unsupported dots on the existing law.
+    double unmatchedOperations = work.dotOperations;
+    double unmatchedFlops = work.dotFlops;
+    if (simd && (stage.costModelKind == StageCostModelKind::CubeRoofline ||
+                 stage.costModelKind == StageCostModelKind::TinyCubeRoofline)) {
+      for (const auto &[shape, count] : work.dotShapeCounts) {
+        if (profile.dotPhysicalResourceFormula && count > 0) {
+          const auto &formula = *profile.dotPhysicalResourceFormula;
+          const auto &[m, n, k, batch, lhsType, rhsType, accumulatorType,
+                       inputPrecision] = shape;
+          const bool supported =
+              batch == 1 && lhsType == "f16" && rhsType == "f16" &&
+              accumulatorType == "f32" && inputPrecision == "ieee" && m > 0 &&
+              n > 0 && k > 0 && m % formula.tileSize == 0 &&
+              n % formula.tileSize == 0 && k % formula.tileSize == 0 &&
+              (stage.costModelKind == StageCostModelKind::TinyCubeRoofline ||
+               2.0 * static_cast<double>(m) * n * k >=
+                   formula.cubeMinimumFlops);
+          if (supported) {
+            const double instances = count * static_cast<double>(batch);
+            const double flopsPerInstance = 2.0 * static_cast<double>(m) *
+                                            static_cast<double>(n) *
+                                            static_cast<double>(k);
+            const double nTiles =
+                static_cast<double>(n) / static_cast<double>(formula.tileSize);
+            double occupancyScale = 1.0;
+            if (nTiles < formula.narrowNReferenceTiles)
+              occupancyScale = std::pow(formula.narrowNReferenceTiles / nTiles,
+                                        formula.narrowNOccupancyExponent);
+            else if (nTiles > formula.wideNReferenceTiles)
+              occupancyScale = std::pow(formula.wideNReferenceTiles / nTiles,
+                                        formula.wideNOccupancyExponent);
+            const double mac =
+                stage.costModelKind == StageCostModelKind::TinyCubeRoofline
+                    ? formula.tinyMacFloorCycles
+                    : formula.cubeMacCyclesPerSqrtFlop *
+                          std::sqrt(flopsPerInstance * occupancyScale);
+            const double lhsBytes = 2.0 * static_cast<double>(m) * k;
+            const double rhsBytes = 2.0 * static_cast<double>(n) * k;
+            const double mte1 = formula.mte1StartupCycles +
+                                std::pow(lhsBytes, formula.mte1BytesExponent) *
+                                    formula.lhsMte1CyclesPerBytePower +
+                                std::pow(rhsBytes, formula.mte1BytesExponent) *
+                                    formula.rhsMte1CyclesPerBytePower;
+            const double flops = instances * flopsPerInstance;
+            if (instances > unmatchedOperations + 1e-9 ||
+                flops > unmatchedFlops + 1e-6)
+              return std::nullopt;
+            resources.dot += instances * std::max(mac, mte1);
+            unmatchedOperations -= instances;
+            unmatchedFlops -= flops;
+            resources.dotPhysicalResourceFormulaApplied = true;
+            continue;
+          }
+        }
+      }
+    }
+    resources.dot +=
+        std::max(0.0, unmatchedOperations) * profile.dotSetupCycles +
+        std::max(0.0, unmatchedFlops) / profile.dotFlopsPerCycle;
     if (stage.features.isGridStrideLoopShell ||
         stage.features.insideGridStrideLoopBody) {
       const auto factorBody =
@@ -2927,7 +2793,7 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
     resources.store = std::max(resources.store, resources.storeLayoutService);
   }
   mapMaskedStridedCopyCompletion(stage, work, profile, resources,
-                                 closedFormClaimed);
+                                 stridedShortAlreadyClaimed);
   return materializeControlFlow(stage, mode, resources, profile.controlFlow);
 }
 
@@ -2974,7 +2840,7 @@ mapOrdinaryReduction(const LogicalStage &stage,
     if (!estimate) {
       if (!contribution)
         return false;
-      mergeReductionResidualWorkload(residual.workload, *contribution);
+      residual.workload.merge(*contribution);
       result.fallbackInstances += work.instances;
       return true;
     }
@@ -3055,13 +2921,23 @@ static LogicalStage perAivStage(const LogicalStage &logical, int64_t parts) {
   for (const auto &[elements, count] : work.predicateCounts)
     predicates[extent(elements)] += count;
   work.predicateCounts = std::move(predicates);
-  decltype(work.prefixScanCounts) scans;
-  for (const auto &[shape, count] : work.prefixScanCounts)
-    scans[{std::get<0>(shape), extent(std::get<1>(shape)), std::get<2>(shape),
-           std::get<3>(shape), std::get<4>(shape), std::get<5>(shape),
-           std::get<6>(shape), std::get<7>(shape), std::get<8>(shape),
-           std::get<9>(shape)}] += count;
-  work.prefixScanCounts = std::move(scans);
+  StageWorkload scans;
+  for (const auto &[shape, count] : work.prefixScanCounts) {
+    auto key = shape;
+    std::get<1>(key) = extent(std::get<1>(shape));
+    StageWorkload scan;
+    scan.prefixScanCounts[key] = count;
+    if (auto region = work.prefixScanCombineWorkloads.find(shape);
+        region != work.prefixScanCombineWorkloads.end()) {
+      LogicalStage regionStage = logical;
+      regionStage.workload = region->second;
+      scan.prefixScanCombineWorkloads.emplace(
+          key, perAivStage(regionStage, parts).workload);
+    }
+    scans.merge(std::move(scan));
+  }
+  work.prefixScanCounts = std::move(scans.prefixScanCounts);
+  work.prefixScanCombineWorkloads = std::move(scans.prefixScanCombineWorkloads);
   work.reductionOperations /= parts;
   work.shuffleLaneSteps /= parts;
   work.dotFlops /= parts;
@@ -3131,6 +3007,8 @@ static double applySuperBlock(const LogicalStage &stage,
                               const StageImplementation &implementation,
                               const HardwareProfile &profile,
                               double stageCycles) {
+  if (stage.iterationCount == 0)
+    return 0.0;
   if (implementation.mode != StageMode::SIMT ||
       implementation.superblockFactor == 1)
     return stageCycles;
@@ -3240,6 +3118,8 @@ static double estimateStageBase(const LogicalStage &stage,
                                 const HardwareProfile &profile, StageMode mode,
                                 const StageResourceCycles &r) {
   const double count = iterations(stage);
+  if (count == 0.0)
+    return 0.0;
   const double serial = r.setup + count * serialBody(r);
   switch (stage.costModelKind) {
   case StageCostModelKind::VectorIssue:
@@ -3347,15 +3227,10 @@ static double estimateStageBase(const LogicalStage &stage,
                                   (mode == StageMode::SIMT ? ownedMemory : 0.0),
                               r.issue);
     }
-    if (mode == StageMode::SIMT &&
+    if (r.scanCompletionCycles == 0.0 && mode == StageMode::SIMT &&
         stage.scheduleKind == StageScheduleKind::StraightLine &&
         !stage.features.isGridStrideLoopShell &&
         !stage.features.insideGridStrideLoopBody &&
-        !(profile.simt.calibratedPrefixScan.enabled &&
-          llvm::all_of(stage.workload.prefixScanCounts,
-                       [](const auto &entry) {
-                         return std::get<7>(entry.first) > 0;
-                       })) &&
         profile.simt.straightLinePrefixScanElementsPerCycle > 0.0) {
       double semanticElements = 0.0;
       for (const auto &[shape, occurrences] : stage.workload.prefixScanCounts) {
@@ -3374,7 +3249,8 @@ static double estimateStageBase(const LogicalStage &stage,
         r.compute + r.predicate + r.reduction + r.shuffle;
     const double scanCritical =
         std::max(scanExecution, r.prefixScanCriticalPath);
-    const double execution = r.scalar + r.load + r.store + scanCritical;
+    const double execution =
+        r.scalar + r.load + r.store + r.scanCompletionCycles + scanCritical;
     return r.setup + count * std::max(execution, r.issue);
   }
   case StageCostModelKind::CubeRoofline:
@@ -3750,6 +3626,21 @@ std::optional<double> StageMemoryLayoutCost::evaluate(double count) const {
   return std::isfinite(cost) ? std::optional<double>(cost) : std::nullopt;
 }
 
+bool StageModeProfile::DotPhysicalResourceFormula::isValid() const {
+  const auto positive = [](double value) {
+    return std::isfinite(value) && value > 0.0;
+  };
+  return tileSize > 0 && positive(tinyMacFloorCycles) &&
+         positive(cubeMacCyclesPerSqrtFlop) && positive(cubeMinimumFlops) &&
+         positive(mte1StartupCycles) && positive(mte1BytesExponent) &&
+         positive(lhsMte1CyclesPerBytePower) &&
+         positive(rhsMte1CyclesPerBytePower) &&
+         positive(narrowNReferenceTiles) && positive(wideNReferenceTiles) &&
+         narrowNReferenceTiles <= wideNReferenceTiles &&
+         positive(narrowNOccupancyExponent) &&
+         positive(wideNOccupancyExponent) && !evidence.empty();
+}
+
 namespace {
 
 static bool finitePositive(std::initializer_list<double> values) {
@@ -3811,34 +3702,6 @@ static bool overlappingNodeRanges(const std::vector<Curve> &curves,
 }
 
 } // namespace
-
-bool CalibratedPrefixScanProfile::isValid() const {
-  auto valid = [](std::initializer_list<double> values) {
-    return std::all_of(values.begin(), values.end(), [](double value) {
-      return std::isfinite(value) && value >= 0.0;
-    });
-  };
-  if (!valid({prefixScanDependencyFactor, prefixScanDependencyFactor1d,
-              prefixScanDependencyFactor1dSmall,
-              prefixScanDependencyFactor1dMidWork,
-              prefixScanDependencyFactor1dTiledWork,
-              prefixScanDependencyFactorMultiTail,
-              prefixScanTransposeDim01FixedCycles,
-              prefixScanTransposeDim01BytesPerCycle,
-              prefixScanTransposeAr2raFixedCycles,
-              prefixScanTransposeAr2raBytesPerCycle, prefixScanStartupCycles,
-              prefixScanStartupCycles1d, prefixScanStartupCycles1dSmall}))
-    return false;
-  for (const auto &[warps, s] : prefixScan1dWarpSegments)
-    if (warps == 0 ||
-        !valid({s.cLocal, s.cFixed, s.cRound, s.cGen, s.serialRate}))
-      return false;
-  for (const auto &[warps, s] : prefixScan2dWarpSegments)
-    if (warps == 0 ||
-        !valid({s.a, s.b, s.c, s.d, s.r0, s.aSubwarp, s.bSubwarp}))
-      return false;
-  return true;
-}
 
 bool StageModeProfile::isValid(StageMode mode) const {
   if (!calibratedPrefixScan.isValid())
@@ -4180,6 +4043,12 @@ bool StageModeProfile::isValid(StageMode mode) const {
       validPositiveKeyTree(indirectStoreSystemCyclesBySegments, positiveLeaf);
   const bool validDotWarpCurve =
       validPositiveKeyTree(dotFlopsPerCycleByWarpCount, positiveLeaf);
+  if (dotPhysicalResourceFormula) {
+    if (mode != StageMode::SIMD || dotPhysicalResourceTarget.empty() ||
+        dotPhysicalResourceLoweringContract.empty() ||
+        !dotPhysicalResourceFormula->isValid())
+      return false;
+  }
   const bool validIndirectStartupCurve = validPositiveKeyTree(
       indirectLoadStartupSystemCyclesByWarpInstructions,
       [](double value) { return std::isfinite(value) && value >= 0.0; });
@@ -4329,6 +4198,7 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
   table.operationOwnershipComplete = partition.operationOwnershipComplete;
   table.modeledOperationCount = partition.modeledOperationCount;
   table.profileVersion = profile.profileVersion;
+  table.dependencies = partition.dependencies;
   table.cvAivSubblocks = profile.cvAivSubblocks;
   table.baseSimtWarpCount = profile.baseSimtWarpCount;
   table.simdLoadOperationStartupCycles = profile.simd.loadOperationSetupCycles;
@@ -4413,7 +4283,7 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
       return llvm::createStringError(
           std::errc::invalid_argument,
           "Stage ids must be non-empty and unique: '%s'", stage.id.c_str());
-    if (stage.iterationCount <= 0 || !stage.features.isValid() ||
+    if (stage.iterationCount < 0 || !stage.features.isValid() ||
         !stage.workload.isFiniteAndNonNegative())
       return llvm::createStringError(
           std::errc::invalid_argument,
@@ -4431,6 +4301,7 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
     LogicalStageCost logicalCost;
     logicalCost.id = stage.id;
     logicalCost.model = stringifyStageCostModel(stage.costModelKind).str();
+    logicalCost.enclosingLoopStages = stage.enclosingLoopStages;
     logicalCost.schedule = stage.scheduleKind;
     logicalCost.iterationCount = stage.iterationCount;
     logicalCost.features = stage.features;
@@ -4498,8 +4369,7 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
           executionStage, modeProfile, implementation.mode,
           implementation.superblockFactor,
           implementation.mode == StageMode::SIMT && !implementation.localScope,
-          std::nullopt, fitted, partition.logicalProgramCountHint,
-          partition.physicalCoreCountHint);
+          std::nullopt, fitted);
       if (!resources)
         continue;
       auto mapping =
@@ -4568,6 +4438,8 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
         cost.formulaEvidence = "analytical_resource_formula";
       if (fitted.load || fitted.store)
         cost.formulaEvidence = "matched_ab_indirect_memory_increment";
+      if (resources->dotPhysicalResourceFormulaApplied)
+        cost.formulaEvidence += "+physical_tile_resource_formula";
       if (resources->indirectMemoryAnalyticalFallback &&
           cost.formulaEvidence.find(
               "analytical_indirect_memory_resource_fallback") ==
@@ -4687,8 +4559,11 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
                              std::get<5>(entry.first)) != 0;
                 });
         cost.formulaEvidence +=
-            usesStraightLineHelper ? "+straight_line_scan_structural_completion"
-                                   : "+prefix_scan_per_level_issue";
+            resources->scanCompletionCycles > 0.0
+                ? "+independent_scan_completion"
+            : usesStraightLineHelper
+                ? "+straight_line_scan_structural_completion"
+                : "+prefix_scan_per_level_issue";
       }
       if (resources->rowwiseReductionGroupBody > 0.0)
         cost.formulaEvidence += "+bounded_ttir_row_extent_surface";
@@ -4718,9 +4593,7 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
               mapWorkload(stage, modeProfile, implementation.mode,
                           implementation.superblockFactor,
                           implementation.mode == StageMode::SIMT &&
-                              !implementation.localScope,
-                          std::nullopt, {}, partition.logicalProgramCountHint,
-                          partition.physicalCoreCountHint);
+                              !implementation.localScope);
           if (!fullResources)
             continue;
           const double unpartitionedTotal =
