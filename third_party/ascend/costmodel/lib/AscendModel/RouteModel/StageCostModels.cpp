@@ -703,6 +703,9 @@ static void mapContiguousV2Completion(
       continue; // unfitted cell: fallbacks keep the bytes
     const contiguous_v2::ContiguousV2Group &g = it->second;
     const int64_t n = static_cast<int64_t>(members.size());
+    if (n < 2)
+      continue; // single accesses: the first-term price carries issue
+                // overhead legacy bills separately, and legacy wins there
     if (n > 64)
       continue; // beyond the fitted group range: legacy curves own it
     double total;
