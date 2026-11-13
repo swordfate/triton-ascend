@@ -703,23 +703,45 @@ static void mapContiguousV2Completion(
       continue; // unfitted cell: fallbacks keep the bytes
     const contiguous_v2::ContiguousV2Group &g = it->second;
     const int64_t n = static_cast<int64_t>(members.size());
-    if (n < 2)
-      continue; // single accesses: the first-term price carries issue
-                // overhead legacy bills separately, and legacy wins there
     if (n > 64)
       continue; // beyond the fitted group range: legacy curves own it
     double total;
-    if (g.Q > 0 && n > g.Q)
-      total = g.first + (g.Q - 1) * g.marginal + (n - g.Q) * g.cTransfer;
-    else
-      total = g.first + (n - 1) * g.marginal;
+    bool fitted = true;
+    if (n == 1) {
+      // Single access: the fitted first-term carries issue overhead the
+      // legacy model bills in separate buckets, so price singles with the
+      // legacy-consistent analytical formula - the v2 path covers them at
+      // baseline-identical accuracy.
+      const int64_t elems = v2ElementCount(first);
+      if (simd)
+        total = (first->store ? profile.storeOperationSetupCycles
+                              : profile.loadOperationSetupCycles) +
+                bytes * (first->store
+                             ? 1.0 / profile.storeBytesPerCycle
+                             : 1.0 / profile.loadBytesPerCycle);
+      else
+        total = static_cast<double>(llvm::divideCeil(elems, int64_t(32))) /
+                (first->store ? profile.storeWarpInstructionsPerCycle
+                              : profile.loadWarpInstructionsPerCycle);
+      fitted = false;
+    } else {
+      if (g.Q > 0 && n > g.Q)
+        total = g.first + (g.Q - 1) * g.marginal + (n - g.Q) * g.cTransfer;
+      else
+        total = g.first + (n - 1) * g.marginal;
+    }
     if (!(total > 0.0))
       continue;
-    const double pFac = contiguous_v2::pAxisFactor(
-        profile.contiguousV2,
-        first->store ? "storeonly" : "loadsum",
-        simd ? "simd" : "simt", res, programCountHint);
-    const double ns = total * pFac * kCyclesPerNano;
+    double ns;
+    if (fitted) {
+      const double pFac = contiguous_v2::pAxisFactor(
+          profile.contiguousV2, first->store ? "storeonly" : "loadsum",
+          simd ? "simd" : "simt", res, programCountHint);
+      ns = total * pFac * kCyclesPerNano;
+    } else {
+      ns = total; // analytical: the legacy fallback has no P factor; the
+                  // contention enters through the wave arithmetic
+    }
     for (const StageMemoryAccess *access : members) {
       claimed.push_back(access);
       if (access->store) {
