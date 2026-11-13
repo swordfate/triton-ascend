@@ -3949,7 +3949,8 @@ static llvm::Expected<StageCostModelSummary> evaluateStageModel(
           : 1;
   StageCostEvaluator evaluator;
   auto costTable = evaluator.evaluate(*partition, hardwareProfile,
-                                      options.collectCalibrationEstimates);
+                                      options.collectCalibrationEstimates,
+                                      options.logicalProgramCountHint);
   if (!costTable)
     return costTable.takeError();
   costTable->logicalProgramCountHint = logicalProgramCountHint;
