@@ -430,18 +430,29 @@ static void mapContiguousV2Completion(
     return;
   constexpr double kCyclesPerNano = 1.0; // SYS_CNT at 1 GHz
   const bool hasLoop = stage.features.hasLoop;
-  // Admission (100-case evidence RUNV4..V7): the loop-body cells were
-  // probed at grid=1 with fixed geometry and need a loop-context P-axis /
-  // W-axis recalibration before they beat the legacy curves, and the simt
-  // straight-line cells overprice small simt kernels.  Until those cells
-  // are recalibrated, claim only simd straight-line groups (the domain the
-  // fits cover and the only one that beat legacy end-to-end).
-  if (hasLoop || !simd)
+  // Admission defaults encode the 100-case evidence (RUNV4..V9): loop-body
+  // cells need a loop-context P-axis / W-axis recalibration and the simt
+  // straight-line cells overprice small simt kernels, so the shipped
+  // behavior claims only simd straight-line groups at >=16 programs.
+  // The recalibration campaign opens domains through the environment:
+  //   ASCEND_V2_ALLOW_LOOP=1    admit Formula B (loop body) claims
+  //   ASCEND_V2_ALLOW_SIMT=1    admit simt claims
+  //   ASCEND_V2_MIN_PROGRAMS=N  minimum programCountHint (default 16)
+  static const bool allowLoop = [] {
+    const char *e = ::getenv("ASCEND_V2_ALLOW_LOOP");
+    return e && *e && e[0] != '0';
+  }();
+  static const bool allowSimt = [] {
+    const char *e = ::getenv("ASCEND_V2_ALLOW_SIMT");
+    return e && *e && e[0] != '0';
+  }();
+  static const int64_t minPrograms = [] {
+    const char *e = ::getenv("ASCEND_V2_MIN_PROGRAMS");
+    return e && *e ? std::max<int64_t>(1, atoll(e)) : int64_t(16);
+  }();
+  if ((hasLoop && !allowLoop) || (!simd && !allowSimt))
     return;
-  // The group prices are grid=1-calibrated and the P-axis knee sits at
-  // ~16 programs (RUNV8: single-program pytest kernels lose ~3-12% to the
-  // legacy analytical rates, every multi-program winner launches >=56).
-  if (programCountHint < 16)
+  if (programCountHint < minPrograms)
     return;
   const int64_t K = hasLoop ? std::max<int64_t>(1, stage.iterationCount) : 0;
 
