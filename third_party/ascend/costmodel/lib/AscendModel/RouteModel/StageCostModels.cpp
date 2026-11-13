@@ -2051,6 +2051,12 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
           continue;
         }
         reachedFirstLoad = true;
+        if (std::find(stridedShortAlreadyClaimed.begin(),
+                      stridedShortAlreadyClaimed.end(), &access) !=
+            stridedShortAlreadyClaimed.end())
+          // v2 already owns this stream; the flat-group envelope describes
+          // one uninterrupted sequence, so the prefix ends here.
+          break;
         auto shape = accessShape(access);
         if (access.count <= 0.0 || !shape || access.elementBits != 32 ||
             !access.isFlatContiguous())
