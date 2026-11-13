@@ -3960,9 +3960,16 @@ static llvm::Expected<StageCostModelSummary> evaluateStageModel(
           ? 2
           : 1;
   StageCostEvaluator evaluator;
+  // The v2 P-axis needs the program count the model trusts (route transform
+  // capability first, pass option as fallback); the pass option alone stays
+  // 1 in practice and would pin pAxisFactor at its P=1 no-op.
+  const int64_t v2ProgramCount =
+      options.sourceLogicalProgramCountHint > 0
+          ? options.sourceLogicalProgramCountHint
+          : logicalProgramCountHint;
   auto costTable = evaluator.evaluate(*partition, hardwareProfile,
                                       options.collectCalibrationEstimates,
-                                      options.logicalProgramCountHint);
+                                      v2ProgramCount);
   if (!costTable)
     return costTable.takeError();
   costTable->logicalProgramCountHint = logicalProgramCountHint;

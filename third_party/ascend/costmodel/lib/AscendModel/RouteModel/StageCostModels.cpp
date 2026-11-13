@@ -554,7 +554,14 @@ static void mapContiguousV2Completion(
       perIter = (loop.P + K * loop.m) / K;
     if (!(perIter > 0.0))
       return;
-    const double nsPerIter = perIter * kCyclesPerNano;
+    // Scale the grid=1-calibrated loop envelope with the P-axis factor
+    // (cal_b_loop.py probes launch pf[(1,)]); at P>=56 the per-program
+    // marginal collapses and the raw price would overpredict.
+    const double pFac = contiguous_v2::pAxisFactor(
+        profile.contiguousV2,
+        (hasStores && !hasLoads) ? "storeonly" : "loadsum",
+        simd ? "simd" : "simt", res, programCountHint);
+    const double nsPerIter = perIter * pFac * kCyclesPerNano;
     // The fitted P/m price the whole probe body once per iteration, so
     // charge nsPerIter ONCE (load bucket for indpt/chain bodies - the store
     // service is already inside the indpt envelope; store bucket for
