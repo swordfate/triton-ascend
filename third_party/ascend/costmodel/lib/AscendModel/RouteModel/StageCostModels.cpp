@@ -566,10 +566,10 @@ static void mapContiguousV2Completion(
   for (auto &groupEntry : groups) {
     auto &members = groupEntry.second;
     const StageMemoryAccess *first = members.front();
-    const char *dtype = ebName(first->elementBytes);
+    const char *dtype = ebName(first->elementBits / 8);
     if (!dtype)
       continue;
-    const int64_t bytes = first->elements * first->elementBytes;
+    const int64_t bytes = v2ElementCount(first) * (first->elementBits / 8);
     int64_t bucket = 1024;
     double bestDist = 1e30;
     for (int64_t b : {1024, 4096, 16384}) {
