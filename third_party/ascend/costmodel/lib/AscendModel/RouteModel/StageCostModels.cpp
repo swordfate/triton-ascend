@@ -501,7 +501,14 @@ static void mapContiguousV2Completion(
     // straight-line bodies) degenerate the formula to P+m per access and
     // stay on the legacy curves; accesses with count > 1 instances per
     // iteration are a throughput regime this formula does not describe.
-    if (K < 2 || K > 128)
+    // The marginal-contention axis describes BW-dominated loops; small-K
+    // loops are startup-dominated and the legacy curves are already well
+    // tuned there (100-case: masked_copy K=8 +40% via Formula B).
+    static const int64_t minLoopK = [] {
+      const char *e = ::getenv("ASCEND_V2_MIN_K");
+      return e && *e ? std::max<int64_t>(2, atoll(e)) : int64_t(32);
+    }();
+    if (K < minLoopK || K > 128)
       return;
     for (const StageMemoryAccess *access : eligible)
       if (access->count > 1.0)
@@ -593,18 +600,10 @@ static void mapContiguousV2Completion(
     const char *loopBase = (hasStores && !hasLoads) ? "loopstore"
                                                     : "loopsum";
     const char *engineShort = simd ? "simd" : "simt";
-    const char *band = K < 16 ? "k8" : (K < 64 ? "k32" : "k128");
     double pFac;
-    const std::string bandKey =
-        std::string(loopBase) + "/" + band + "/" + engineShort + "/" + res;
     const std::string plainKey =
         std::string(loopBase) + "/" + engineShort + "/" + res;
-    if (profile.contiguousV2.pAxis.count(bandKey))
-      pFac = contiguous_v2::pAxisFactor(
-          profile.contiguousV2,
-          std::string(loopBase) + "/" + band, engineShort, res,
-          programCountHint);
-    else if (profile.contiguousV2.pAxis.count(plainKey))
+    if (profile.contiguousV2.pAxis.count(plainKey))
       pFac = contiguous_v2::pAxisFactor(profile.contiguousV2, loopBase,
                                         engineShort, res,
                                         programCountHint);
