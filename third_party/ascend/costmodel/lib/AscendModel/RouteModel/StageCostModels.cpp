@@ -587,13 +587,25 @@ static void mapContiguousV2Completion(
     // Loop-context P-axis first (calE loop probes collapse differently
     // than the straight-line FormS context); fall back to the group
     // tables when the loop keys are absent.
-    const char *loopKind = (hasStores && !hasLoads) ? "loopstore"
+    // Loop-context P-axis per K band (startup-dominated at small K,
+    // BW-saturated at large K); fall back to the plain loop keys and then
+    // the group-context tables.
+    const char *loopBase = (hasStores && !hasLoads) ? "loopstore"
                                                     : "loopsum";
     const char *engineShort = simd ? "simd" : "simt";
+    const char *band = K < 16 ? "k8" : (K < 64 ? "k32" : "k128");
     double pFac;
-    if (profile.contiguousV2.pAxis.count(
-            std::string(loopKind) + "/" + engineShort + "/" + res))
-      pFac = contiguous_v2::pAxisFactor(profile.contiguousV2, loopKind,
+    const std::string bandKey =
+        std::string(loopBase) + "/" + band + "/" + engineShort + "/" + res;
+    const std::string plainKey =
+        std::string(loopBase) + "/" + engineShort + "/" + res;
+    if (profile.contiguousV2.pAxis.count(bandKey))
+      pFac = contiguous_v2::pAxisFactor(
+          profile.contiguousV2,
+          std::string(loopBase) + "/" + band, engineShort, res,
+          programCountHint);
+    else if (profile.contiguousV2.pAxis.count(plainKey))
+      pFac = contiguous_v2::pAxisFactor(profile.contiguousV2, loopBase,
                                         engineShort, res,
                                         programCountHint);
     else
