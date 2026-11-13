@@ -598,10 +598,14 @@ static void mapContiguousV2Completion(
       if (access->store) {
         layout.storeBytes += bytes;
         layout.storeOperations += 1.0;
+        layout.storeWarpInstructions +=
+            llvm::divideCeil(v2ElementCount(access), int64_t(32));
         layout.storeShapes[std::make_pair(bytes, v2ElementCount(access))] += 1.0;
       } else {
         layout.loadBytes += bytes;
         layout.loadOperations += 1.0;
+        layout.loadWarpInstructions +=
+            llvm::divideCeil(v2ElementCount(access), int64_t(32));
         layout.loadShapes[std::make_pair(bytes, v2ElementCount(access))] += 1.0;
       }
     }
@@ -686,11 +690,15 @@ static void mapContiguousV2Completion(
         resources.store += ns / members.size();
         layout.storeBytes += bytes;
         layout.storeOperations += 1.0;
+        layout.storeWarpInstructions +=
+            llvm::divideCeil(v2ElementCount(access), int64_t(32));
         layout.storeShapes[std::make_pair(bytes, v2ElementCount(access))] += 1.0;
       } else {
         resources.load += ns / members.size();
         layout.loadBytes += bytes;
         layout.loadOperations += 1.0;
+        layout.loadWarpInstructions +=
+            llvm::divideCeil(v2ElementCount(access), int64_t(32));
         layout.loadShapes[std::make_pair(bytes, v2ElementCount(access))] += 1.0;
       }
     }
