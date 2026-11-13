@@ -531,7 +531,10 @@ static void mapContiguousV2Completion(
     // (multi-stream bodies, mixed unequal sizes) is outside the fitted
     // domain: the legacy curves own them.
     if (hasLoads && hasStores) {
-      if (nLoads != 1 || nStores != 1 || loadBytes != storeBytes)
+      // indpt (1L+1S) and indpt2 (2L+1S) are fitted; equal per-access
+      // bytes keep the body inside the probe geometry.
+      if ((nLoads != 1 && nLoads != 2) || nStores != 1 ||
+          loadBytes != storeBytes)
         return;
     } else if (hasStores) {
       if (nStores != 1)
@@ -540,7 +543,7 @@ static void mapContiguousV2Completion(
       if (!stage.features.hasLoopCarriedDataDependency || nLoads != 1)
         return;
     }
-    const char *body = hasStores ? (hasLoads ? "indpt" : "store")
+    const char *body = hasStores ? (nLoads == 2 ? "indpt2" : "indpt")
                                  : "chain";
     const StageMemoryAccess *dominant = eligible.front();
     for (const StageMemoryAccess *access : eligible)
@@ -581,10 +584,23 @@ static void mapContiguousV2Completion(
     // Scale the grid=1-calibrated loop envelope with the P-axis factor
     // (cal_b_loop.py probes launch pf[(1,)]); at P>=56 the per-program
     // marginal collapses and the raw price would overpredict.
-    const double pFac = contiguous_v2::pAxisFactor(
-        profile.contiguousV2,
-        (hasStores && !hasLoads) ? "storeonly" : "loadsum",
-        simd ? "simd" : "simt", res, programCountHint);
+    // Loop-context P-axis first (calE loop probes collapse differently
+    // than the straight-line FormS context); fall back to the group
+    // tables when the loop keys are absent.
+    const char *loopKind = (hasStores && !hasLoads) ? "loopstore"
+                                                    : "loopsum";
+    const char *engineShort = simd ? "simd" : "simt";
+    double pFac;
+    if (profile.contiguousV2.pAxis.count(
+            std::string(loopKind) + "/" + engineShort + "/" + res))
+      pFac = contiguous_v2::pAxisFactor(profile.contiguousV2, loopKind,
+                                        engineShort, res,
+                                        programCountHint);
+    else
+      pFac = contiguous_v2::pAxisFactor(
+          profile.contiguousV2,
+          (hasStores && !hasLoads) ? "storeonly" : "loadsum", engineShort,
+          res, programCountHint);
     const double nsPerIter = perIter * pFac * kCyclesPerNano;
     // The fitted P/m price the whole probe body once per iteration, so
     // charge nsPerIter ONCE (load bucket for indpt/chain bodies - the store
@@ -652,7 +668,8 @@ static void mapContiguousV2Completion(
     const int64_t bytes = v2ElementCount(first) * (first->elementBits / 8);
     int64_t bucket = 1024;
     double bestDist = 1e30;
-    for (int64_t b : {1024, 4096, 16384}) {
+    for (int64_t b :
+         {32, 64, 128, 256, 512, 1024, 4096, 16384}) {
       const double d = std::fabs(std::log2((double)bytes) -
                                  std::log2((double)b));
       if (d < bestDist) {
@@ -666,6 +683,11 @@ static void mapContiguousV2Completion(
     const std::string key = std::string(direction) + "/" + dtype + "/" +
                             std::to_string(bucket) + "/" + res;
     auto it = v2.groupA.find(key);
+    if (it == v2.groupA.end() && !simd) {
+      // simt cells are warp-count dependent; try the resolved W first.
+      it = v2.groupA.find(key + "/w" +
+                          std::to_string(profile.activeWarpCount));
+    }
     if (it == v2.groupA.end())
       continue; // unfitted cell: fallbacks keep the bytes
     const contiguous_v2::ContiguousV2Group &g = it->second;
