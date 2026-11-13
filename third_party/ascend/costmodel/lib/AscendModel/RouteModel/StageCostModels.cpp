@@ -603,7 +603,7 @@ static void mapContiguousV2Completion(
     if (!(total > 0.0))
       continue;
     const double pFac =
-        pAxisFactor(profile.contiguousV2,
+        contiguous_v2::pAxisFactor(profile.contiguousV2,
                     first->store ? "storeonly" : "loadsum",
                     simd ? "simd" : "simt", res, programCountHint);
     const double ns = total * pFac * kCyclesPerNano;
@@ -1461,7 +1461,8 @@ static std::optional<StageResourceCycles>
 mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
             StageMode mode, int64_t superblockFactor, bool wholeSimt,
             std::optional<double> calibratedReduction = std::nullopt,
-            StageMemoryCost fitted = {}) {
+            StageMemoryCost fitted = {},
+            int64_t programCountHint = 1) {
   StageResourceCycles resources;
   // Accesses priced by the closed-form strided-direct mechanism.  The masked
   // strided copy floor yields on them and stays in force for everything else.
