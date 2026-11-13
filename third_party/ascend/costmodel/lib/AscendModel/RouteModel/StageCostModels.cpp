@@ -498,10 +498,26 @@ static void mapContiguousV2Completion(
     (void)maxBytes;
     const bool hasLoads = loadBytes > 0;
     const bool hasStores = storeBytes > 0;
+    int64_t nLoads = 0, nStores = 0;
+    for (const StageMemoryAccess *access : eligible)
+      (access->store ? nStores : nLoads) += 1;
+    // Fitted probe body shapes (cal_b_loop.py): indpt = one load + one
+    // store of the same bytes per iteration; chain = one loop-carried load
+    // per iteration; store = one store per iteration.  Everything else
+    // (multi-stream bodies, mixed unequal sizes) is outside the fitted
+    // domain: the legacy curves own them.
+    if (hasLoads && hasStores) {
+      if (nLoads != 1 || nStores != 1 || loadBytes != storeBytes)
+        return;
+    } else if (hasStores) {
+      if (nStores != 1)
+        return;
+    } else {
+      if (!stage.features.hasLoopCarriedDataDependency || nLoads != 1)
+        return;
+    }
     const char *body = hasStores ? (hasLoads ? "indpt" : "store")
-                                 : (stage.features.hasLoopCarriedDataDependency
-                                        ? "chain"
-                                        : "indpt");
+                                 : "chain";
     const StageMemoryAccess *dominant = eligible.front();
     for (const StageMemoryAccess *access : eligible)
       if (v2ElementCount(access) * (access->elementBits / 8) >
@@ -539,21 +555,33 @@ static void mapContiguousV2Completion(
     if (!(perIter > 0.0))
       return;
     const double nsPerIter = perIter * kCyclesPerNano;
+    // The fitted P/m price the whole probe body once per iteration, so
+    // charge nsPerIter ONCE (load bucket for indpt/chain bodies - the store
+    // service is already inside the indpt envelope; store bucket for
+    // store-only bodies) while claiming and layout-covering every access so
+    // the analytical fallback does not re-price them.
+    bool charged = false;
     for (const StageMemoryAccess *access : eligible) {
       claimed.push_back(access);
       const int64_t bytes = v2ElementCount(access) * (access->elementBits / 8);
       if (access->store) {
-        resources.store += nsPerIter;
         layout.storeBytes += bytes;
         layout.storeOperations += 1.0;
         layout.storeShapes[std::make_pair(bytes, v2ElementCount(access))] += 1.0;
       } else {
-        resources.load += nsPerIter;
         layout.loadBytes += bytes;
         layout.loadOperations += 1.0;
         layout.loadShapes[std::make_pair(bytes, v2ElementCount(access))] += 1.0;
       }
     }
+    if (hasStores && !hasLoads) {
+      resources.store += nsPerIter;
+      charged = true;
+    } else if (hasLoads) {
+      resources.load += nsPerIter;
+      charged = true;
+    }
+    (void)charged;
     // dependent-store penalty (simt): loads paying for interleaved stores
     if (!simd && hasStores && hasLoads && loop.m > 0.0) {
       auto pen = v2.sPenalty.find(dtype);
