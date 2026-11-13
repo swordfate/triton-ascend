@@ -4198,7 +4198,8 @@ bool HardwareProfile::isValid() const {
 llvm::Expected<StageCostTable>
 StageCostEvaluator::evaluate(const StagePartition &partition,
                              const HardwareProfile &profile,
-                             bool collectCalibrationEstimates) const {
+                             bool collectCalibrationEstimates,
+                             int64_t programCountHint) const {
   if (partition.stages.empty())
     return llvm::createStringError(
         std::errc::invalid_argument,
@@ -4369,7 +4370,7 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
         return llvm::createStringError(std::errc::invalid_argument,
                                        "Stage '%s' has an illegal candidate",
                                        stage.id.c_str());
-      const StageModeProfile modeProfile = resolveModeProfile(
+      StageModeProfile modeProfile = resolveModeProfile(
           profile, implementation,
           stage.costModelKind == StageCostModelKind::LoopCarriedRecurrence &&
               stage.workload.dotFlops > 0.0);
@@ -4377,6 +4378,7 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
           perAivStage(stage, implementation.aivSubblocks);
       const StageMemoryCost fitted = IndirectGatherMemoryCostModel().cost(
           executionStage, profile, implementation);
+      modeProfile.contiguousV2.programCountHint = programCountHint;
       std::optional<StageResourceCycles> resources = mapWorkload(
           executionStage, modeProfile, implementation.mode,
           implementation.superblockFactor,

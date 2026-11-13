@@ -58,7 +58,40 @@ struct ContiguousV2Params {
   std::map<std::string, ContiguousV2Loop> loopB;
   // keys: "<dtype>"
   std::map<std::string, double> sPenalty;
+  // P-axis overlap factors from E13: kind/engine/residency ->
+  //   {P -> per-program price / per-program price at P=1}
+  std::map<std::string, std::map<int64_t, double>> pAxis;
+  // aggregate bandwidth floors (bytes/ns) from E4-C footprint sweeps
+  double bwWarmBytesPerNs = 2400.0;
+  double bwColdBytesPerNs = 900.0;
+  // resident program count for the current kernel (grid size)
+  int64_t programCountHint = 1;
 };
+
+/// P-axis overlap factor: per-program price / price at P=1 (log2-P lerp,
+/// clamped at the table ends).  kind = "loadsum" | "storeonly".
+inline double pAxisFactor(const ContiguousV2Params &params,
+                          const std::string &kind, const char *engineShort,
+                          const char *res, int64_t programCount) {
+  const std::string key = kind + "/" + engineShort + "/" + res;
+  auto it = params.pAxis.find(key);
+  if (it == params.pAxis.end() || it->second.empty())
+    return 1.0;
+  const auto &table = it->second;
+  auto lo = table.upper_bound(programCount);
+  if (lo != table.begin())
+    --lo;
+  auto hi = lo;
+  if (hi != table.end())
+    ++hi;
+  if (hi == table.end())
+    return lo->second;
+  if (lo->first == programCount)
+    return lo->second;
+  const double w = (double)(programCount - lo->first) /
+                   (double)(hi->first - lo->first);
+  return lo->second + w * (hi->second - lo->second);
+}
 
 /// Static description of one contiguous access stream.
 struct ContiguousV2Access {
