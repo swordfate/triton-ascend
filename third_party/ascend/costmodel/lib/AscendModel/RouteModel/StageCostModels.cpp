@@ -430,6 +430,14 @@ static void mapContiguousV2Completion(
     return;
   constexpr double kCyclesPerNano = 1.0; // SYS_CNT at 1 GHz
   const bool hasLoop = stage.features.hasLoop;
+  // Admission (100-case evidence RUNV4..V7): the loop-body cells were
+  // probed at grid=1 with fixed geometry and need a loop-context P-axis /
+  // W-axis recalibration before they beat the legacy curves, and the simt
+  // straight-line cells overprice small simt kernels.  Until those cells
+  // are recalibrated, claim only simd straight-line groups (the domain the
+  // fits cover and the only one that beat legacy end-to-end).
+  if (hasLoop || !simd)
+    return;
   const int64_t K = hasLoop ? std::max<int64_t>(1, stage.iterationCount) : 0;
 
   // Collect eligible contiguous direct accesses.
