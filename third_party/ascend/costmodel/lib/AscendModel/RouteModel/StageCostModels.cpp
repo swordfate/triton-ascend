@@ -417,7 +417,8 @@ static void mapContiguousV2Completion(
     const LogicalStage &stage, const StageWorkload &work,
     const StageModeProfile &profile, StageResourceCycles &resources,
     bool simd, LayoutCoverage &layout,
-    std::vector<const StageMemoryAccess *> &claimed) {
+    std::vector<const StageMemoryAccess *> &claimed,
+    int64_t programCountHint) {
   const auto &v2 = profile.contiguousV2;
   if (!v2.enabled || v2.groupA.empty() && v2.loopB.empty())
     return;
@@ -506,6 +507,8 @@ static void mapContiguousV2Completion(
         bucket = b;
       }
     }
+    if (domBytes > 16384 || K > 256)
+      return; // outside fitted loop range: legacy curves own it
     const int64_t footprint = K * (loadBytes + storeBytes);
     const char *res = footprint <= v2.l2CacheBytes ? "warm" : "cold";
     const std::string key = std::string(body) + "/" + dtype + "/" +
@@ -580,6 +583,8 @@ static void mapContiguousV2Completion(
         bucket = b;
       }
     }
+    if (bytes > 16384)
+      continue; // outside fitted byte range: legacy curves own it
     const char *direction = first->store ? "store" : "load";
     const std::string key = std::string(direction) + "/" + dtype + "/" +
                             std::to_string(bucket) + "/" + res;
@@ -588,6 +593,8 @@ static void mapContiguousV2Completion(
       continue; // unfitted cell: fallbacks keep the bytes
     const contiguous_v2::ContiguousV2Group &g = it->second;
     const int64_t n = static_cast<int64_t>(members.size());
+    if (n > 64)
+      continue; // beyond the fitted group range: legacy curves own it
     double total;
     if (g.Q > 0 && n > g.Q)
       total = g.first + (g.Q - 1) * g.marginal + (n - g.Q) * g.cTransfer;
@@ -595,7 +602,11 @@ static void mapContiguousV2Completion(
       total = g.first + (n - 1) * g.marginal;
     if (!(total > 0.0))
       continue;
-    const double ns = total * kCyclesPerNano;
+    const double pFac =
+        pAxisFactor(profile.contiguousV2,
+                    first->store ? "storeonly" : "loadsum",
+                    simd ? "simd" : "simt", res, programCountHint);
+    const double ns = total * pFac * kCyclesPerNano;
     for (const StageMemoryAccess *access : members) {
       claimed.push_back(access);
       if (access->store) {
@@ -1938,7 +1949,7 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
                                     layout, stridedShortAlreadyClaimed);
     // v2 epoch-calibrated contiguous pricing claims before the legacy curves.
     mapContiguousV2Completion(stage, work, profile, resources, simd, layout,
-                              stridedShortAlreadyClaimed);
+                              stridedShortAlreadyClaimed, programCountHint);
     // The store-group curve below must not price a store this pass already did.
     const bool storesClaimedByClosedForm = std::any_of(
         stridedShortAlreadyClaimed.begin(), stridedShortAlreadyClaimed.end(),
