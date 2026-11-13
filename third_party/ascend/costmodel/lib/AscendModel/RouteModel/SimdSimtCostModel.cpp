@@ -2302,6 +2302,16 @@ static void readSetupCycleCurve(ProfileJSONReader &reader,
   }
 }
 
+// Profile table keys are prefixed with the engine section name ("simd/...",
+// "simt_only/..."); the evaluator looks cells up by bare keys, so strip the
+// prefix on load.
+static std::string cv2StripEnginePrefix(llvm::StringRef key) {
+  llvm::StringRef k = key;
+  if (k.consume_front("simd/") || k.consume_front("simt_only/"))
+    return k.str();
+  return key.str();
+}
+
 static llvm::Expected<CandidateProfile>
 loadCandidateProfileUncached(llvm::StringRef pathRef,
                              std::vector<std::string> *dependencies) {
@@ -2872,9 +2882,6 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
                                        "simd.memory")) {
       auto &cv2 = simdProfile.contiguousV2;
       cv2.enabled = true;
-      fprintf(stderr, "[cv2-parse] enabled=true ga=%d lb=%d sp=%d pa=%d\n",
-        (int)cv2.groupA.size(), (int)cv2.loopB.size(),
-        (int)cv2.sPenalty.size(), (int)cv2.pAxis.size());
       cv2.l2CacheBytes = reader.integer(
           *v2, "l2_cache_bytes", "simd.memory.contiguous_ldst_v2");
       if (const auto *ga = v2->getObject("group_a")) {
@@ -2888,7 +2895,7 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
           g.cTransfer = reader.number(*o, "c_transfer", "cv2.group_a");
           g.Q = static_cast<int64_t>(
               reader.number(*o, "Q", "cv2.group_a"));
-          cv2.groupA[entry.first.str()] = g;
+          cv2.groupA[cv2StripEnginePrefix(entry.first)] = g;
         }
       }
       if (const auto *lb = v2->getObject("loop_b")) {
@@ -2903,7 +2910,7 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
             l.QK = *qk;
           l.mHi = reader.optionalNumber(*o, "m_hi", 0.0);
           l.piecewise = l.QK > 0;
-          cv2.loopB[entry.first.str()] = l;
+          cv2.loopB[cv2StripEnginePrefix(entry.first)] = l;
         }
       }
             if (const auto *pa = v2->getObject("p_axis")) {
@@ -3329,9 +3336,6 @@ if (const auto *sp = v2->getObject("s_penalty")) {
                                        "simt.memory")) {
       auto &cv2 = simtProfile.contiguousV2;
       cv2.enabled = true;
-      fprintf(stderr, "[cv2-parse] enabled=true ga=%d lb=%d sp=%d pa=%d\n",
-        (int)cv2.groupA.size(), (int)cv2.loopB.size(),
-        (int)cv2.sPenalty.size(), (int)cv2.pAxis.size());
       cv2.l2CacheBytes = reader.integer(
           *v2, "l2_cache_bytes", "simd.memory.contiguous_ldst_v2");
       if (const auto *ga = v2->getObject("group_a")) {
@@ -3345,7 +3349,7 @@ if (const auto *sp = v2->getObject("s_penalty")) {
           g.cTransfer = reader.number(*o, "c_transfer", "cv2.group_a");
           g.Q = static_cast<int64_t>(
               reader.number(*o, "Q", "cv2.group_a"));
-          cv2.groupA[entry.first.str()] = g;
+          cv2.groupA[cv2StripEnginePrefix(entry.first)] = g;
         }
       }
       if (const auto *lb = v2->getObject("loop_b")) {
@@ -3360,7 +3364,7 @@ if (const auto *sp = v2->getObject("s_penalty")) {
             l.QK = *qk;
           l.mHi = reader.optionalNumber(*o, "m_hi", 0.0);
           l.piecewise = l.QK > 0;
-          cv2.loopB[entry.first.str()] = l;
+          cv2.loopB[cv2StripEnginePrefix(entry.first)] = l;
         }
       }
       if (const auto *sp = v2->getObject("s_penalty")) {

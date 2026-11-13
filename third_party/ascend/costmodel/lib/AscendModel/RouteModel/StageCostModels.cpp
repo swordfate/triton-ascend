@@ -592,7 +592,6 @@ static void mapContiguousV2Completion(
     const char *direction = first->store ? "store" : "load";
     const std::string key = std::string(direction) + "/" + dtype + "/" +
                             std::to_string(bucket) + "/" + res;
-    fprintf(stderr, "[cv2-hook] key=%s found=%d\n", key.c_str(), (int)(it != v2.groupA.end()));
     auto it = v2.groupA.find(key);
     if (it == v2.groupA.end())
       continue; // unfitted cell: fallbacks keep the bytes
