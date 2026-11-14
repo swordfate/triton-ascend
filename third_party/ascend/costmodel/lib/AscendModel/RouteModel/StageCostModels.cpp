@@ -492,7 +492,7 @@ static void mapContiguousV2Completion(
     // fit when the geometry was calibrated, otherwise via the generic
     // per-op analytical - so the legacy curves never price contiguous
     // streams.
-    int64_t domBytes = 0;
+    int64_t domBytes = 0, loadBytes = 0, storeBytes = 0;
     int64_t nLoads = 0, nStores = 0;
     for (const StageMemoryAccess *access : eligible) {
       const int64_t instances = std::max<int64_t>(
@@ -500,6 +500,7 @@ static void mapContiguousV2Completion(
       const int64_t bytes = v2ElementCount(access) *
                             (access->elementBits / 8) * instances;
       domBytes = std::max(domBytes, bytes / instances);
+      (access->store ? storeBytes : loadBytes) += bytes;
       ++(access->store ? nStores : nLoads);
     }
 
@@ -664,7 +665,23 @@ static void mapContiguousV2Completion(
       }
     }
 
-    // ---- Tier 2: generic per-op analytical (the kept fallback) ----------
+    // ---- Tier 2: aggregate-bandwidth envelope (simd) --------------------
+    // The pipelined-loop regime amortizes per-operation startup: one
+    // iteration moves bodyBytes at the aggregate MTE rate with a single
+    // iteration startup (calG: ~83 B/cycle across a full 56-program
+    // wave).  This is the calibrated fallback for geometries the direct
+    // table does not cover; both streams charge into the same envelope
+    // (the measured mixed-body prices it approximates include both).
+    if (simd && profile.independentLoadGroupBytesPerCycle > 0.0) {
+      const double perIter =
+          profile.independentLoadGroupIterationStartupCycles +
+          double(loadBytes + storeBytes) /
+              profile.independentLoadGroupBytesPerCycle;
+      resources.load += perIter * kCyclesPerNano;
+      claimAll();
+      return;
+    }
+    // ---- Tier 3: generic per-op analytical (the kept fallback) ----------
     const std::pair<double, double> ana = analyticalPerIter();
     resources.load += ana.first * kCyclesPerNano;
     resources.store += ana.second * kCyclesPerNano;
