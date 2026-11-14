@@ -434,7 +434,12 @@ static void mapContiguousV2Completion(
   // lookup, so the decay applies whenever hint exceeds one wave.
   const double v2Waves =
       std::max(1.0, double(std::max<int64_t>(1, programCountHint)) / 56.0);
+  // Formula B loop rows were calibrated with the mild decay; the
+  // straight-line analytical tier measured a steeper load-side decay
+  // (guard WDA fit: copies/adds decay as waves^-0.32, store-side grows
+  // slightly and keeps none).
   const double v2WaveDecay = std::pow(v2Waves, -0.125);
+  const double v2WaveDecayLoad = std::pow(v2Waves, -0.32);
   constexpr double kCyclesPerNano = 1.0; // SYS_CNT at 1 GHz
   const bool hasLoop = stage.features.hasLoop;
   // Admission defaults encode the 100-case evidence (RUNV4..V9): loop-body
@@ -760,19 +765,24 @@ static void mapContiguousV2Completion(
       for (const StageMemoryAccess *access : members) {
         const int64_t b = v2ElementCount(access) *
                           (access->elementBits / 8);
-        if (simd)
-          ana += (access->store ? profile.storeOperationSetupCycles
-                                : profile.loadOperationSetupCycles) +
-                 double(b) *
-                     (access->store ? 1.0 / profile.storeBytesPerCycle
-                                    : 1.0 / profile.loadBytesPerCycle);
-        else
+        if (simd) {
+          const bool isStore = access->store;
+          const double decay = isStore ? 1.0 : v2WaveDecayLoad;
+          ana += ((access->store ? profile.storeOperationSetupCycles
+                                 : profile.loadOperationSetupCycles) +
+                  double(b) *
+                      (isStore ? 1.0 / profile.storeBytesPerCycle
+                               : 1.0 / profile.loadBytesPerCycle)) *
+                 decay;
+        } else {
           ana += double(llvm::divideCeil(v2ElementCount(access),
                                          int64_t(32))) /
                  (access->store ? profile.storeWarpInstructionsPerCycle
                                 : profile.loadWarpInstructionsPerCycle);
+        }
       }
-      ana *= v2WaveDecay;
+      if (!simd)
+        ana *= v2WaveDecay;
       for (const StageMemoryAccess *access : members) {
         claimed.push_back(access);
         if (access->store) {
@@ -810,17 +820,22 @@ static void mapContiguousV2Completion(
       // legacy-consistent analytical formula - the v2 path covers them at
       // baseline-identical accuracy.
       const int64_t elems = v2ElementCount(first);
-      if (simd)
-        total = (first->store ? profile.storeOperationSetupCycles
-                              : profile.loadOperationSetupCycles) +
-                bytes * (first->store
-                             ? 1.0 / profile.storeBytesPerCycle
-                             : 1.0 / profile.loadBytesPerCycle);
-      else
+      if (simd) {
+        const double setup =
+            (first->store ? profile.storeOperationSetupCycles
+                          : profile.loadOperationSetupCycles) *
+            (first->store ? 1.0 : v2WaveDecayLoad);
+        const double rate =
+            bytes * (first->store
+                         ? 1.0 / profile.storeBytesPerCycle
+                         : 1.0 / profile.loadBytesPerCycle);
+        total = setup + rate * (first->store ? 1.0 : v2WaveDecayLoad);
+      } else {
         total = static_cast<double>(llvm::divideCeil(elems, int64_t(32))) /
                 (first->store ? profile.storeWarpInstructionsPerCycle
                               : profile.loadWarpInstructionsPerCycle);
-      total *= v2WaveDecay;
+        total *= v2WaveDecay;
+      }
       fitted = false;
     } else {
       if (g.Q > 0 && n > g.Q)
