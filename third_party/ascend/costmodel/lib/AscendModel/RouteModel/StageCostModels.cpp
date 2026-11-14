@@ -578,10 +578,22 @@ static void mapContiguousV2Completion(
       const double chunkDist =
           std::fabs(std::log2(double(std::max<int64_t>(1, domBytes))) -
                     std::log2(double(std::max<int64_t>(1, rB))));
+      // Per-program price follows CO-RESIDENCY (programs sharing the
+      // memory system at once = one wave), not the raw grid: a kernel at
+      // grid 2048 runs its programs with the same 55 neighbours as a
+      // grid-56 kernel, so hint/row are clamped to one wave before the
+      // distance.  A secondary raw term keeps large-grid rows preferred
+      // when they truly match (L2-cold footprints beyond one wave).
+      const int64_t hintC = std::min<int64_t>(
+          std::max<int64_t>(1, programCountHint), int64_t(56));
+      const int64_t rowC = std::min<int64_t>(std::max<int64_t>(1, rG),
+                                             int64_t(56));
       const double gDist =
-          std::fabs(std::log2(double(std::max<int64_t>(1, programCountHint))) -
-                    std::log2(double(std::max<int64_t>(1, rG))));
-      const double score = chunkDist * 3.0 + gDist * 0.5;
+          std::fabs(std::log2(double(hintC)) - std::log2(double(rowC)));
+      const double gRaw = std::fabs(
+          std::log2(double(std::max<int64_t>(1, programCountHint))) -
+          std::log2(double(std::max<int64_t>(1, rG))));
+      const double score = chunkDist * 3.0 + gDist * 0.5 + gRaw * 0.05;
       if (score < bestScore) {
         bestScore = score;
         bestB = rB;

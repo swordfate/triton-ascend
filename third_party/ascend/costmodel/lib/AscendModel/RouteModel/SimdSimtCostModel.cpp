@@ -5079,12 +5079,31 @@ estimateSimdSimtCandidatesImpl(const SimdSimtFeatureSummary &features,
   // terms the selected candidate receives.
   {
     const bool factorRouteHasGlobalLoad = hasGlobalLoad(report.stageModel);
-    for (const auto &factorEntry : report.stageModel.allSimtFactorPlans)
-      report.allSimtElapsedByFactor[factorEntry.first] =
-          factorEntry.second.totalCycles +
-          routeFixedSystemCycles(profile, kAllSimtOnly, factorEntry.second,
-                                 report.kernelArgumentCount,
-                                 factorRouteHasGlobalLoad);
+    // Kernels whose stages include a runtime loop (AutoBlockify persistent
+    // loop) do not change total work with the superblock factor: measured
+    // F2/F4 time equals F1 (guard campaign).  The straight-line factor-plan
+    // scaling only describes factor aggregation on straight-line kernels.
+    bool hasLoopStage = false;
+    for (const auto &stageCost : report.stageModel.stages)
+      if (stageCost.iterationCount > 1)
+        hasLoopStage = true;
+    double f1Elapsed = 0.0;
+    auto planElapsed = [&](const StageRoutePlan &plan) {
+      return plan.totalCycles +
+             routeFixedSystemCycles(profile, kAllSimtOnly, plan,
+                                    report.kernelArgumentCount,
+                                    factorRouteHasGlobalLoad);
+    };
+    for (const auto &factorEntry : report.stageModel.allSimtFactorPlans) {
+      double elapsed = planElapsed(factorEntry.second);
+      if (factorEntry.first == 1)
+        f1Elapsed = elapsed;
+      report.allSimtElapsedByFactor[factorEntry.first] = elapsed;
+    }
+    if (hasLoopStage && f1Elapsed > 0.0)
+      for (auto &factorEntry : report.allSimtElapsedByFactor)
+        if (factorEntry.first > 1)
+          factorEntry.second = f1Elapsed;
   }
   report.decision =
       chooseBest(report.candidateElapsedCosts, report.allSimdCandidateLegal,
