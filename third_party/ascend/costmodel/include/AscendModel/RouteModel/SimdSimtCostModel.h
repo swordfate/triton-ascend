@@ -17,6 +17,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -122,6 +123,10 @@ struct SimdSimtCostReport {
   /// Compiler-derived Stage resources before the one-time route envelope.
   SimdSimtCandidateScores candidateCosts;
   SimdSimtCandidateScores candidateElapsedCosts;
+  /// Diagnostic: elapsed prediction for each legal pure-SIMT superblock
+  /// factor, so a forced-factor guard run can be compared against the
+  /// model without re-deriving the fixed-overhead terms.
+  std::map<int64_t, double> allSimtElapsedByFactor;
   /// Absolute elapsed-time prediction for the selected route.
   struct SelectedRouteElapsedPrediction {
     bool applied = false;

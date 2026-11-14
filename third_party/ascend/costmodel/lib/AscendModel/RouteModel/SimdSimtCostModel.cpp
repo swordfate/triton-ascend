@@ -2913,6 +2913,14 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
           cv2.loopB[cv2StripEnginePrefix(entry.first)] = l;
         }
       }
+      if (const auto *dt = v2->getObject("direct")) {
+        for (const auto &entry : *dt) {
+          if (const auto n = entry.second.getAsNumber())
+            cv2.directTable[entry.first.str()] = *n;
+        }
+      }
+      cv2.directFixedShare = reader.optionalNumber(
+          *v2, "direct_fixed_share", 0.3);
             if (const auto *pa = v2->getObject("p_axis")) {
         for (const auto &entry : *pa) {
           const auto *o = entry.second.getAsObject();
@@ -3367,6 +3375,14 @@ if (const auto *sp = v2->getObject("s_penalty")) {
           cv2.loopB[cv2StripEnginePrefix(entry.first)] = l;
         }
       }
+      if (const auto *dt = v2->getObject("direct")) {
+        for (const auto &entry : *dt) {
+          if (const auto n = entry.second.getAsNumber())
+            cv2.directTable[entry.first.str()] = *n;
+        }
+      }
+      cv2.directFixedShare = reader.optionalNumber(
+          *v2, "direct_fixed_share", 0.3);
       if (const auto *sp = v2->getObject("s_penalty")) {
         for (const auto &entry : *sp) {
           if (const auto v = entry.second.getAsNumber())
@@ -4879,6 +4895,14 @@ llvm::json::Object SimdSimtCostReport::toJSON() const {
   result["source_logical_program_count_hint"] = sourceLogicalProgramCountHint;
   result["candidate_costs"] = candidateCosts.toJSON();
   result["candidate_elapsed_costs"] = candidateElapsedCosts.toJSON();
+  {
+    llvm::json::Object byFactor;
+    byFactor["all_simd_f1"] = candidateElapsedCosts.allSimd;
+    for (const auto &factorEntry : allSimtElapsedByFactor)
+      byFactor["all_simt_only_f" + std::to_string(factorEntry.first)] =
+          factorEntry.second;
+    result["candidate_elapsed_costs_by_factor"] = std::move(byFactor);
+  }
   result["selected_route_elapsed_prediction"] = selectedRouteElapsed.toJSON();
   result["decision_kind"] = stringifySimdSimtCandidate(decision);
   llvm::json::Array selectableCandidates;
@@ -5050,6 +5074,18 @@ estimateSimdSimtCandidatesImpl(const SimdSimtFeatureSummary &features,
         "Stage Route Model found no materializable candidate");
   report.candidateElapsedCosts =
       completeCandidateCosts(report, profile, report.kernelArgumentCount);
+  // Per-factor diagnostic elapsed (same units as candidate_elapsed_costs):
+  // each legal pure-SIMT factor plan priced with the same fixed-boundary
+  // terms the selected candidate receives.
+  {
+    const bool factorRouteHasGlobalLoad = hasGlobalLoad(report.stageModel);
+    for (const auto &factorEntry : report.stageModel.allSimtFactorPlans)
+      report.allSimtElapsedByFactor[factorEntry.first] =
+          factorEntry.second.totalCycles +
+          routeFixedSystemCycles(profile, kAllSimtOnly, factorEntry.second,
+                                 report.kernelArgumentCount,
+                                 factorRouteHasGlobalLoad);
+  }
   report.decision =
       chooseBest(report.candidateElapsedCosts, report.allSimdCandidateLegal,
                  report.allSimtOnlyCandidateLegal, report.mixedCandidateLegal);

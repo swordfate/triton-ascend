@@ -64,6 +64,14 @@ struct ContiguousV2Params {
   // aggregate bandwidth floors (bytes/ns) from E4-C footprint sweeps
   double bwWarmBytesPerNs = 2400.0;
   double bwColdBytesPerNs = 900.0;
+  // calF2 direct rows (per-engine subobject, keys are bare):
+  //   "n<loads>_s<stores>_b<chunkBytes>_k<K>_g<grid>" ->
+  //   whole-launch per-program-equivalent ns of the measured loop body.
+  // The loop-body price interpolates T(K) = A + K*m across the swept K
+  // rows of the same geometry; direct_fixed_share splits the intercept
+  // against the route model's own boundary stages.
+  std::map<std::string, double> directTable;
+  double directFixedShare = 0.3;
   // resident program count for the current kernel (grid size)
   int64_t programCountHint = 1;
 };
