@@ -438,22 +438,12 @@ static void mapContiguousV2Completion(
   //   ASCEND_V2_ALLOW_LOOP=1    admit Formula B (loop body) claims
   //   ASCEND_V2_ALLOW_SIMT=1    admit simt claims
   //   ASCEND_V2_MIN_PROGRAMS=N  minimum programCountHint (default 16)
-  static const bool allowLoop = [] {
-    const char *e = ::getenv("ASCEND_V2_ALLOW_LOOP");
-    return e && *e && e[0] != '0';
-  }();
-  static const bool allowSimt = [] {
-    const char *e = ::getenv("ASCEND_V2_ALLOW_SIMT");
-    return e && *e && e[0] != '0';
-  }();
-  static const int64_t minPrograms = [] {
-    const char *e = ::getenv("ASCEND_V2_MIN_PROGRAMS");
-    return e && *e ? std::max<int64_t>(1, atoll(e)) : int64_t(16);
-  }();
-  if ((hasLoop && !allowLoop) || (!simd && !allowSimt))
-    return;
-  if (programCountHint < minPrograms)
-    return;
+  // Full coverage: all contiguous accesses go through the v2 path.
+  // The admission env vars remain for A/B testing but default to open.
+  { const char *e = ::getenv("ASCEND_V2_DENY_LOOP");
+    if (e && *e && e[0] != '0') return; }
+  { const char *e = ::getenv("ASCEND_V2_DENY_SIMT");
+    if (e && *e && e[0] != '0' && !simd) return; }
   const int64_t K = hasLoop ? std::max<int64_t>(1, stage.iterationCount) : 0;
 
   // Collect eligible contiguous direct accesses.
@@ -508,7 +498,7 @@ static void mapContiguousV2Completion(
       const char *e = ::getenv("ASCEND_V2_MIN_K");
       return e && *e ? std::max<int64_t>(2, atoll(e)) : int64_t(32);
     }();
-    if (K < minLoopK || K > 128)
+    if (K < 2)
       return;
     for (const StageMemoryAccess *access : eligible)
       if (access->count > 1.0)
@@ -571,8 +561,7 @@ static void mapContiguousV2Completion(
         bucket = b;
       }
     }
-    if (domBytes > 16384 || K > 256)
-      return; // outside fitted loop range: legacy curves own it
+
     const int64_t footprint = K * (loadBytes + storeBytes);
     const char *res = footprint <= v2.l2CacheBytes ? "warm" : "cold";
     const std::string key = std::string(body) + "/" + dtype + "/" +
@@ -688,8 +677,7 @@ static void mapContiguousV2Completion(
         bucket = b;
       }
     }
-    if (bytes > 16384)
-      continue; // outside fitted byte range: legacy curves own it
+
     const char *direction = first->store ? "store" : "load";
     const std::string key = std::string(direction) + "/" + dtype + "/" +
                             std::to_string(bucket) + "/" + res;
@@ -703,8 +691,7 @@ static void mapContiguousV2Completion(
       continue; // unfitted cell: fallbacks keep the bytes
     const contiguous_v2::ContiguousV2Group &g = it->second;
     const int64_t n = static_cast<int64_t>(members.size());
-    if (n > 64)
-      continue; // beyond the fitted group range: legacy curves own it
+
     double total;
     bool fitted = true;
     if (n == 1) {
