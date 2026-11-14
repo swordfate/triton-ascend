@@ -564,6 +564,58 @@ static void mapContiguousV2Completion(
 
     const int64_t footprint = K * (loadBytes + storeBytes);
     const char *res = footprint <= v2.l2CacheBytes ? "warm" : "cold";
+
+    // K < 16: loop pipeline not full, fitted tick_loop overprices.
+    // Use per-op analytical (same as legacy fallback) inside v2 path.
+    if (K < 16) {
+      double nsPerIterSmall = 0.0;
+      for (const StageMemoryAccess *access : eligible) {
+        const int64_t b = v2ElementCount(access) *
+                          (access->elementBits / 8);
+        if (simd)
+          nsPerIterSmall += (access->store
+                                 ? profile.storeOperationSetupCycles
+                                 : profile.loadOperationSetupCycles) +
+                            b * (access->store
+                                     ? 1.0 / profile.storeBytesPerCycle
+                                     : 1.0 / profile.loadBytesPerCycle);
+        else
+          nsPerIterSmall +=
+              static_cast<double>(
+                  llvm::divideCeil(v2ElementCount(access), int64_t(32))) /
+              (access->store
+                   ? profile.storeWarpInstructionsPerCycle
+                   : profile.loadWarpInstructionsPerCycle);
+      }
+      nsPerIterSmall *= kCyclesPerNano;
+      for (const StageMemoryAccess *access : eligible) {
+        claimed.push_back(access);
+        const int64_t b = v2ElementCount(access) *
+                          (access->elementBits / 8);
+        if (access->store) {
+          layout.storeBytes += b;
+          layout.storeOperations += 1.0;
+          layout.storeWarpInstructions +=
+              llvm::divideCeil(v2ElementCount(access), int64_t(32));
+          layout.storeShapes[std::make_pair(b,
+              v2ElementCount(access))] += 1.0;
+        } else {
+          layout.loadBytes += b;
+          layout.loadOperations += 1.0;
+          layout.loadWarpInstructions +=
+              llvm::divideCeil(v2ElementCount(access), int64_t(32));
+          layout.loadShapes[std::make_pair(b,
+              v2ElementCount(access))] += 1.0;
+        }
+      }
+      if (hasStores && !hasLoads) {
+        resources.store += nsPerIterSmall;
+      } else if (hasLoads) {
+        resources.load += nsPerIterSmall;
+      }
+      return;
+    }
+
     const std::string key = std::string(body) + "/" + dtype + "/" +
                             std::to_string(bucket) + "/" + res;
     auto it = v2.loopB.find(key);
