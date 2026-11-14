@@ -5100,10 +5100,23 @@ estimateSimdSimtCandidatesImpl(const SimdSimtFeatureSummary &features,
         f1Elapsed = elapsed;
       report.allSimtElapsedByFactor[factorEntry.first] = elapsed;
     }
-    if (hasLoopStage && f1Elapsed > 0.0)
+    if (hasLoopStage && f1Elapsed > 0.0) {
+      // Total work is factor-invariant; time follows the wave count
+      // ceil(programs/f/56) - measured guard scaling (grid-224 F2 = 0.53x
+      // F1, F4 = 0.31x).  Within one wave the factor is a no-op.
+      const int64_t programs = std::max<int64_t>(
+          1, report.sourceLogicalProgramCountHint > 0
+                 ? report.sourceLogicalProgramCountHint
+                 : report.logicalProgramCountHint);
+      const double waves1 = double((programs + 55) / 56);
       for (auto &factorEntry : report.allSimtElapsedByFactor)
-        if (factorEntry.first > 1)
-          factorEntry.second = f1Elapsed;
+        if (factorEntry.first > 1) {
+          const double wavesF =
+              double((programs / factorEntry.first + 55) / 56);
+          factorEntry.second = f1Elapsed *
+              std::max(1.0 / waves1, wavesF / waves1);
+        }
+    }
   }
   report.decision =
       chooseBest(report.candidateElapsedCosts, report.allSimdCandidateLegal,

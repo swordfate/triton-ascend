@@ -427,6 +427,14 @@ static void mapContiguousV2Completion(
   if (!v2.enabled || v2.groupA.empty() && v2.loopB.empty() &&
       v2.directTable.empty())
     return;
+  // Measured per-program decay of contiguous prices as the launch spans
+  // more waves (DMA pipelines across wave boundaries): guard campaign fit,
+  // waves = ceil(programs / 56), factor = waves^-0.125 (1.0 within one
+  // wave).  Direct rows are one-wave co-residency prices via the clamped
+  // lookup, so the decay applies whenever hint exceeds one wave.
+  const double v2Waves =
+      std::max(1.0, double(std::max<int64_t>(1, programCountHint)) / 56.0);
+  const double v2WaveDecay = std::pow(v2Waves, -0.125);
   constexpr double kCyclesPerNano = 1.0; // SYS_CNT at 1 GHz
   const bool hasLoop = stage.features.hasLoop;
   // Admission defaults encode the 100-case evidence (RUNV4..V9): loop-body
@@ -668,7 +676,7 @@ static void mapContiguousV2Completion(
         const double share = std::min(1.0, std::max(0.0, v2.directFixedShare));
         const double perIter =
             (A * share + double(K) * useM * chunkScale) /
-            double(K) * kCyclesPerNano;
+            double(K) * kCyclesPerNano * v2WaveDecay;
         if (perIter > 0.0) {
           resources.load += perIter;
           claimAll();
@@ -686,9 +694,10 @@ static void mapContiguousV2Completion(
     // (the measured mixed-body prices it approximates include both).
     if (simd && profile.independentLoadGroupBytesPerCycle > 0.0) {
       const double perIter =
-          profile.independentLoadGroupIterationStartupCycles +
-          double(loadBytes + storeBytes) /
-              profile.independentLoadGroupBytesPerCycle;
+          (profile.independentLoadGroupIterationStartupCycles +
+           double(loadBytes + storeBytes) /
+               profile.independentLoadGroupBytesPerCycle) *
+          v2WaveDecay;
       resources.load += perIter * kCyclesPerNano;
       claimAll();
       return;
@@ -763,6 +772,7 @@ static void mapContiguousV2Completion(
                  (access->store ? profile.storeWarpInstructionsPerCycle
                                 : profile.loadWarpInstructionsPerCycle);
       }
+      ana *= v2WaveDecay;
       for (const StageMemoryAccess *access : members) {
         claimed.push_back(access);
         if (access->store) {
@@ -810,6 +820,7 @@ static void mapContiguousV2Completion(
         total = static_cast<double>(llvm::divideCeil(elems, int64_t(32))) /
                 (first->store ? profile.storeWarpInstructionsPerCycle
                               : profile.loadWarpInstructionsPerCycle);
+      total *= v2WaveDecay;
       fitted = false;
     } else {
       if (g.Q > 0 && n > g.Q)
