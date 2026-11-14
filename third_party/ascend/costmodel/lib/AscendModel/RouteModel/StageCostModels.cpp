@@ -595,39 +595,83 @@ static void mapContiguousV2Completion(
       }
     }
 
-    const int64_t footprint = K * (loadBytes + storeBytes);
-    const char *res = footprint <= v2.l2CacheBytes ? "warm" : "cold";
-
-
-
-    const std::string key = std::string(body) + "/" + dtype + "/" +
-                            std::to_string(bucket) + "/" + res;
-    auto it = v2.loopB.find(key);
-    if (it == v2.loopB.end())
-      return; // unfitted cell: fallbacks keep the bytes
-    const contiguous_v2::ContiguousV2Loop &loop = it->second;
-    double perIter;
-    if (loop.piecewise && K > loop.QK)
-      perIter = (loop.P + loop.QK * loop.m + (K - loop.QK) * loop.mHi) / K;
-    else
-      perIter = (loop.P + K * loop.m) / K;
-    if (!(perIter > 0.0))
-      return;
-    // Scale the grid=1-calibrated loop envelope with the P-axis factor
-    // (cal_b_loop.py probes launch pf[(1,)]); at P>=56 the per-program
-    // marginal collapses and the raw price would overpredict.
-    // Loop-context P-axis first (calE loop probes collapse differently
-    // than the straight-line FormS context); fall back to the group
-    // tables when the loop keys are absent.
-    // Loop-context P-axis per K band (startup-dominated at small K,
-    // BW-saturated at large K); fall back to the plain loop keys and then
-    // the group-context tables.
-    const char *loopBase = (hasStores && !hasLoads) ? "loopstore"
-                                                    : "loopsum";
+    // ---- calF direct table lookup ---------------------------------------
+    // The calF probe measured whole-loop-body costs at real grid sizes
+    // for all fitted shapes.  These measured prices ARE the v2 output.
+    // Nearest-geometry: exact (nL,nS) shape, chunk log2 distance,
+    // K distance.  Falls through to per-op analytical for geometries
+    // too far from any calibration point.
     const char *engineShort = simd ? "simd" : "simt";
-    // m-slope P-axis disabled: the contention correction overprices
-    // for several real-kernel geometries (exp, masked_softmax).
-    const double nsPerIter = perIter * kCyclesPerNano;
+    const std::string dPrefix = std::string(engineShort) + "/";
+    double bestScore = 1e30;
+    const std::pair<const std::string, double> *bestRow = nullptr;
+    for (const auto &row : profile.contiguousV2.directTable) {
+      int64_t rnL = 0, rns = 0, rB = 0, rK = 0, rG = 0;
+      if (std::sscanf(row.first.c_str(),
+                      "%*[^/]/n%lld_s%lld_b%lld_k%lld_g%lld",
+                      (long long *)&rnL, (long long *)&rns,
+                      (long long *)&rB, (long long *)&rK,
+                      (long long *)&rG) != 5)
+        continue;
+      if (rnL != (int64_t)nLoads || rns != (int64_t)nStores)
+        continue;
+      const double chunkDist =
+          std::fabs(std::log2(double(domBytes) /
+                              double(std::max<int64_t>(1, rB))));
+      const double kDist = double(rK > K ? rK - K : K - rK);
+      const double gDist =
+          std::fabs(double(rG - programCountHint)) / 56.0;
+      const double score = chunkDist * 4.0 + kDist * 0.5 + gDist;
+      if (score < bestScore) {
+        bestScore = score;
+        bestRow = &row;
+      }
+    }
+    if (bestRow == nullptr || bestScore > 20.0) {
+      // No close match: per-op analytical (legacy-consistent)
+      double anaPerIter = 0.0;
+      for (const StageMemoryAccess *access : eligible) {
+        const int64_t b = v2ElementCount(access) *
+                          (access->elementBits / 8);
+        if (simd)
+          anaPerIter += (access->store
+                             ? profile.storeOperationSetupCycles
+                             : profile.loadOperationSetupCycles) +
+                        b * (access->store
+                                 ? 1.0 / profile.storeBytesPerCycle
+                                 : 1.0 / profile.loadBytesPerCycle);
+        else
+          anaPerIter += static_cast<double>(
+              llvm::divideCeil(v2ElementCount(access), int64_t(32))) /
+              (access->store
+                   ? profile.storeWarpInstructionsPerCycle
+                   : profile.loadWarpInstructionsPerCycle);
+      }
+      anaPerIter *= kCyclesPerNano;
+      for (const StageMemoryAccess *access : eligible) {
+        claimed.push_back(access);
+        const int64_t b = v2ElementCount(access) *
+                          (access->elementBits / 8);
+        if (access->store) {
+          layout.storeBytes += b;
+          layout.storeOperations += 1.0;
+          layout.storeWarpInstructions +=
+              llvm::divideCeil(v2ElementCount(access), int64_t(32));
+          layout.storeShapes[std::make_pair(b,
+              v2ElementCount(access))] += 1.0;
+        } else {
+          layout.loadBytes += b;
+          layout.loadOperations += 1.0;
+          layout.loadWarpInstructions +=
+              llvm::divideCeil(v2ElementCount(access), int64_t(32));
+          layout.loadShapes[std::make_pair(b,
+              v2ElementCount(access))] += 1.0;
+        }
+      }
+      resources.load += anaPerIter;
+      return;
+    }
+    const double nsPerIter = bestRow->second * kCyclesPerNano;
     // The fitted P/m price the whole probe body once per iteration, so
     // charge nsPerIter ONCE (load bucket for indpt/chain bodies - the store
     // service is already inside the indpt envelope; store bucket for
