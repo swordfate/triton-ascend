@@ -498,8 +498,7 @@ static void mapContiguousV2Completion(
       const char *e = ::getenv("ASCEND_V2_MIN_K");
       return e && *e ? std::max<int64_t>(2, atoll(e)) : int64_t(32);
     }();
-    if (K < 16)
-      return;
+
     for (const StageMemoryAccess *access : eligible)
       if (access->count > 1.0)
         return;
@@ -522,6 +521,40 @@ static void mapContiguousV2Completion(
     int64_t nLoads = 0, nStores = 0;
     for (const StageMemoryAccess *access : eligible)
       (access->store ? nStores : nLoads) += 1;
+    // For K < 32: aggregate bandwidth model (covers ALL body shapes).
+    // The aggregate DRAM bandwidth (~83 B/cycle for contiguous streams)
+    // is the physically correct model for small-K loops where the loop
+    // pipeline has not filled.  It generalizes to any N/B/K combination.
+    if (K < 32) {
+      double totalChunkBytes = loadBytes + storeBytes;
+      // Aggregate bandwidth: 83.26 B/cycle (calibrated from
+      // independent_loop_load_group, verified by calG at 82-88 B/ns)
+      double aggIterCost = 12.79 + totalChunkBytes / 83.26;
+      double nsTotal = aggIterCost * K * kCyclesPerNano;
+      for (const StageMemoryAccess *access : eligible) {
+        claimed.push_back(access);
+        const int64_t b = v2ElementCount(access) *
+                          (access->elementBits / 8);
+        if (access.store) {
+          layout.storeBytes += b;
+          layout.storeOperations += 1.0;
+          layout.storeWarpInstructions +=
+              llvm::divideCeil(v2ElementCount(access), int64_t(32));
+          layout.storeShapes[std::make_pair(b,
+              v2ElementCount(access))] += 1.0;
+        } else {
+          layout.loadBytes += b;
+          layout.loadOperations += 1.0;
+          layout.loadWarpInstructions +=
+              llvm::divideCeil(v2ElementCount(access), int64_t(32));
+          layout.loadShapes[std::make_pair(b,
+              v2ElementCount(access))] += 1.0;
+        }
+      }
+      resources.load += nsTotal;
+      return;
+    }
+    // K >= 32: fitted per-bucket cells (pipeline-filled regime)
     // Fitted probe body shapes (cal_b_loop.py): indpt = one load + one
     // store of the same bytes per iteration; chain = one loop-carried load
     // per iteration; store = one store per iteration.  Everything else
