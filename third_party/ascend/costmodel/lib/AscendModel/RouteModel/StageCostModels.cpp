@@ -498,7 +498,7 @@ static void mapContiguousV2Completion(
       const char *e = ::getenv("ASCEND_V2_MIN_K");
       return e && *e ? std::max<int64_t>(2, atoll(e)) : int64_t(32);
     }();
-    if (K < 2)
+    if (K < 16)
       return;
     for (const StageMemoryAccess *access : eligible)
       if (access->count > 1.0)
@@ -565,9 +565,7 @@ static void mapContiguousV2Completion(
     const int64_t footprint = K * (loadBytes + storeBytes);
     const char *res = footprint <= v2.l2CacheBytes ? "warm" : "cold";
 
-    // K < 16: loop pipeline not full, fitted tick_loop overprices.
-    // Decline: the legacy group envelope + analytical fallback are
-    // well-tuned for these regimes (numerically = baseline).
+
 
     const std::string key = std::string(body) + "/" + dtype + "/" +
                             std::to_string(bucket) + "/" + res;
@@ -594,19 +592,9 @@ static void mapContiguousV2Completion(
     const char *loopBase = (hasStores && !hasLoads) ? "loopstore"
                                                     : "loopsum";
     const char *engineShort = simd ? "simd" : "simt";
-    double pFac;
-    const std::string plainKey =
-        std::string(loopBase) + "/" + engineShort + "/" + res;
-    if (profile.contiguousV2.pAxis.count(plainKey))
-      pFac = contiguous_v2::pAxisFactor(profile.contiguousV2, loopBase,
-                                        engineShort, res,
-                                        programCountHint);
-    else
-      pFac = contiguous_v2::pAxisFactor(
-          profile.contiguousV2,
-          (hasStores && !hasLoads) ? "storeonly" : "loadsum", engineShort,
-          res, programCountHint);
-    const double nsPerIter = perIter * pFac * kCyclesPerNano;
+    // m-slope P-axis disabled: the contention correction overprices
+    // for several real-kernel geometries (exp, masked_softmax).
+    const double nsPerIter = perIter * kCyclesPerNano;
     // The fitted P/m price the whole probe body once per iteration, so
     // charge nsPerIter ONCE (load bucket for indpt/chain bodies - the store
     // service is already inside the indpt envelope; store bucket for
