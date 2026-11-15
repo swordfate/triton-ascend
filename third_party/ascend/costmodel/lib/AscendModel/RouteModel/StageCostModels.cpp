@@ -438,7 +438,9 @@ static void mapContiguousV2Completion(
   // straight-line analytical tier measured a steeper load-side decay
   // (guard WDA fit: copies/adds decay as waves^-0.32, store-side grows
   // slightly and keeps none).
-  const double v2WaveDecay = std::pow(v2Waves, -0.125);
+  // Loop bodies: joint fit from B_add_g224 (-5.9% at -0.05) and
+  // muls_add (36.6-wave launches nearly flat).
+  const double v2WaveDecay = std::pow(v2Waves, -0.05);
   const double v2WaveDecayLoad = std::pow(v2Waves, -0.32);
   constexpr double kCyclesPerNano = 1.0; // SYS_CNT at 1 GHz
   const bool hasLoop = stage.features.hasLoop;
@@ -652,13 +654,16 @@ static void mapContiguousV2Completion(
             if (hiIt == loIt) {
               t = tLo;
             } else {
+              // geometric interpolation: per-iteration price falls
+              // concavely with co-residency, linear blending overweights
               const double lgLo = std::log2(double(loIt->first));
               const double lgHi = std::log2(double(hiIt->first));
               const double w = std::min(1.0, std::max(0.0,
                   (lgHi - lgLo) > 0.0
                       ? (lgHint - lgLo) / (lgHi - lgLo)
                       : 0.0));
-              t = tLo + w * (tHi - tLo);
+              t = std::exp(std::log(std::max(1e-9, tLo)) * (1.0 - w) +
+                           std::log(std::max(1e-9, tHi)) * w);
             }
             tk.emplace_back(K, t);
           }
