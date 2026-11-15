@@ -5090,6 +5090,51 @@ estimateSimdSimtCandidatesImpl(const SimdSimtFeatureSummary &features,
         "Stage Route Model found no materializable candidate");
   report.candidateElapsedCosts =
       completeCandidateCosts(report, profile, report.kernelArgumentCount);
+
+  // Kernel-level aggregate BW cap for contiguous memory stages.
+  // All stages' DMA shares the same DRAM channel: total memory time is
+  // bandwidth-bound regardless of stage organization.  If the sum of
+  // contiguous memory stage cycles exceeds total_bytes / aggregate_BW,
+  // reduce the candidate elapsed cost by the excess.
+  {
+    const auto &stages = report.stageModel.stages;
+    const auto &plan = report.stageModel.allSimd;
+    if (plan.legal &&
+        plan.logicalStageCycles.size() == stages.size()) {
+      double memCycles = 0.0;
+      double memBytes = 0.0;
+      for (size_t idx = 0; idx < stages.size(); ++idx) {
+        const auto &w = stages[idx].workload;
+        const double bytes = w.loadBytes + w.storeBytes;
+        if (bytes <= 0.0 || w.memoryAccesses.empty())
+          continue;
+        if (plan.logicalStageCycles[idx] <= 0.0)
+          continue;
+        bool allContig = true;
+        for (const StageMemoryAccess &access : w.memoryAccesses) {
+          const auto lc = access.layoutClass();
+          if (lc != StageMemoryAccess::LayoutClass::ContiguousShort &&
+              lc != StageMemoryAccess::LayoutClass::ContiguousWide) {
+            allContig = false;
+            break;
+          }
+        }
+        if (!allContig)
+          continue;
+        memCycles += plan.logicalStageCycles[idx];
+        memBytes += bytes;
+      }
+      constexpr double aggBwBytesPerNs = 2400.0;
+      const double bwFloorNs = memBytes / aggBwBytesPerNs;
+      if (memCycles > bwFloorNs && memCycles > 0.0) {
+        const double excess = memCycles - bwFloorNs;
+        report.candidateElapsedCosts.allSimd =
+            std::max(0.0, report.candidateElapsedCosts.allSimd - excess);
+        report.candidateElapsedCosts.allSimtOnly =
+            std::max(0.0, report.candidateElapsedCosts.allSimtOnly - excess);
+      }
+    }
+  }
   // Per-factor diagnostic elapsed (same units as candidate_elapsed_costs):
   // each legal pure-SIMT factor plan priced with the same fixed-boundary
   // terms the selected candidate receives.
