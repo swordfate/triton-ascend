@@ -572,50 +572,16 @@ static void mapContiguousV2Completion(
     };
 
     // ---- Tier 1: calF2 direct-row fit -----------------------------------
-    // Score rows of the exact (nL,nS) body shape by chunk and grid
-    // distance, then interpolate T(K) = A + K*m over the swept K rows of
-    // the chosen geometry.  The intercept A overlaps the route model's
-    // own boundary stages, so only directFixedShare of it is charged.
-    double bestScore = 1e30;
-    int64_t bestB = 0, bestG = 0;
-    for (const auto &row : v2.directTable) {
-      int64_t rnL = 0, rns = 0, rB = 0, rK = 0, rG = 0;
-      if (std::sscanf(row.first.c_str(),
-                      "n%lld_s%lld_b%lld_k%lld_g%lld",
-                      (long long *)&rnL, (long long *)&rns,
-                      (long long *)&rB, (long long *)&rK,
-                      (long long *)&rG) != 5)
-        continue;
-      if (rnL != nLoads || rns != nStores)
-        continue;
-      const double chunkDist =
-          std::fabs(std::log2(double(std::max<int64_t>(1, domBytes))) -
-                    std::log2(double(std::max<int64_t>(1, rB))));
-      // Per-program price follows CO-RESIDENCY (programs sharing the
-      // memory system at once = one wave), not the raw grid: a kernel at
-      // grid 2048 runs its programs with the same 55 neighbours as a
-      // grid-56 kernel, so hint/row are clamped to one wave before the
-      // distance.  A secondary raw term keeps large-grid rows preferred
-      // when they truly match (L2-cold footprints beyond one wave).
-      const int64_t hintC = std::min<int64_t>(
-          std::max<int64_t>(1, programCountHint), int64_t(56));
-      const int64_t rowC = std::min<int64_t>(std::max<int64_t>(1, rG),
-                                             int64_t(56));
-      const double gDist =
-          std::fabs(std::log2(double(hintC)) - std::log2(double(rowC)));
-      const double gRaw = std::fabs(
-          std::log2(double(std::max<int64_t>(1, programCountHint))) -
-          std::log2(double(std::max<int64_t>(1, rG))));
-      const double score = chunkDist * 3.0 + gDist * 0.5 + gRaw * 0.05;
-      if (score < bestScore) {
-        bestScore = score;
-        bestB = rB;
-        bestG = rG;
-      }
-    }
-    if (bestScore <= 3.5 && bestB > 0) {
-      // Collect T(K) rows of the chosen geometry.
-      std::vector<std::pair<int64_t, double>> tk;
+    // Rows were measured at launches of up to 224 programs (4 waves); their
+    // per-program prices do not compose with > 4-wave slot arithmetic
+    // (muls_add: the g224 row x 37 slot-iters measured 2.6x over), so the
+    // tier is gated to hint <= 224 and larger launches fall to the
+    // aggregate envelope.  Within the gate the per-iteration price is
+    // interpolated across ALL measured grids in log2-grid space, then
+    // T(K) = A + K*m is fitted over the swept K rows.
+    if (programCountHint <= 224) {
+      double bestChunk = 1e30;
+      int64_t bestB = 0;
       for (const auto &row : v2.directTable) {
         int64_t rnL = 0, rns = 0, rB = 0, rK = 0, rG = 0;
         if (std::sscanf(row.first.c_str(),
@@ -624,68 +590,136 @@ static void mapContiguousV2Completion(
                         (long long *)&rB, (long long *)&rK,
                         (long long *)&rG) != 5)
           continue;
-        if (rnL != nLoads || rns != nStores || rB != bestB || rG != bestG)
+        if (rnL != nLoads || rns != nStores)
           continue;
-        if (row.second > 0.0)
-          tk.emplace_back(rK, row.second);
-      }
-      if (!tk.empty()) {
-        double m = 0.0, mHi = 0.0, A = 0.0;
-        if (tk.size() >= 2) {
-          // median slope across all pairs, then intercept at the center K.
-          std::vector<double> slopes;
-          for (size_t i = 0; i < tk.size(); ++i)
-            for (size_t j = i + 1; j < tk.size(); ++j) {
-              const double dK = double(tk[j].first - tk[i].first);
-              if (dK > 0)
-                slopes.push_back((tk[j].second - tk[i].second) / dK);
-            }
-          std::sort(slopes.begin(), slopes.end());
-          m = slopes[slopes.size() / 2];
-          // Piecewise: bend after the mid K when the slope keeps rising
-          // (write-pressure regime).
-          const int64_t midK = tk[tk.size() / 2].first;
-          std::vector<double> hiSlopes;
-          for (const auto &point : tk)
-            if (point.first > midK)
-              for (const auto &base : tk)
-                if (base.first <= midK) {
-                  const double dK = double(point.first - base.first);
-                  if (dK > 0)
-                    hiSlopes.push_back((point.second - base.second) / dK);
-                }
-          if (!hiSlopes.empty()) {
-            std::sort(hiSlopes.begin(), hiSlopes.end());
-            mHi = hiSlopes[hiSlopes.size() / 2];
-            if (mHi < m * 1.05)
-              mHi = m; // no real bend; keep one slope
-          }
-          std::sort(tk.begin(), tk.end(),
-                    [](const std::pair<int64_t, double> &a,
-                       const std::pair<int64_t, double> &b) {
-                      return a.first < b.first;
-                    });
-          const int64_t centerK = tk[tk.size() / 2].first;
-          const double centerT = tk[tk.size() / 2].second;
-          A = centerT - double(centerK) * m;
-          if (A < 0.0)
-            A = 0.0;
-        } else {
-          // Single K row: split with a nominal 1.0 ns/iter transfer floor.
-          m = tk.front().second * 0.5 / double(tk.front().first);
-          A = tk.front().second - double(tk.front().first) * m;
+        const double chunkDist =
+            std::fabs(std::log2(double(std::max<int64_t>(1, domBytes))) -
+                      std::log2(double(std::max<int64_t>(1, rB))));
+        if (chunkDist < bestChunk) {
+          bestChunk = chunkDist;
+          bestB = rB;
         }
-        const double chunkScale = std::min(2.0, std::max(
-            0.5, double(domBytes) / double(std::max<int64_t>(1, bestB))));
-        const double useM = (K > 16 && mHi > m) ? mHi : m;
-        const double share = std::min(1.0, std::max(0.0, v2.directFixedShare));
-        const double perIter =
-            (A * share + double(K) * useM * chunkScale) /
-            double(K) * kCyclesPerNano * v2WaveDecay;
-        if (perIter > 0.0) {
-          resources.load += perIter;
-          claimAll();
-          return;
+      }
+      if (bestChunk <= 1.0 && bestB > 0) {
+        // grid -> (K -> T) of the chosen shape+chunk
+        std::map<int64_t, std::map<int64_t, double>> tkByGrid;
+        for (const auto &row : v2.directTable) {
+          int64_t rnL = 0, rns = 0, rB = 0, rK = 0, rG = 0;
+          if (std::sscanf(row.first.c_str(),
+                          "n%lld_s%lld_b%lld_k%lld_g%lld",
+                          (long long *)&rnL, (long long *)&rns,
+                          (long long *)&rB, (long long *)&rK,
+                          (long long *)&rG) != 5)
+            continue;
+          if (rnL != nLoads || rns != nStores || rB != bestB)
+            continue;
+          if (row.second > 0.0)
+            tkByGrid[rG][rK] = row.second;
+        }
+        if (!tkByGrid.empty()) {
+          // log2-grid interpolation of T(K) at the hint
+          const double lgHint = std::log2(double(std::max<int64_t>(1,
+              programCountHint)));
+          auto loIt = tkByGrid.lower_bound(programCountHint);
+          if (loIt != tkByGrid.begin())
+            --loIt;
+          auto hiIt = std::next(loIt);
+          if (loIt->first == programCountHint || hiIt == tkByGrid.end())
+            hiIt = loIt;
+          std::vector<std::pair<int64_t, double>> tk;
+          for (const auto &kv : loIt->second) {
+            const int64_t K = kv.first;
+            double tLo = kv.second;
+            auto hiK = hiIt->second.find(K);
+            if (hiK == hiIt->second.end()) {
+              // K sets may differ across grids: nearest K in the hi grid
+              double best = -1.0;
+              int64_t bestKdist = 1LL << 62;
+              for (const auto &kv2 : hiIt->second) {
+                const int64_t d = kv2.first > K ? kv2.first - K
+                                                : K - kv2.first;
+                if (d < bestKdist) {
+                  bestKdist = d;
+                  best = kv2.second;
+                }
+              }
+              if (best < 0.0)
+                continue;
+              hiK = hiIt->second.emplace(K, best).first;
+            }
+            double tHi = hiK->second;
+            double t;
+            if (hiIt == loIt) {
+              t = tLo;
+            } else {
+              const double lgLo = std::log2(double(loIt->first));
+              const double lgHi = std::log2(double(hiIt->first));
+              const double w = std::min(1.0, std::max(0.0,
+                  (lgHi - lgLo) > 0.0
+                      ? (lgHint - lgLo) / (lgHi - lgLo)
+                      : 0.0));
+              t = tLo + w * (tHi - tLo);
+            }
+            tk.emplace_back(K, t);
+          }
+          if (!tk.empty()) {
+            double m = 0.0, mHi = 0.0, A = 0.0;
+            if (tk.size() >= 2) {
+              std::vector<double> slopes;
+              for (size_t i = 0; i < tk.size(); ++i)
+                for (size_t j = i + 1; j < tk.size(); ++j) {
+                  const double dK = double(tk[j].first - tk[i].first);
+                  if (dK > 0)
+                    slopes.push_back((tk[j].second - tk[i].second) / dK);
+                }
+              std::sort(slopes.begin(), slopes.end());
+              m = slopes[slopes.size() / 2];
+              const int64_t midK = tk[tk.size() / 2].first;
+              std::vector<double> hiSlopes;
+              for (const auto &point : tk)
+                if (point.first > midK)
+                  for (const auto &base : tk)
+                    if (base.first <= midK) {
+                      const double dK = double(point.first - base.first);
+                      if (dK > 0)
+                        hiSlopes.push_back(
+                            (point.second - base.second) / dK);
+                    }
+              if (!hiSlopes.empty()) {
+                std::sort(hiSlopes.begin(), hiSlopes.end());
+                mHi = hiSlopes[hiSlopes.size() / 2];
+                if (mHi < m * 1.05)
+                  mHi = m;
+              }
+              std::sort(tk.begin(), tk.end(),
+                        [](const std::pair<int64_t, double> &a,
+                           const std::pair<int64_t, double> &b) {
+                          return a.first < b.first;
+                        });
+              const int64_t centerK = tk[tk.size() / 2].first;
+              const double centerT = tk[tk.size() / 2].second;
+              A = centerT - double(centerK) * m;
+              if (A < 0.0)
+                A = 0.0;
+            } else {
+              m = tk.front().second * 0.5 / double(tk.front().first);
+              A = tk.front().second - double(tk.front().first) * m;
+            }
+            const double chunkScale =
+                std::min(2.0, std::max(0.5,
+                    double(domBytes) / double(std::max<int64_t>(1, bestB))));
+            const double useM = (K > 16 && mHi > m) ? mHi : m;
+            const double share = std::min(1.0,
+                std::max(0.0, v2.directFixedShare));
+            const double perIter =
+                (A * share + double(K) * useM * chunkScale) /
+                double(K) * kCyclesPerNano * v2WaveDecay;
+            if (perIter > 0.0) {
+              resources.load += perIter;
+              claimAll();
+              return;
+            }
+          }
         }
       }
     }
