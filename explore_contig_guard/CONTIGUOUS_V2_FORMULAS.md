@@ -171,10 +171,11 @@ cross-iteration pipelined、masked-copy）不再参与连续访存定价。
   wave 比 `ceil(P/f/56)/ceil(P/56)` 缩放（实测 grid-224 F2=0.53×F1），
   单波内因子为 no-op。
 
-* **sdirect（直线段整核直查）实验记录**：calF3 已按守护同体测得 93×2 行
-  直线段整核数据（，已入库未启用）。stage 级
-  充值实验失败并回滚：whole-launch 行与估计器的 wave 算术不可组合
-  （每程序价格在 latency-bound 单波与 BW-bound 多波 regime 间相差 ~10×，
-  grid-1024 充值实测 10× 高估）。正确集成需要在候选级（factor 已知处）
-  按 wave 比  重缩放，并解决 copy 类 kernel 的
-  load/store 双 stage 拆分归账问题——待后续 PR。
+* **sdirect（直线段整核直查）实验记录**：calF3 已按守护同体测得
+  93×2 行直线段整核数据（profile 键 `contiguous_ldst_v2.sdirect`，
+  已入库未启用）。stage 级充值实验失败并回滚：whole-launch 行与
+  估计器的 wave 算术不可组合（每程序价格在 latency-bound 单波与
+  BW-bound 多波 regime 间相差约 10×，grid-1024 充值实测 10× 高估）。
+  正确集成需要在候选级（factor 已知处）按 wave 比
+  `ceil(P/f/56)` 重缩放，并解决 copy 类 kernel 的 load/store 双
+  stage 拆分归账问题——待后续 PR。
