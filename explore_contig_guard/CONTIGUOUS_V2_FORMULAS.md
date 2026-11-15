@@ -171,6 +171,15 @@ cross-iteration pipelined、masked-copy）不再参与连续访存定价。
   wave 比 `ceil(P/f/56)/ceil(P/56)` 缩放（实测 grid-224 F2=0.53×F1），
   单波内因子为 no-op。
 
+* **跨 stage DMA 重叠物理规律**（CAModel 仿真确认，`msprof op simulator`）：
+  - 独立 load/store（无循环依赖）：跨 stage 完全流水。vector_add 仿真
+    显示 2 VLD/cycle 并行发射，store 与 load 尾部重叠。
+  - loop-carried dependency：逐 iteration 串行。masked_softmax 仿真显示
+    每轮 VLD 等前一轮 VST 完成才发射。
+  - v2 calF2 直查行按独立 load 模式标定，对独立场景正确。
+  - reduction-stage case（masked_softmax/softmax）的偏差来自
+    kaixin rowwise_reduction 曲线对 compute 时间低估，
+    非连续访存标定问题。
 * **sdirect（直线段整核直查）实验记录**：calF3 已按守护同体测得
   93×2 行直线段整核数据（profile 键 `contiguous_ldst_v2.sdirect`，
   已入库未启用）。stage 级充值实验失败并回滚：whole-launch 行与
