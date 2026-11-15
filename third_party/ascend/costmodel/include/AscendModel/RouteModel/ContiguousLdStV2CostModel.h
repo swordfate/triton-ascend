@@ -71,6 +71,12 @@ struct ContiguousV2Params {
   // rows of the same geometry; direct_fixed_share splits the intercept
   // against the route model's own boundary stages.
   std::map<std::string, double> directTable;
+  // calF3 straight-line rows: "n<loads>_s<stores>_b<chunkBytes>_g<grid>"
+  // -> whole-launch per-program-equivalent ns, guard-identical bodies.
+  std::map<std::string, double> sdirectTable;
+  // The route model prices its own boundary/fixed stages on top, so the
+  // whole-launch row charges row - sdirect_fixed_offset (cycles).
+  double sdirectFixedOffset = 2400.0;
   double directFixedShare = 0.3;
   // resident program count for the current kernel (grid size)
   int64_t programCountHint = 1;

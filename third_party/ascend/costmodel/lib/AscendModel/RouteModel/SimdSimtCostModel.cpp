@@ -2921,6 +2921,14 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
       }
       cv2.directFixedShare = reader.optionalNumber(
           *v2, "direct_fixed_share", 0.3);
+      if (const auto *sd = v2->getObject("sdirect")) {
+        for (const auto &entry : *sd) {
+          if (const auto n = entry.second.getAsNumber())
+            cv2.sdirectTable[entry.first.str()] = *n;
+        }
+      }
+      cv2.sdirectFixedOffset = reader.optionalNumber(
+          *v2, "sdirect_fixed_offset", 2400.0);
             if (const auto *pa = v2->getObject("p_axis")) {
         for (const auto &entry : *pa) {
           const auto *o = entry.second.getAsObject();
@@ -3383,6 +3391,14 @@ if (const auto *sp = v2->getObject("s_penalty")) {
       }
       cv2.directFixedShare = reader.optionalNumber(
           *v2, "direct_fixed_share", 0.3);
+      if (const auto *sd = v2->getObject("sdirect")) {
+        for (const auto &entry : *sd) {
+          if (const auto n = entry.second.getAsNumber())
+            cv2.sdirectTable[entry.first.str()] = *n;
+        }
+      }
+      cv2.sdirectFixedOffset = reader.optionalNumber(
+          *v2, "sdirect_fixed_offset", 2400.0);
       if (const auto *sp = v2->getObject("s_penalty")) {
         for (const auto &entry : *sp) {
           if (const auto v = entry.second.getAsNumber())
