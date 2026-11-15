@@ -1,29 +1,26 @@
-PASS<=10%: 73  FAIL: 27  N/A: 0  of 100
-abs-err median 5.06% mean 12.65% max 112.03%
-  FAIL muls_add_n2097152                              all_simd           meas=    6.625 pred=   14.047 err=+112.03%
-  FAIL muls_add_n1048576                              all_simd           meas=    4.746 pred=    8.780 err= +84.99%
-  FAIL memory_stream_l4_n2097152                      all_simd           meas=   10.032 pred=    8.176 err= -18.50%
-  FAIL memory_stream_l2_n1048576                      all_simd           meas=    4.645 pred=    8.775 err= +88.91%
-  FAIL gather_dot_f16_k16                             all_simt_only      meas=   12.186 pred=    7.883 err= -35.31%
-  FAIL gather_dot_f16_k16_p112                        all_simt_only      meas=    6.061 pred=    5.110 err= -15.69%
-  FAIL grid_stride_gather_p224                        all_simt_only      meas=    3.836 pred=    4.604 err= +20.03%
+PASS<=10%: 76  FAIL: 24  N/A: 0  of 100
+abs-err median 4.63% mean 9.21% max 95.67%
+  FAIL gather_dot_f16_k16                             all_simt_only      meas=   12.186 pred=    7.895 err= -35.21%
+  FAIL gather_dot_f16_k16_p112                        all_simt_only      meas=    6.061 pred=    5.114 err= -15.63%
+  FAIL grid_stride_gather_p224                        all_simt_only      meas=    3.836 pred=    4.617 err= +20.36%
   FAIL grid_stride_dot_p56                            all_simt_only      meas=    3.976 pred=    3.531 err= -11.20%
+  FAIL grid_stride_dot_p336                           all_simd           meas=    6.035 pred=    5.175 err= -14.25%
   FAIL pytest_gather_dot_f16_k16_p56                  all_simt_only      meas=    4.619 pred=    3.722 err= -19.41%
   FAIL pytest_vector_add_n98432                       all_simd           meas=    2.141 pred=    2.780 err= +29.86%
-  FAIL pytest_rms_norm_f16_m128_n128                  all_simd           meas=    6.152 pred=   11.749 err= +90.98%
+  FAIL pytest_rms_norm_f16_m128_n128                  all_simd           meas=    6.152 pred=   10.815 err= +75.80%
   FAIL pytest_max_dim1_f32_m64_n8                     all_simd           meas=    1.246 pred=    1.397 err= +12.10%
   FAIL atomic_continuous_i32_p56_b256                 all_simd           meas=    1.940 pred=    2.306 err= +18.84%
   FAIL atomic_discrete_i32_p56_b256                   all_simt_only      meas=    2.438 pred=    2.824 err= +15.83%
-  FAIL rowred_r16_c128_k16                            all_simt_only      meas=   28.477 pred=   15.880 err= -44.24%
-  FAIL softmax_original                               all_simd           meas=   32.494 pred=   37.067 err= +14.07%
+  FAIL rowred_r16_c128_k16                            all_simt_only      meas=   28.477 pred=   21.353 err= -25.02%
+  FAIL softmax_original                               all_simd           meas=   32.494 pred=   36.630 err= +12.73%
   FAIL masked_softmax_r32_l150_v256_s150_k12          all_simd           meas=   78.009 pred=   16.995 err= -78.21%
-  FAIL masked_softmax_r80_l150_v150_s150_k18          all_simd           meas=   32.261 pred=   37.066 err= +14.89%
+  FAIL masked_softmax_r80_l150_v150_s150_k18          all_simd           meas=   32.261 pred=   36.629 err= +13.54%
   FAIL histogram_i32_r8192_b256_uniform               mixed_simd_simt    meas=   73.133 pred=   60.076 err= -17.85%
   FAIL histogram_i32_r8192_b256_single                mixed_simd_simt    meas=   73.133 pred=   60.076 err= -17.85%
   FAIL histogram_i32_r8192_b256_radix                 mixed_simd_simt    meas=   73.133 pred=   60.076 err= -17.85%
-  FAIL pytest_reduce_sum_epilogue_f32_8x8x512         all_simd           meas=    2.772 pred=    2.089 err= -24.65%
+  FAIL pytest_reduce_sum_epilogue_f32_8x8x512         all_simd           meas=    2.772 pred=    2.086 err= -24.75%
   FAIL pytest_permute_reshape_fused_f32               all_simd           meas=    6.471 pred=    8.552 err= +32.16%
   FAIL pytest_cummin_f32_3x5x7_dim1                   all_simd           meas=   26.797 pred=    1.160 err= -95.67%
-  FAIL pytest_fused_softmax_f32_128x257               all_simd           meas=    3.158 pred=    2.558 err= -19.00%
+  FAIL pytest_fused_softmax_f32_128x257               all_simd           meas=    3.158 pred=    2.777 err= -12.07%
   FAIL pytest_strided_scatter_f32_s16                 all_simt_only      meas=    4.302 pred=    4.790 err= +11.33%
-  FAIL pytest_strided_compaction_f32_s16              all_simd           meas=    2.956 pred=    3.698 err= +25.09%
+  FAIL pytest_strided_compaction_f32_s16              all_simd           meas=    2.956 pred=    3.696 err= +25.03%
