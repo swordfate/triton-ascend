@@ -4487,9 +4487,12 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
         const bool eligible = plan.logicalStageCycles[idx] > 0.0 &&
                               isContigMemStage(stage);
         if (!eligible) {
-          if (idx > 0)
+          // Zero-cycle stages (e.g. empty index generation) do not consume
+          // time and must not break a run; only priced non-memory stages do.
+          if (plan.logicalStageCycles[idx] > 0.0) {
             flushRun();
-          run.clear();
+            run.clear();
+          }
           continue;
         }
         if (!run.empty()) {
