@@ -4422,6 +4422,57 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
       return invalid;
     }
     analyzeStageDependencySchedules(plan, costTable);
+
+    // Kernel-level aggregate bandwidth cap.  Physical constraint: the
+    // total contiguous memory transfer time cannot exceed
+    // total_bytes / aggregate_DRAM_BW, no matter how many stages the
+    // partitioner created.  Per-stage v2 pricing that sums above this
+    // cap overestimates because the hardware pipelines all stages' DMA
+    // through the same DRAM channel (guard + 100-case evidence:
+    // softmax/rms_norm/masked_softmax summed above the BW cap).
+    if (kind == StageKernelRouteKind::AllSIMD ||
+        kind == StageKernelRouteKind::AllSIMT) {
+      double memCycles = 0.0;
+      double memBytes = 0.0;
+      for (size_t idx = 0; idx < costTable.stages.size(); ++idx) {
+        const auto &stage = costTable.stages[idx];
+        if (plan.logicalStageCycles[idx] <= 0.0)
+          continue;
+        const auto &w = stage.workload;
+        const double bytes = w.loadBytes + w.storeBytes;
+        if (bytes <= 0.0 || w.memoryAccesses.empty())
+          continue;
+        bool allContig = true;
+        for (const StageMemoryAccess &access : w.memoryAccesses) {
+          const auto lc = access.layoutClass();
+          if (lc != StageMemoryAccess::LayoutClass::ContiguousShort &&
+              lc != StageMemoryAccess::LayoutClass::ContiguousWide) {
+            allContig = false;
+            break;
+          }
+        }
+        if (!allContig)
+          continue;
+        memCycles += plan.logicalStageCycles[idx];
+        memBytes += bytes;
+      }
+      const double bw = 2400.0 > 0.0
+                            ? 2400.0
+                            : 2400.0;
+      // BW in bytes/ns; cycles at 1 GHz == ns
+      const double bwCapCycles = memBytes / bw;
+      if (memCycles > bwCapCycles && memCycles > 0.0) {
+        const double excess = memCycles - bwCapCycles;
+        plan.totalCycles -= excess;
+        plan.diagnostic<double>(
+            "contiguous_mem_bw_cap_excess_system_cycles") = excess;
+        plan.diagnostic<double>(
+            "contiguous_mem_bw_cap_mem_cycles") = memCycles;
+        plan.diagnostic<double>(
+            "contiguous_mem_bw_cap_bw_cap_cycles") = bwCapCycles;
+      }
+    }
+
     plan.legal = true;
     return plan;
   };
