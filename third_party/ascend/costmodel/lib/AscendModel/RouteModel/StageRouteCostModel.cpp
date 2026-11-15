@@ -4471,18 +4471,15 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
           if (plan.logicalStageCycles[idx] >
               plan.logicalStageCycles[maxIdx])
             maxIdx = idx;
-        // The max stage keeps its full price (transfer + launch); every
-        // other stage of the run contributes only its residual above the
-        // DMA launch floor (their launches pipeline completely).
+        // The max stage keeps its full price; every other stage of the
+        // run pipelines completely behind it (full subtraction - the
+        // floor-residual variant measured worse on guard + 100-case).
         for (size_t idx : run) {
           if (idx == maxIdx)
             continue;
-          const double residual =
-              std::max(0.0, plan.logicalStageCycles[idx] - runFloor);
-          plan.totalCycles -= plan.logicalStageCycles[idx] - residual;
+          plan.totalCycles -= plan.logicalStageCycles[idx];
           overlappedStages += 1;
-          overlappedCycles +=
-              plan.logicalStageCycles[idx] - residual;
+          overlappedCycles += plan.logicalStageCycles[idx];
         }
       };
       for (size_t idx = 0; idx < costTable.stages.size(); ++idx) {
