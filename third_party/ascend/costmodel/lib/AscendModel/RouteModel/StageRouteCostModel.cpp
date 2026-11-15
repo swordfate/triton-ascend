@@ -4422,7 +4422,6 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
       return invalid;
     }
     analyzeStageDependencySchedules(plan, costTable);
-    }
     plan.legal = true;
     return plan;
   };
