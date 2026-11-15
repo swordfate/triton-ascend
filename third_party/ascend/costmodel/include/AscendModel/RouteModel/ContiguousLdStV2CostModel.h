@@ -77,6 +77,15 @@ struct ContiguousV2Params {
   // The route model prices its own boundary/fixed stages on top, so the
   // whole-launch row charges row - sdirect_fixed_offset (cycles).
   double sdirectFixedOffset = 2400.0;
+  // calF2 tiny-store loop-body rows, same key format as `direct`:
+  // "n<loads>_s<stores>_b<chunkBytes>_k<K>_g<grid>" -> whole-launch
+  // per-program-equivalent ns.  Selected for loop bodies whose stores are
+  // all <=128B beside a >=512B dominant chunk (reduction-epilogue shape).
+  std::map<std::string, double> tinyDirectTable;
+  // Share of the measured latency-chain excess (row value above the
+  // linear T(K)=A+K*m trend) charged per iteration; the rest of the
+  // excess overlaps the route boundary/launch.
+  double tinyStoreChainShare = 0.636;
   double directFixedShare = 0.3;
   // resident program count for the current kernel (grid size)
   int64_t programCountHint = 1;

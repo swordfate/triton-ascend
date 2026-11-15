@@ -233,16 +233,36 @@ index-generation / predicate / 边界固定项，属 route 模型公共部分。
 12 例为存量 FAIL；新增偏差主要归因高 grid 非循环阶段/边界固定项
 （见上），连续访存循环体价格本身已对齐。
 
+## 五a、Tier 1a：微小 store 循环体（reduce_sum 族修复）
+
+**实测规律**（calF2-t 探针 + 100-case 实机）：循环体的 store 全部 ≤128B、
+主导 chunk ≥512B 时（reduction-epilogue 形状），微小依赖 IO 在 DMA 流水
+填满前逐迭代串行——K=4 的实测整核时长远高于 K≥16 的线性趋势（约 2 倍），
+K≥16 后边际增量平坦（~117 ns/iter）。大数据 store 的 direct 行
+（m≈109 ns/iter）完全错过该效应：`pytest_reduce_sum_epilogue_f32_8x8x512`
+欠预测 24.7%（消融证实其 4KB tile load 本身近乎全隐藏，
+微小 bias/store 链才是主体）。
+
+**机制**（线性形式，无指数）：`contiguous_ldst_v2.tiny_direct` 表
+（键与 `direct` 一致），store 全 ≤128B 且 domBytes ≥512B 且 K ≤ 8 时认领；
+每迭代价格
+`perIter = (A×share + K×m + excess×tiny_store_chain_share) / K × wavesDecay`，
+其中 `excess = max(0, 行值 − (A + K×m))`，`tiny_store_chain_share = 0.636`
+（guard/100-case 标定）。验证：reduce_sum_epilogue 预测 2086→2772ns
+（+0.0%）；同族 mul_reduce / gather_after_reduce / scalar_reduce_store
+不受影响。
+
 ## 六、影响面
 
 * `StageCostModels.cpp`：`mapContiguousV2Completion` 重写（公式 B 三级 +
   公式 A 兜底认领）；v2 不再因 sync/count/形状/K 拒绝连续访问。
 * `SimdSimtCostModel.{h,cpp}`：profile 解析 `direct` /
   `direct_fixed_share`；报告输出 per-factor 诊断。
-* `ContiguousLdStV2CostModel.h`：`directTable` 成员。
+* `ContiguousLdStV2CostModel.h`：`directTable` / `tinyDirectTable` 成员。
 * profile `ascend_950pr_simd_simt_v1.json`：注入 `contiguous_ldst_v2.direct`
-  与 `direct_fixed_share`。
+  / `direct_fixed_share` / `tiny_direct` / `tiny_store_chain_share`。
 * 标定/守护脚本：`explore_contig/cal_f2_direct.py`、`fit_direct2.py`、
+  `cal_f2_tinystore3.py`（微小 store 体探针）、
   `bench_guard_contig.py`、`guard_run.sh`、`score100.py`、`run100_shards.sh`。
 
 不改变：路由决策逻辑本身（候选合法性、因子选择）、

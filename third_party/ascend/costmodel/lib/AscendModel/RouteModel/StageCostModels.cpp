@@ -485,8 +485,15 @@ static void mapContiguousV2Completion(
       continue;
     eligible.push_back(&access);
   }
-  if (eligible.empty())
+  if (eligible.empty()) {
+    fprintf(stderr, "[cv2-hook] %s hint=%lld simd=%d eligible=EMPTY nacc=%d\n",
+            stage.id.c_str(), (long long)programCountHint, (int)simd,
+            (int)work.memoryAccesses.size());
     return;
+  }
+  fprintf(stderr, "[cv2-hook] %s hint=%lld simd=%d elig=%d loop=%d\n",
+          stage.id.c_str(), (long long)programCountHint, (int)simd,
+          (int)eligible.size(), (int)hasLoop);
 
   const auto ebName = [](int64_t eb) -> const char * {
     switch (eb) {
@@ -541,6 +548,139 @@ static void mapContiguousV2Completion(
         }
       }
     };
+
+    // ---- Tier 1a: calF2 tiny-store loop bodies --------------------------
+    // A loop body whose stores are all tiny (<=128B) beside a large
+    // dominant chunk (>=512B) runs a latency chain: the tiny dependent IO
+    // serializes the early iterations until the DMA pipeline fills
+    // (measured on the reduce-sum epilogue geometry: the K=4 row sits far
+    // above the K>=16 linear trend while the marginal stays ~117 ns/iter).
+    // The tiny_direct rows carry the effect; the excess of the measured
+    // row over the linear T(K)=A+K*m trend is charged per iteration with
+    // tiny_store_chain_share (the rest overlaps the route boundary).
+    if (K >= 1 && K <= 8 && !v2.tinyDirectTable.empty() && nStores >= 1) {
+      int64_t maxStoreChunk = 0;
+      for (const StageMemoryAccess *access : eligible) {
+        if (!access->store)
+          continue;
+        maxStoreChunk = std::max<int64_t>(
+            maxStoreChunk,
+            v2ElementCount(access) * (access->elementBits / 8));
+      }
+      if (maxStoreChunk > 0 && maxStoreChunk <= 128 && domBytes >= 512) {
+        double bestChunk = 1e30;
+        int64_t bestB = 0;
+        for (const auto &row : v2.tinyDirectTable) {
+          int64_t rnL = 0, rns = 0, rB = 0, rK = 0, rG = 0;
+          if (std::sscanf(row.first.c_str(),
+                          "n%lld_s%lld_b%lld_k%lld_g%lld",
+                          (long long *)&rnL, (long long *)&rns,
+                          (long long *)&rB, (long long *)&rK,
+                          (long long *)&rG) != 5)
+            continue;
+          if (rnL != nLoads || rns != nStores)
+            continue;
+          const double chunkDist =
+              std::fabs(std::log2(double(std::max<int64_t>(1, domBytes))) -
+                        std::log2(double(std::max<int64_t>(1, rB))));
+          if (chunkDist < bestChunk) {
+            bestChunk = chunkDist;
+            bestB = rB;
+          }
+        }
+        if (bestChunk <= 1.0 && bestB > 0) {
+          std::map<int64_t, std::map<int64_t, double>> tkByGrid;
+          for (const auto &row : v2.tinyDirectTable) {
+            int64_t rnL = 0, rns = 0, rB = 0, rK = 0, rG = 0;
+            if (std::sscanf(row.first.c_str(),
+                            "n%lld_s%lld_b%lld_k%lld_g%lld",
+                            (long long *)&rnL, (long long *)&rns,
+                            (long long *)&rB, (long long *)&rK,
+                            (long long *)&rG) != 5)
+              continue;
+            if (rnL != nLoads || rns != nStores || rB != bestB)
+              continue;
+            if (row.second > 0.0)
+              tkByGrid[rG][rK] = row.second;
+          }
+          if (!tkByGrid.empty()) {
+            // log2-grid interpolation of T(K) at the hint
+            const double lgHint =
+                std::log2(double(std::max<int64_t>(1, programCountHint)));
+            auto loIt = tkByGrid.lower_bound(
+                std::max<int64_t>(1, programCountHint));
+            if (loIt != tkByGrid.begin())
+              --loIt;
+            auto hiIt = std::next(loIt);
+            if (loIt->first == programCountHint || hiIt == tkByGrid.end())
+              hiIt = loIt;
+            const double lgLo = std::log2(double(loIt->first));
+            const double lgHi =
+                std::log2(double(std::max<int64_t>(1, hiIt->first)));
+            const double frac =
+                (hiIt != loIt && lgHi > lgLo)
+                    ? std::clamp((lgHint - lgLo) / (lgHi - lgLo), 0.0, 1.0)
+                    : 0.0;
+            std::map<int64_t, double> tk;
+            for (const auto &kv : loIt->second)
+              tk[kv.first] = kv.second;
+            for (const auto &kv : hiIt->second) {
+              auto it = tk.find(kv.first);
+              if (it != tk.end())
+                it->second = (1.0 - frac) * it->second + frac * kv.second;
+              else
+                tk[kv.first] = kv.second;
+            }
+            if (!tk.empty()) {
+              // linear trend: median pairwise slope, centre-K residual
+              std::vector<double> slopes;
+              for (auto a = tk.begin(); a != tk.end(); ++a)
+                for (auto b = std::next(a); b != tk.end(); ++b)
+                  slopes.push_back((b->second - a->second) /
+                                   double(b->first - a->first));
+              double m = 0.0;
+              if (!slopes.empty()) {
+                std::sort(slopes.begin(), slopes.end());
+                m = slopes[slopes.size() / 2];
+              }
+              m = std::max(0.0, m);
+              auto centerIt = tk.begin();
+              std::advance(centerIt, tk.size() / 2);
+              const double A =
+                  std::max(0.0, centerIt->second - centerIt->first * m);
+              // latency-chain excess of the measured row at (nearest) K
+              double rowT = -1.0;
+              auto exactK = tk.find(K);
+              if (exactK != tk.end()) {
+                rowT = exactK->second;
+              } else {
+                int64_t bestKdist = 1LL << 62;
+                for (const auto &kv : tk) {
+                  const int64_t d = std::abs(kv.first - K);
+                  if (d < bestKdist) {
+                    bestKdist = d;
+                    rowT = kv.second;
+                  }
+                }
+              }
+              const double excess =
+                  rowT >= 0.0
+                      ? std::max(0.0, rowT - (A + double(K) * m))
+                      : 0.0;
+              const double perIter =
+                  (A * v2.directFixedShare + double(K) * m +
+                   excess * v2.tinyStoreChainShare) /
+                  double(K) * v2WaveDecay;
+              if (perIter > 0.0) {
+                resources.load += perIter;
+                claimAll();
+                return;
+              }
+            }
+          }
+        }
+      }
+    }
 
     // Generic per-op analytical per iteration (the fallback that stays
     // even when no direct row is close): loads and stores charge their
@@ -720,6 +860,10 @@ static void mapContiguousV2Completion(
                 (A * share + double(K) * useM * chunkScale) /
                 double(K) * kCyclesPerNano * v2WaveDecay;
             if (perIter > 0.0) {
+              fprintf(stderr,
+                      "[cv2-tier1] %s hint=%lld A=%.1f m=%.3f perIter=%.2f\n",
+                      stage.id.c_str(), (long long)programCountHint, A, m,
+                      perIter);
               resources.load += perIter;
               claimAll();
               return;
@@ -3107,6 +3251,9 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
   }
   mapMaskedStridedCopyCompletion(stage, work, profile, resources,
                                  stridedShortAlreadyClaimed);
+  if (stage.costModelKind == StageCostModelKind::RowwiseReduction)
+    fprintf(stderr, "[cv2-final] %s load=%.2f store=%.2f\n",
+            stage.id.c_str(), resources.load, resources.store);
   return materializeControlFlow(stage, mode, resources, profile.controlFlow);
 }
 
