@@ -716,21 +716,9 @@ static void mapContiguousV2Completion(
             const double useM = (K > 16 && mHi > m) ? mHi : m;
             const double share = std::min(1.0,
                 std::max(0.0, v2.directFixedShare));
-            double perIter =
+            const double perIter =
                 (A * share + double(K) * useM * chunkScale) /
                 double(K) * kCyclesPerNano * v2WaveDecay;
-            // Cap tier-1 at the tier-2 aggregate BW envelope: the DRAM
-            // channel is a hard physical limit that fine-grained direct
-            // table pricing cannot exceed (cross-stage DMA pipelines
-            // through the same channel).
-            if (simd && profile.independentLoadGroupBytesPerCycle > 0.0) {
-              const double aggPerIter =
-                  (profile.independentLoadGroupIterationStartupCycles +
-                   double(loadBytes + storeBytes) /
-                       profile.independentLoadGroupBytesPerCycle) *
-                  v2WaveDecay;
-              perIter = std::min(perIter, aggPerIter);
-            }
             if (perIter > 0.0) {
               resources.load += perIter;
               claimAll();
