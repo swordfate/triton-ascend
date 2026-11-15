@@ -4422,27 +4422,24 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
       return invalid;
     }
     analyzeStageDependencySchedules(plan, costTable);
-    // Independent consecutive pure-load contiguous tile stages pipeline
-    // their DMA streams: the combined price is the max, not the sum
-    // (guard campaign: vector_add's two load tile stages measured fully
-    // hidden).  Only load-load pairs with contiguous layout, no dot and
-    // no atomic work, and no dependency edge between them qualify.
+    // Consecutive contiguous memory stages (pure tile loads and/or
+    // stores, no dot/atomic/scalar work, no dependency edge between
+    // neighbours) pipeline their DMA across block iterations: the run
+    // composes to its max stage cycle, not the serial sum (guard
+    // campaign: vector_add's three memory stages measured ~122 ns total).
     if (kind == StageKernelRouteKind::AllSIMD ||
         kind == StageKernelRouteKind::AllSIMT) {
-      auto isPureContigLoadStage = [&](const LogicalStageCost &stage) {
+      auto isContigMemStage = [&](const LogicalStageCost &stage) {
         if (stage.workload.memoryAccesses.empty())
           return false;
         if (stage.features.hasAtomicMemory || stage.features.hasDot)
           return false;
-        if (stage.workload.storeBytes > 0.0 ||
-            stage.workload.storeOperations > 0.0 ||
-            stage.workload.indirectLoadBytes > 0.0 ||
+        if (stage.workload.indirectLoadBytes > 0.0 ||
+            stage.workload.indirectStoreBytes > 0.0 ||
             stage.workload.scalarOperations > 0.0)
           return false;
         for (const StageMemoryAccess &access :
              stage.workload.memoryAccesses) {
-          if (access.store)
-            return false;
           const auto lc = access.layoutClass();
           if (lc != StageMemoryAccess::LayoutClass::ContiguousShort &&
               lc != StageMemoryAccess::LayoutClass::ContiguousWide)
@@ -4460,42 +4457,60 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
         }
         return false;
       };
-      int64_t overlappedPairs = 0;
+      size_t i = 1;
+      int64_t overlappedStages = 0;
       double overlappedCycles = 0.0;
-      int64_t rjZero = 0, rjNotPure = 0, rjDep = 0;
-      for (size_t i = 1; i < costTable.stages.size(); ++i) {
-        const LogicalStageCost &prev = costTable.stages[i - 1];
-        const LogicalStageCost &cur = costTable.stages[i];
-        if (plan.logicalStageCycles[i - 1] <= 0.0 ||
-            plan.logicalStageCycles[i] <= 0.0) {
-          rjZero += 1;
+      std::vector<size_t> run;
+      auto flushRun = [&]() {
+        if (run.size() < 2)
+          return;
+        size_t maxIdx = run.front();
+        double total = 0.0;
+        for (size_t idx : run) {
+          total += plan.logicalStageCycles[idx];
+          if (plan.logicalStageCycles[idx] >
+              plan.logicalStageCycles[maxIdx])
+            maxIdx = idx;
+        }
+        const double keep = plan.logicalStageCycles[maxIdx];
+        for (size_t idx : run)
+          if (idx != maxIdx) {
+            plan.totalCycles -= plan.logicalStageCycles[idx];
+            overlappedStages += 1;
+            overlappedCycles += plan.logicalStageCycles[idx];
+          }
+        (void)total;
+        (void)keep;
+      };
+      for (size_t idx = 0; idx < costTable.stages.size(); ++idx) {
+        const LogicalStageCost &stage = costTable.stages[idx];
+        const bool eligible = plan.logicalStageCycles[idx] > 0.0 &&
+                              isContigMemStage(stage);
+        if (!eligible) {
+          if (idx > 0)
+            flushRun();
+          run.clear();
           continue;
         }
-        if (!isPureContigLoadStage(prev) || !isPureContigLoadStage(cur)) {
-          rjNotPure += 1;
-          continue;
+        if (!run.empty()) {
+          const LogicalStageCost &prev = costTable.stages[run.back()];
+          if (hasDependency(prev.id, stage.id)) {
+            flushRun();
+            run.clear();
+          }
         }
-        if (hasDependency(prev.id, cur.id)) {
-          rjDep += 1;
-          continue;
-        }
-        plan.totalCycles -= plan.logicalStageCycles[i];
-        overlappedPairs += 1;
-        overlappedCycles += plan.logicalStageCycles[i];
+        run.push_back(idx);
       }
-      plan.diagnostic<int64_t>("contiguous_load_overlap_reject_zero") = rjZero;
-      plan.diagnostic<int64_t>("contiguous_load_overlap_reject_not_pure") =
-          rjNotPure;
-      plan.diagnostic<int64_t>("contiguous_load_overlap_reject_dependency") =
-          rjDep;
-      if (overlappedPairs > 0) {
+      flushRun();
+      if (overlappedStages > 0) {
         plan.diagnostic<int64_t>(
-            "contiguous_load_stage_overlap_pair_count") = overlappedPairs;
+            "contiguous_mem_stage_overlap_stage_count") = overlappedStages;
         plan.diagnostic<double>(
-            "contiguous_load_stage_overlap_system_cycles") =
+            "contiguous_mem_stage_overlap_system_cycles") =
             overlappedCycles;
       }
-    }    plan.legal = true;
+    }
+    plan.legal = true;
     return plan;
   };
 
