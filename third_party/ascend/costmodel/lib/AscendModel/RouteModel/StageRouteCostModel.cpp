@@ -4282,6 +4282,68 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
       plan.logicalStageCycles.push_back(stageCycles);
       plan.totalCycles += stageCycles;
     }
+    // Independent consecutive pure-load contiguous tile stages pipeline
+    // their DMA streams: the combined price is the max, not the sum
+    // (guard campaign: vector_add's two load tile stages measured fully
+    // hidden).  Only load-load pairs with contiguous layout, no dot and
+    // no atomic work, and no dependency edge between them qualify.
+    if (kind == StageKernelRouteKind::AllSIMD ||
+        kind == StageKernelRouteKind::AllSIMT) {
+      auto isPureContigLoadStage = [&](const LogicalStageCost &stage) {
+        if (stage.workload.memoryAccesses.empty())
+          return false;
+        if (stage.features.hasAtomicMemory || stage.features.hasDot)
+          return false;
+        if (stage.workload.storeBytes > 0.0 ||
+            stage.workload.storeOperations > 0.0 ||
+            stage.workload.indirectLoadBytes > 0.0 ||
+            stage.workload.scalarOperations > 0.0)
+          return false;
+        for (const StageMemoryAccess &access :
+             stage.workload.memoryAccesses) {
+          if (access.store)
+            return false;
+          const auto lc = access.layoutClass();
+          if (lc != StageMemoryAccess::LayoutClass::ContiguousShort &&
+              lc != StageMemoryAccess::LayoutClass::ContiguousWide)
+            return false;
+        }
+        return true;
+      };
+      auto hasDependency = [&](const std::string &a, const std::string &b) {
+        for (const StageDependency &dep : costTable.dependencies) {
+          if ((dep.sourceStage == a && dep.targetStage == b) ||
+              (dep.sourceStage == b && dep.targetStage == a))
+            return true;
+          if (dep.loopStage == a || dep.loopStage == b)
+            return true;
+        }
+        return false;
+      };
+      int64_t overlappedPairs = 0;
+      double overlappedCycles = 0.0;
+      for (size_t i = 1; i < costTable.stages.size(); ++i) {
+        const LogicalStageCost &prev = costTable.stages[i - 1];
+        const LogicalStageCost &cur = costTable.stages[i];
+        if (plan.logicalStageCycles[i - 1] <= 0.0 ||
+            plan.logicalStageCycles[i] <= 0.0)
+          continue;
+        if (!isPureContigLoadStage(prev) || !isPureContigLoadStage(cur))
+          continue;
+        if (hasDependency(prev.id, cur.id))
+          continue;
+        plan.totalCycles -= plan.logicalStageCycles[i];
+        overlappedPairs += 1;
+        overlappedCycles += plan.logicalStageCycles[i];
+      }
+      if (overlappedPairs > 0) {
+        plan.diagnostic<int64_t>(
+            "contiguous_load_stage_overlap_pair_count") = overlappedPairs;
+        plan.diagnostic<double>(
+            "contiguous_load_stage_overlap_system_cycles") =
+            overlappedCycles;
+      }
+    }
     if (kind == StageKernelRouteKind::Mixed) {
       {
         // A Mixed route currently materializes exactly one local SIMT scope.
