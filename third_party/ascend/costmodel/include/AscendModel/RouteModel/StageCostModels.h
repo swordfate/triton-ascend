@@ -1,3 +1,5 @@
+#include <map>
+#include "AscendModel/RouteModel/ContiguousLdStV2CostModel.h"
 //===- StageCostModels.h - Per-stage analytical models --------*- C++ -*-===//
 //
 // StagePartitioner, StageCostEvaluator, and KernelRouteSolver are separate
@@ -292,7 +294,11 @@ struct StageAtomicRate {
   bool isValid() const;
 };
 
+
 struct StageModeProfile {
+  /// v2 epoch-calibrated contiguous pricing (contiguous_ldst_v2 block).
+  contiguous_v2::ContiguousV2Params contiguousV2;
+
   /// Warps per logical SIMT scan, excluding other SuperBlock programs.
   int64_t prefixScanWarpCount = 0;
   /// Resolved by the evaluator; not an independently editable profile knob.
@@ -647,7 +653,8 @@ class StageCostEvaluator {
 public:
   llvm::Expected<StageCostTable>
   evaluate(const StagePartition &partition, const HardwareProfile &profile,
-           bool collectCalibrationEstimates = true) const;
+           bool collectCalibrationEstimates,
+           int64_t programCountHint = 1) const;
 };
 
 } // namespace mlir::ascend

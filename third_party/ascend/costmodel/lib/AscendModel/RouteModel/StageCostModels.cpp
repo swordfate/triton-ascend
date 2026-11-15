@@ -80,8 +80,12 @@ resolveModeProfile(const HardwareProfile &hardware,
                    bool dependentDotRecurrence) {
   StageModeProfile resolved =
       implementation.mode == StageMode::SIMD ? hardware.simd : hardware.simt;
-  if (implementation.mode == StageMode::SIMD)
+  if (implementation.mode == StageMode::SIMD) {
+    fprintf(stderr, "[cv2-resolve] SIMD contiguousV2.enabled=%d ga=%d\n", (int)resolved.contiguousV2.enabled,
+        (int)resolved.contiguousV2.groupA.size());
     return resolved;
+  }
+
   resolved.prefixScanWarpCount =
       std::max<int64_t>(1, hardware.baseSimtWarpCount);
 
@@ -396,6 +400,665 @@ describeStridedShortAddresses(const StageMemoryAccess &access,
 ///
 /// A straight-line Stage is admissible too: the fits are per-iteration slopes,
 /// which stay defined without a loop to amortise them over.
+//===- v2 contiguous dispatch hook (epoch-calibrated) ---------------------===//
+// Prices contiguous (stride==1) load/store streams with the v2 fitted
+// formulas (profiles .../contiguous_ldst_v2).  Context:
+//   straight-line stages -> Formula A per same-shape group (N=group size)
+//   loop stages          -> Formula B once per body (chain/indpt/store),
+//                           per-iteration contribution = P/K + m
+// Residency: footprint = N*bytes (per program) vs l2_cache_bytes.
+// Cells outside the fitted table keep the pre-existing fallbacks.
+//===----------------------------------------------------------------------===//
+
+static int64_t v2ElementCount(const StageMemoryAccess *a) {
+  int64_t count = 1;
+  for (int64_t extent : a->shape)
+    count *= extent;
+  return count;
+}
+
+static void mapContiguousV2Completion(
+    const LogicalStage &stage, const StageWorkload &work,
+    const StageModeProfile &profile, StageResourceCycles &resources,
+    bool simd, LayoutCoverage &layout,
+    std::vector<const StageMemoryAccess *> &claimed,
+    int64_t programCountHint) {
+  const auto &v2 = profile.contiguousV2;
+  if (!v2.enabled || v2.groupA.empty() && v2.loopB.empty() &&
+      v2.directTable.empty())
+    return;
+  // Measured per-program decay of contiguous prices as the launch spans
+  // more waves (DMA pipelines across wave boundaries): guard campaign fit,
+  // waves = ceil(programs / 56), factor = waves^-0.125 (1.0 within one
+  // wave).  Direct rows are one-wave co-residency prices via the clamped
+  // lookup, so the decay applies whenever hint exceeds one wave.
+  const double v2Waves =
+      std::max(1.0, double(std::max<int64_t>(1, programCountHint)) / 56.0);
+  // Formula B loop rows were calibrated with the mild decay; the
+  // straight-line analytical tier measured a steeper load-side decay
+  // (guard WDA fit: copies/adds decay as waves^-0.32, store-side grows
+  // slightly and keeps none).
+  // Loop bodies: joint fit from B_add_g224 (-5.9% at -0.05) and
+  // muls_add (36.6-wave launches nearly flat).
+  const double v2WaveDecay = std::pow(v2Waves, -0.05);
+  const double v2WaveDecayLoad = std::pow(v2Waves, -0.32);
+  constexpr double kCyclesPerNano = 1.0; // SYS_CNT at 1 GHz
+  const bool hasLoop = stage.features.hasLoop;
+  // Admission defaults encode the 100-case evidence (RUNV4..V9): loop-body
+  // cells need a loop-context P-axis / W-axis recalibration and the simt
+  // straight-line cells overprice small simt kernels, so the shipped
+  // behavior claims only simd straight-line groups at >=16 programs.
+  // The recalibration campaign opens domains through the environment:
+  //   ASCEND_V2_ALLOW_LOOP=1    admit Formula B (loop body) claims
+  //   ASCEND_V2_ALLOW_SIMT=1    admit simt claims
+  //   ASCEND_V2_MIN_PROGRAMS=N  minimum programCountHint (default 16)
+  // Full coverage: all contiguous accesses go through the v2 path.
+  // The admission env vars remain for A/B testing but default to open.
+  { const char *e = ::getenv("ASCEND_V2_DENY_LOOP");
+    if (e && *e && e[0] != '0') return; }
+  { const char *e = ::getenv("ASCEND_V2_DENY_SIMT");
+    if (e && *e && e[0] != '0' && !simd) return; }
+  const int64_t K = hasLoop ? std::max<int64_t>(1, stage.iterationCount) : 0;
+
+  // Collect eligible contiguous direct accesses.
+  std::vector<const StageMemoryAccess *> eligible;
+  for (const StageMemoryAccess &access : work.memoryAccesses) {
+    if (access.count <= 0.0)
+      continue;
+    const auto layoutClass = access.layoutClass();
+    if (layoutClass != StageMemoryAccess::LayoutClass::ContiguousShort &&
+        layoutClass != StageMemoryAccess::LayoutClass::ContiguousWide)
+      continue;
+    if (!access.hasStaticLayout() || access.elementBits / 8 <= 0)
+      continue;
+    if (access.addressDependsOnLoadedIndex ||
+        access.addressHasNonAffineTensorComputation ||
+        access.addressHasTensorControlFlowSelection)
+      continue;
+    if (access.store && access.masked &&
+        access.activeElementRatio < 1.0 - 1.0e-9)
+      continue; // partial-mask store keeps the RMW completion path
+    if (std::any_of(claimed.begin(), claimed.end(),
+                    [&access](const StageMemoryAccess *c) {
+                      return c == &access;
+                    }))
+      continue;
+    eligible.push_back(&access);
+  }
+  if (eligible.empty()) {
+    fprintf(stderr, "[cv2-hook] %s hint=%lld simd=%d eligible=EMPTY nacc=%d\n",
+            stage.id.c_str(), (long long)programCountHint, (int)simd,
+            (int)work.memoryAccesses.size());
+    return;
+  }
+  fprintf(stderr, "[cv2-hook] %s hint=%lld simd=%d elig=%d loop=%d\n",
+          stage.id.c_str(), (long long)programCountHint, (int)simd,
+          (int)eligible.size(), (int)hasLoop);
+
+  const auto ebName = [](int64_t eb) -> const char * {
+    switch (eb) {
+    case 1: return "int8";
+    case 2: return "fp16";
+    case 4: return "fp32";
+    case 8: return "int64";
+    default: return nullptr;
+    }
+  };
+
+  if (hasLoop) {
+    // ---- Formula B: one evaluation for the whole loop body --------------
+    // Units: the stage estimator multiplies charged resources by
+    // stage.iterationCount, so every price added here is the cost of ONE
+    // loop iteration for one program.  Coverage is TOTAL: every contiguous
+    // access in a loop body is claimed by v2 - via the calF2 direct-row
+    // fit when the geometry was calibrated, otherwise via the generic
+    // per-op analytical - so the legacy curves never price contiguous
+    // streams.
+    int64_t domBytes = 0, loadBytes = 0, storeBytes = 0;
+    int64_t nLoads = 0, nStores = 0;
+    for (const StageMemoryAccess *access : eligible) {
+      const int64_t instances = std::max<int64_t>(
+          1, static_cast<int64_t>(std::llround(access->count)));
+      const int64_t bytes = v2ElementCount(access) *
+                            (access->elementBits / 8) * instances;
+      domBytes = std::max(domBytes, bytes / instances);
+      (access->store ? storeBytes : loadBytes) += bytes;
+      ++(access->store ? nStores : nLoads);
+    }
+
+    auto claimAll = [&]() {
+      for (const StageMemoryAccess *access : eligible) {
+        claimed.push_back(access);
+        const int64_t bytes = v2ElementCount(access) *
+                              (access->elementBits / 8);
+        if (access->store) {
+          layout.storeBytes += bytes;
+          layout.storeOperations += 1.0;
+          layout.storeWarpInstructions +=
+              llvm::divideCeil(v2ElementCount(access), int64_t(32));
+          layout.storeShapes[std::make_pair(bytes,
+              v2ElementCount(access))] += 1.0;
+        } else {
+          layout.loadBytes += bytes;
+          layout.loadOperations += 1.0;
+          layout.loadWarpInstructions +=
+              llvm::divideCeil(v2ElementCount(access), int64_t(32));
+          layout.loadShapes[std::make_pair(bytes,
+              v2ElementCount(access))] += 1.0;
+        }
+      }
+    };
+
+    // ---- Tier 1a: calF2 tiny-store loop bodies --------------------------
+    // A loop body whose stores are all tiny (<=128B) beside a large
+    // dominant chunk (>=512B) runs a latency chain: the tiny dependent IO
+    // serializes the early iterations until the DMA pipeline fills
+    // (measured on the reduce-sum epilogue geometry: the K=4 row sits far
+    // above the K>=16 linear trend while the marginal stays ~117 ns/iter).
+    // The tiny_direct rows carry the effect; the excess of the measured
+    // row over the linear T(K)=A+K*m trend is charged per iteration with
+    // tiny_store_chain_share (the rest overlaps the route boundary).
+    if (K >= 1 && K <= 8 && !v2.tinyDirectTable.empty() && nStores >= 1) {
+      int64_t maxStoreChunk = 0;
+      for (const StageMemoryAccess *access : eligible) {
+        if (!access->store)
+          continue;
+        maxStoreChunk = std::max<int64_t>(
+            maxStoreChunk,
+            v2ElementCount(access) * (access->elementBits / 8));
+      }
+      if (maxStoreChunk > 0 && maxStoreChunk <= 128 && domBytes >= 512) {
+        double bestChunk = 1e30;
+        int64_t bestB = 0;
+        for (const auto &row : v2.tinyDirectTable) {
+          int64_t rnL = 0, rns = 0, rB = 0, rK = 0, rG = 0;
+          if (std::sscanf(row.first.c_str(),
+                          "n%lld_s%lld_b%lld_k%lld_g%lld",
+                          (long long *)&rnL, (long long *)&rns,
+                          (long long *)&rB, (long long *)&rK,
+                          (long long *)&rG) != 5)
+            continue;
+          if (rnL != nLoads || rns != nStores)
+            continue;
+          const double chunkDist =
+              std::fabs(std::log2(double(std::max<int64_t>(1, domBytes))) -
+                        std::log2(double(std::max<int64_t>(1, rB))));
+          if (chunkDist < bestChunk) {
+            bestChunk = chunkDist;
+            bestB = rB;
+          }
+        }
+        if (bestChunk <= 1.0 && bestB > 0) {
+          std::map<int64_t, std::map<int64_t, double>> tkByGrid;
+          for (const auto &row : v2.tinyDirectTable) {
+            int64_t rnL = 0, rns = 0, rB = 0, rK = 0, rG = 0;
+            if (std::sscanf(row.first.c_str(),
+                            "n%lld_s%lld_b%lld_k%lld_g%lld",
+                            (long long *)&rnL, (long long *)&rns,
+                            (long long *)&rB, (long long *)&rK,
+                            (long long *)&rG) != 5)
+              continue;
+            if (rnL != nLoads || rns != nStores || rB != bestB)
+              continue;
+            if (row.second > 0.0)
+              tkByGrid[rG][rK] = row.second;
+          }
+          if (!tkByGrid.empty()) {
+            // log2-grid interpolation of T(K) at the hint
+            const double lgHint =
+                std::log2(double(std::max<int64_t>(1, programCountHint)));
+            auto loIt = tkByGrid.lower_bound(
+                std::max<int64_t>(1, programCountHint));
+            if (loIt != tkByGrid.begin())
+              --loIt;
+            auto hiIt = std::next(loIt);
+            if (loIt->first == programCountHint || hiIt == tkByGrid.end())
+              hiIt = loIt;
+            const double lgLo = std::log2(double(loIt->first));
+            const double lgHi =
+                std::log2(double(std::max<int64_t>(1, hiIt->first)));
+            const double frac =
+                (hiIt != loIt && lgHi > lgLo)
+                    ? std::clamp((lgHint - lgLo) / (lgHi - lgLo), 0.0, 1.0)
+                    : 0.0;
+            std::map<int64_t, double> tk;
+            for (const auto &kv : loIt->second)
+              tk[kv.first] = kv.second;
+            for (const auto &kv : hiIt->second) {
+              auto it = tk.find(kv.first);
+              if (it != tk.end())
+                it->second = (1.0 - frac) * it->second + frac * kv.second;
+              else
+                tk[kv.first] = kv.second;
+            }
+            if (!tk.empty()) {
+              // linear trend: median pairwise slope, centre-K residual
+              std::vector<double> slopes;
+              for (auto a = tk.begin(); a != tk.end(); ++a)
+                for (auto b = std::next(a); b != tk.end(); ++b)
+                  slopes.push_back((b->second - a->second) /
+                                   double(b->first - a->first));
+              double m = 0.0;
+              if (!slopes.empty()) {
+                std::sort(slopes.begin(), slopes.end());
+                m = slopes[slopes.size() / 2];
+              }
+              m = std::max(0.0, m);
+              auto centerIt = tk.begin();
+              std::advance(centerIt, tk.size() / 2);
+              const double A =
+                  std::max(0.0, centerIt->second - centerIt->first * m);
+              // latency-chain excess of the measured row at (nearest) K
+              double rowT = -1.0;
+              auto exactK = tk.find(K);
+              if (exactK != tk.end()) {
+                rowT = exactK->second;
+              } else {
+                int64_t bestKdist = 1LL << 62;
+                for (const auto &kv : tk) {
+                  const int64_t d = std::abs(kv.first - K);
+                  if (d < bestKdist) {
+                    bestKdist = d;
+                    rowT = kv.second;
+                  }
+                }
+              }
+              const double excess =
+                  rowT >= 0.0
+                      ? std::max(0.0, rowT - (A + double(K) * m))
+                      : 0.0;
+              const double perIter =
+                  (A * v2.directFixedShare + double(K) * m +
+                   excess * v2.tinyStoreChainShare) /
+                  double(K) * v2WaveDecay;
+              if (perIter > 0.0) {
+                resources.load += perIter;
+                claimAll();
+                return;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // Generic per-op analytical per iteration (the fallback that stays
+    // even when no direct row is close): loads and stores charge their
+    // own engine service and the stage estimator models the overlap of
+    // the two streams (pipelined branches take the max service).
+    auto analyticalPerIter = [&]() {
+      double anaLoad = 0.0, anaStore = 0.0;
+      for (const StageMemoryAccess *access : eligible) {
+        const int64_t instances = std::max<int64_t>(
+            1, static_cast<int64_t>(std::llround(access->count)));
+        const int64_t b = v2ElementCount(access) *
+                          (access->elementBits / 8);
+        if (simd) {
+          const double per =
+              (access->store ? profile.storeOperationSetupCycles
+                             : profile.loadOperationSetupCycles) +
+              double(b) * (access->store
+                               ? 1.0 / profile.storeBytesPerCycle
+                               : 1.0 / profile.loadBytesPerCycle);
+          (access->store ? anaStore : anaLoad) += per * instances;
+        } else {
+          const double per =
+              double(llvm::divideCeil(v2ElementCount(access) * instances,
+                                      int64_t(32))) /
+              (access->store ? profile.storeWarpInstructionsPerCycle
+                             : profile.loadWarpInstructionsPerCycle);
+          (access->store ? anaStore : anaLoad) += per;
+        }
+      }
+      return std::make_pair(anaLoad, anaStore);
+    };
+
+    // ---- Tier 1: calF2 direct-row fit -----------------------------------
+    // Rows were measured at launches of up to 224 programs (4 waves); their
+    // per-program prices do not compose with > 4-wave slot arithmetic
+    // (muls_add: the g224 row x 37 slot-iters measured 2.6x over), so the
+    // tier is gated to hint <= 224 and larger launches fall to the
+    // aggregate envelope.  Within the gate the per-iteration price is
+    // interpolated across ALL measured grids in log2-grid space, then
+    // T(K) = A + K*m is fitted over the swept K rows.
+    if (programCountHint <= 224) {
+      double bestChunk = 1e30;
+      int64_t bestB = 0;
+      for (const auto &row : v2.directTable) {
+        int64_t rnL = 0, rns = 0, rB = 0, rK = 0, rG = 0;
+        if (std::sscanf(row.first.c_str(),
+                        "n%lld_s%lld_b%lld_k%lld_g%lld",
+                        (long long *)&rnL, (long long *)&rns,
+                        (long long *)&rB, (long long *)&rK,
+                        (long long *)&rG) != 5)
+          continue;
+        if (rnL != nLoads || rns != nStores)
+          continue;
+        const double chunkDist =
+            std::fabs(std::log2(double(std::max<int64_t>(1, domBytes))) -
+                      std::log2(double(std::max<int64_t>(1, rB))));
+        if (chunkDist < bestChunk) {
+          bestChunk = chunkDist;
+          bestB = rB;
+        }
+      }
+      if (bestChunk <= 1.0 && bestB > 0) {
+        // grid -> (K -> T) of the chosen shape+chunk
+        std::map<int64_t, std::map<int64_t, double>> tkByGrid;
+        for (const auto &row : v2.directTable) {
+          int64_t rnL = 0, rns = 0, rB = 0, rK = 0, rG = 0;
+          if (std::sscanf(row.first.c_str(),
+                          "n%lld_s%lld_b%lld_k%lld_g%lld",
+                          (long long *)&rnL, (long long *)&rns,
+                          (long long *)&rB, (long long *)&rK,
+                          (long long *)&rG) != 5)
+            continue;
+          if (rnL != nLoads || rns != nStores || rB != bestB)
+            continue;
+          if (row.second > 0.0)
+            tkByGrid[rG][rK] = row.second;
+        }
+        if (!tkByGrid.empty()) {
+          // log2-grid interpolation of T(K) at the hint
+          const double lgHint = std::log2(double(std::max<int64_t>(1,
+              programCountHint)));
+          auto loIt = tkByGrid.lower_bound(programCountHint);
+          if (loIt != tkByGrid.begin())
+            --loIt;
+          auto hiIt = std::next(loIt);
+          if (loIt->first == programCountHint || hiIt == tkByGrid.end())
+            hiIt = loIt;
+          std::vector<std::pair<int64_t, double>> tk;
+          for (const auto &kv : loIt->second) {
+            const int64_t K = kv.first;
+            double tLo = kv.second;
+            auto hiK = hiIt->second.find(K);
+            if (hiK == hiIt->second.end()) {
+              // K sets may differ across grids: nearest K in the hi grid
+              double best = -1.0;
+              int64_t bestKdist = 1LL << 62;
+              for (const auto &kv2 : hiIt->second) {
+                const int64_t d = kv2.first > K ? kv2.first - K
+                                                : K - kv2.first;
+                if (d < bestKdist) {
+                  bestKdist = d;
+                  best = kv2.second;
+                }
+              }
+              if (best < 0.0)
+                continue;
+              hiK = hiIt->second.emplace(K, best).first;
+            }
+            double tHi = hiK->second;
+            double t;
+            if (hiIt == loIt) {
+              t = tLo;
+            } else {
+              // geometric interpolation: per-iteration price falls
+              // concavely with co-residency, linear blending overweights
+              const double lgLo = std::log2(double(loIt->first));
+              const double lgHi = std::log2(double(hiIt->first));
+              const double w = std::min(1.0, std::max(0.0,
+                  (lgHi - lgLo) > 0.0
+                      ? (lgHint - lgLo) / (lgHi - lgLo)
+                      : 0.0));
+              t = std::exp(std::log(std::max(1e-9, tLo)) * (1.0 - w) +
+                           std::log(std::max(1e-9, tHi)) * w);
+            }
+            tk.emplace_back(K, t);
+          }
+          if (!tk.empty()) {
+            double m = 0.0, mHi = 0.0, A = 0.0;
+            if (tk.size() >= 2) {
+              std::vector<double> slopes;
+              for (size_t i = 0; i < tk.size(); ++i)
+                for (size_t j = i + 1; j < tk.size(); ++j) {
+                  const double dK = double(tk[j].first - tk[i].first);
+                  if (dK > 0)
+                    slopes.push_back((tk[j].second - tk[i].second) / dK);
+                }
+              std::sort(slopes.begin(), slopes.end());
+              m = slopes[slopes.size() / 2];
+              const int64_t midK = tk[tk.size() / 2].first;
+              std::vector<double> hiSlopes;
+              for (const auto &point : tk)
+                if (point.first > midK)
+                  for (const auto &base : tk)
+                    if (base.first <= midK) {
+                      const double dK = double(point.first - base.first);
+                      if (dK > 0)
+                        hiSlopes.push_back(
+                            (point.second - base.second) / dK);
+                    }
+              if (!hiSlopes.empty()) {
+                std::sort(hiSlopes.begin(), hiSlopes.end());
+                mHi = hiSlopes[hiSlopes.size() / 2];
+                if (mHi < m * 1.05)
+                  mHi = m;
+              }
+              std::sort(tk.begin(), tk.end(),
+                        [](const std::pair<int64_t, double> &a,
+                           const std::pair<int64_t, double> &b) {
+                          return a.first < b.first;
+                        });
+              const int64_t centerK = tk[tk.size() / 2].first;
+              const double centerT = tk[tk.size() / 2].second;
+              A = centerT - double(centerK) * m;
+              if (A < 0.0)
+                A = 0.0;
+            } else {
+              m = tk.front().second * 0.5 / double(tk.front().first);
+              A = tk.front().second - double(tk.front().first) * m;
+            }
+            const double chunkScale =
+                std::min(2.0, std::max(0.5,
+                    double(domBytes) / double(std::max<int64_t>(1, bestB))));
+            const double useM = (K > 16 && mHi > m) ? mHi : m;
+            const double share = std::min(1.0,
+                std::max(0.0, v2.directFixedShare));
+            const double perIter =
+                (A * share + double(K) * useM * chunkScale) /
+                double(K) * kCyclesPerNano * v2WaveDecay;
+            if (perIter > 0.0) {
+              fprintf(stderr,
+                      "[cv2-tier1] %s hint=%lld A=%.1f m=%.3f perIter=%.2f\n",
+                      stage.id.c_str(), (long long)programCountHint, A, m,
+                      perIter);
+              resources.load += perIter;
+              claimAll();
+              return;
+            }
+          }
+        }
+      }
+    }
+
+    // ---- Tier 2: aggregate-bandwidth envelope (simd) --------------------
+    // The pipelined-loop regime amortizes per-operation startup: one
+    // iteration moves bodyBytes at the aggregate MTE rate with a single
+    // iteration startup (calG: ~83 B/cycle across a full 56-program
+    // wave).  This is the calibrated fallback for geometries the direct
+    // table does not cover; both streams charge into the same envelope
+    // (the measured mixed-body prices it approximates include both).
+    if (simd && profile.independentLoadGroupBytesPerCycle > 0.0) {
+      const double perIter =
+          (profile.independentLoadGroupIterationStartupCycles +
+           double(loadBytes + storeBytes) /
+               profile.independentLoadGroupBytesPerCycle) *
+          v2WaveDecay;
+      resources.load += perIter * kCyclesPerNano;
+      claimAll();
+      return;
+    }
+    // ---- Tier 3: generic per-op analytical (the kept fallback) ----------
+    const std::pair<double, double> ana = analyticalPerIter();
+    resources.load += ana.first * kCyclesPerNano;
+    resources.store += ana.second * kCyclesPerNano;
+    claimAll();
+    return;
+  }
+
+  // ---- straight-line stages: Formula A per same-shape group ------------
+  std::map<std::tuple<bool, int64_t, int64_t, bool>,
+           std::vector<const StageMemoryAccess *>>
+      groups;
+  for (const StageMemoryAccess *access : eligible) {
+    const auto key = std::make_tuple(
+        access->store, v2ElementCount(access), access->elementBits / 8,
+        access->masked);
+    groups[key].push_back(access);
+  }
+  int64_t footprint = 0;
+  for (const StageMemoryAccess *access : eligible)
+    footprint += v2ElementCount(access) * (access->elementBits / 8);
+  const char *res = footprint <= v2.l2CacheBytes ? "warm" : "cold";
+  for (auto &groupEntry : groups) {
+    auto &members = groupEntry.second;
+    const StageMemoryAccess *first = members.front();
+    const char *dtype = ebName(first->elementBits / 8);
+    if (!dtype)
+      continue;
+    const int64_t bytes = v2ElementCount(first) * (first->elementBits / 8);
+    int64_t bucket = 1024;
+    double bestDist = 1e30;
+    for (int64_t b :
+         {32, 64, 128, 256, 512, 1024, 4096, 16384}) {
+      const double d = std::fabs(std::log2((double)bytes) -
+                                 std::log2((double)b));
+      if (d < bestDist) {
+        bestDist = d;
+        bucket = b;
+      }
+    }
+
+    const char *direction = first->store ? "store" : "load";
+    const std::string key = std::string(direction) + "/" + dtype + "/" +
+                            std::to_string(bucket) + "/" + res;
+    auto it = v2.groupA.find(key);
+    if (it == v2.groupA.end() && !simd) {
+      // simt cells are warp-count dependent; try the resolved W first.
+      it = v2.groupA.find(key + "/w" +
+                          std::to_string(profile.activeWarpCount));
+    }
+    if (it == v2.groupA.end()) {
+      // Unfitted cell: v2 still owns the group through the generic per-op
+      // analytical (startup + B/rate), so the legacy curves never price
+      // contiguous streams.
+      double ana = 0.0;
+      for (const StageMemoryAccess *access : members) {
+        const int64_t b = v2ElementCount(access) *
+                          (access->elementBits / 8);
+        if (simd) {
+          const bool isStore = access->store;
+          const double decay = isStore ? 1.0 : v2WaveDecayLoad;
+          ana += ((access->store ? profile.storeOperationSetupCycles
+                                 : profile.loadOperationSetupCycles) +
+                  double(b) *
+                      (isStore ? 1.0 / profile.storeBytesPerCycle
+                               : 1.0 / profile.loadBytesPerCycle)) *
+                 decay;
+        } else {
+          ana += double(llvm::divideCeil(v2ElementCount(access),
+                                         int64_t(32))) /
+                 (access->store ? profile.storeWarpInstructionsPerCycle
+                                : profile.loadWarpInstructionsPerCycle);
+        }
+      }
+      if (!simd)
+        ana *= v2WaveDecay;
+      for (const StageMemoryAccess *access : members) {
+        claimed.push_back(access);
+        if (access->store) {
+          resources.store += ana / double(members.size());
+          const int64_t bmem = v2ElementCount(access) *
+                               (access->elementBits / 8);
+          layout.storeBytes += bmem;
+          layout.storeOperations += 1.0;
+          layout.storeWarpInstructions +=
+              llvm::divideCeil(v2ElementCount(access), int64_t(32));
+          layout.storeShapes[std::make_pair(
+              bmem, v2ElementCount(access))] += 1.0;
+        } else {
+          resources.load += ana / double(members.size());
+          const int64_t bmem = v2ElementCount(access) *
+                               (access->elementBits / 8);
+          layout.loadBytes += bmem;
+          layout.loadOperations += 1.0;
+          layout.loadWarpInstructions +=
+              llvm::divideCeil(v2ElementCount(access), int64_t(32));
+          layout.loadShapes[std::make_pair(
+              bmem, v2ElementCount(access))] += 1.0;
+        }
+      }
+      continue;
+    }
+    const contiguous_v2::ContiguousV2Group &g = it->second;
+    const int64_t n = static_cast<int64_t>(members.size());
+
+    double total;
+    bool fitted = true;
+    if (n == 1) {
+      // Single access: the fitted first-term carries issue overhead the
+      // legacy model bills in separate buckets, so price singles with the
+      // legacy-consistent analytical formula - the v2 path covers them at
+      // baseline-identical accuracy.
+      const int64_t elems = v2ElementCount(first);
+      if (simd) {
+        const double setup =
+            (first->store ? profile.storeOperationSetupCycles
+                          : profile.loadOperationSetupCycles) *
+            (first->store ? 1.0 : v2WaveDecayLoad);
+        const double rate =
+            bytes * (first->store
+                         ? 1.0 / profile.storeBytesPerCycle
+                         : 1.0 / profile.loadBytesPerCycle);
+        total = setup + rate * (first->store ? 1.0 : v2WaveDecayLoad);
+      } else {
+        total = static_cast<double>(llvm::divideCeil(elems, int64_t(32))) /
+                (first->store ? profile.storeWarpInstructionsPerCycle
+                              : profile.loadWarpInstructionsPerCycle);
+        total *= v2WaveDecay;
+      }
+      fitted = false;
+    } else {
+      if (g.Q > 0 && n > g.Q)
+        total = g.first + (g.Q - 1) * g.marginal + (n - g.Q) * g.cTransfer;
+      else
+        total = g.first + (n - 1) * g.marginal;
+    }
+    if (!(total > 0.0))
+      continue;
+    double ns;
+    if (fitted) {
+      const double pFac = contiguous_v2::pAxisFactor(
+          profile.contiguousV2, first->store ? "storeonly" : "loadsum",
+          simd ? "simd" : "simt", res, programCountHint);
+      ns = total * pFac * kCyclesPerNano;
+    } else {
+      ns = total; // analytical: the legacy fallback has no P factor; the
+                  // contention enters through the wave arithmetic
+    }
+    for (const StageMemoryAccess *access : members) {
+      claimed.push_back(access);
+      if (access->store) {
+        resources.store += ns / members.size();
+        layout.storeBytes += bytes;
+        layout.storeOperations += 1.0;
+        layout.storeWarpInstructions +=
+            llvm::divideCeil(v2ElementCount(access), int64_t(32));
+        layout.storeShapes[std::make_pair(bytes, v2ElementCount(access))] += 1.0;
+      } else {
+        resources.load += ns / members.size();
+        layout.loadBytes += bytes;
+        layout.loadOperations += 1.0;
+        layout.loadWarpInstructions +=
+            llvm::divideCeil(v2ElementCount(access), int64_t(32));
+        layout.loadShapes[std::make_pair(bytes, v2ElementCount(access))] += 1.0;
+      }
+    }
+  }
+}
+
 static void mapStridedShortMemoryCompletion(
     const LogicalStage &stage, const StageWorkload &work,
     const StageModeProfile &profile, StageResourceCycles &resources, bool simd,
@@ -1233,7 +1896,8 @@ static std::optional<StageResourceCycles>
 mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
             StageMode mode, int64_t superblockFactor, bool wholeSimt,
             std::optional<double> calibratedReduction = std::nullopt,
-            StageMemoryCost fitted = {}) {
+            StageMemoryCost fitted = {},
+            int64_t programCountHint = 1) {
   StageResourceCycles resources;
   // Accesses priced by the closed-form strided-direct mechanism.  The masked
   // strided copy floor yields on them and stays in force for everything else.
@@ -1719,6 +2383,13 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
     // further down, so both can see which accesses this pass already priced.
     mapStridedShortMemoryCompletion(stage, work, profile, resources, simd,
                                     layout, stridedShortAlreadyClaimed);
+    // v2 epoch-calibrated contiguous pricing claims before the legacy curves.
+    fprintf(stderr, "[cv2-mw] stage=%s hint=%lld cv2_enabled=%d ga=%d\n", stage.id.c_str(),
+        (long long)programCountHint,
+        (int)profile.contiguousV2.enabled,
+        (int)profile.contiguousV2.groupA.size());
+    mapContiguousV2Completion(stage, work, profile, resources, simd, layout,
+                              stridedShortAlreadyClaimed, programCountHint);
     // The store-group curve below must not price a store this pass already did.
     const bool storesClaimedByClosedForm = std::any_of(
         stridedShortAlreadyClaimed.begin(), stridedShortAlreadyClaimed.end(),
@@ -1734,6 +2405,12 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
           continue;
         }
         reachedFirstLoad = true;
+        if (std::find(stridedShortAlreadyClaimed.begin(),
+                      stridedShortAlreadyClaimed.end(), &access) !=
+            stridedShortAlreadyClaimed.end())
+          // v2 already owns this stream; the flat-group envelope describes
+          // one uninterrupted sequence, so the prefix ends here.
+          break;
         auto shape = accessShape(access);
         if (access.count <= 0.0 || !shape || access.elementBits != 32 ||
             !access.isFlatContiguous())
@@ -2574,6 +3251,9 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
   }
   mapMaskedStridedCopyCompletion(stage, work, profile, resources,
                                  stridedShortAlreadyClaimed);
+  if (stage.costModelKind == StageCostModelKind::RowwiseReduction)
+    fprintf(stderr, "[cv2-final] %s load=%.2f store=%.2f\n",
+            stage.id.c_str(), resources.load, resources.store);
   return materializeControlFlow(stage, mode, resources, profile.controlFlow);
 }
 
@@ -3966,7 +4646,8 @@ bool HardwareProfile::isValid() const {
 llvm::Expected<StageCostTable>
 StageCostEvaluator::evaluate(const StagePartition &partition,
                              const HardwareProfile &profile,
-                             bool collectCalibrationEstimates) const {
+                             bool collectCalibrationEstimates,
+                             int64_t programCountHint) const {
   if (partition.stages.empty())
     return llvm::createStringError(
         std::errc::invalid_argument,
@@ -4149,7 +4830,7 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
           executionStage, modeProfile, implementation.mode,
           implementation.superblockFactor,
           implementation.mode == StageMode::SIMT && !implementation.localScope,
-          std::nullopt, fitted);
+          std::nullopt, fitted, programCountHint);
       if (!resources)
         continue;
       auto mapping =
@@ -4373,7 +5054,8 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
               mapWorkload(stage, modeProfile, implementation.mode,
                           implementation.superblockFactor,
                           implementation.mode == StageMode::SIMT &&
-                              !implementation.localScope);
+                              !implementation.localScope,
+                          std::nullopt, {}, programCountHint);
           if (!fullResources)
             continue;
           const double unpartitionedTotal =
