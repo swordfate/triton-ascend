@@ -4447,6 +4447,7 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
         }
         return true;
       };
+      const double runFloor = 400.0;
       auto hasDependency = [&](const std::string &a, const std::string &b) {
         for (const StageDependency &dep : costTable.dependencies) {
           if ((dep.sourceStage == a && dep.targetStage == b) ||
@@ -4461,26 +4462,28 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
       int64_t overlappedStages = 0;
       double overlappedCycles = 0.0;
       std::vector<size_t> run;
+      std::string rejectTrace;
       auto flushRun = [&]() {
         if (run.size() < 2)
           return;
         size_t maxIdx = run.front();
-        double total = 0.0;
-        for (size_t idx : run) {
-          total += plan.logicalStageCycles[idx];
+        for (size_t idx : run)
           if (plan.logicalStageCycles[idx] >
               plan.logicalStageCycles[maxIdx])
             maxIdx = idx;
+        // The max stage keeps its full price (transfer + launch); every
+        // other stage of the run contributes only its residual above the
+        // DMA launch floor (their launches pipeline completely).
+        for (size_t idx : run) {
+          if (idx == maxIdx)
+            continue;
+          const double residual =
+              std::max(0.0, plan.logicalStageCycles[idx] - runFloor);
+          plan.totalCycles -= plan.logicalStageCycles[idx] - residual;
+          overlappedStages += 1;
+          overlappedCycles +=
+              plan.logicalStageCycles[idx] - residual;
         }
-        const double keep = plan.logicalStageCycles[maxIdx];
-        for (size_t idx : run)
-          if (idx != maxIdx) {
-            plan.totalCycles -= plan.logicalStageCycles[idx];
-            overlappedStages += 1;
-            overlappedCycles += plan.logicalStageCycles[idx];
-          }
-        (void)total;
-        (void)keep;
       };
       for (size_t idx = 0; idx < costTable.stages.size(); ++idx) {
         const LogicalStageCost &stage = costTable.stages[idx];
@@ -4493,8 +4496,24 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
             flushRun();
             run.clear();
           }
+          std::string why = stage.workload.memoryAccesses.empty()
+                                ? "no-accesses"
+                                : "noncontig-layout";
+          if (stage.features.hasAtomicMemory)
+            why = "atomic";
+          if (stage.features.hasDot)
+            why = "dot";
+          if (stage.workload.indirectLoadBytes > 0.0 ||
+              stage.workload.indirectStoreBytes > 0.0)
+            why = "indirect";
+          if (stage.workload.scalarOperations > 0.0)
+            why = "scalar";
+          if (plan.logicalStageCycles[idx] <= 0.0)
+            why += ":unpriced";
+          rejectTrace += stage.id + "[" + why + "];";
           continue;
         }
+        rejectTrace += stage.id + "[in];";
         if (!run.empty()) {
           const LogicalStageCost &prev = costTable.stages[run.back()];
           if (hasDependency(prev.id, stage.id)) {
@@ -4505,6 +4524,8 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
         run.push_back(idx);
       }
       flushRun();
+      plan.diagnostic<std::string>("contiguous_mem_overlap_trace") =
+          rejectTrace;
       if (overlappedStages > 0) {
         plan.diagnostic<int64_t>(
             "contiguous_mem_stage_overlap_stage_count") = overlappedStages;
