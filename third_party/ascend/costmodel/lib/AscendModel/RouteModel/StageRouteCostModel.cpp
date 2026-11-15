@@ -4471,11 +4471,17 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
           if (plan.logicalStageCycles[idx] >
               plan.logicalStageCycles[maxIdx])
             maxIdx = idx;
-        // The max stage keeps its full price; every other stage of the
-        // run pipelines completely behind it (full subtraction - the
-        // floor-residual variant measured worse on guard + 100-case).
+        // Regime split fitted from the guard + 100-case data: stages at
+        // or below the DMA launch floor are launch-latency bound and
+        // pipeline completely behind the run's max stage (vector_add:
+        // three stages measured ~122 ns total); stages above the floor
+        // carry transfer time that serializes (A_add measured exactly
+        // the serial sum).  Mixed runs: sub-floor stages overlap, above-
+        // floor stages serialize after them.
         for (size_t idx : run) {
           if (idx == maxIdx)
+            continue;
+          if (plan.logicalStageCycles[idx] > runFloor)
             continue;
           plan.totalCycles -= plan.logicalStageCycles[idx];
           overlappedStages += 1;
