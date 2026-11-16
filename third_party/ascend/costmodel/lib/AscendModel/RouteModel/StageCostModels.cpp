@@ -427,9 +427,11 @@ static void mapContiguousV2Completion(
     return;
   // Measured per-program decay of contiguous prices as the launch spans
   // more waves (DMA pipelines across wave boundaries): guard campaign fit,
-  // waves = ceil(programs / 56), factor = waves^-0.125 (1.0 within one
-  // wave).  Direct rows are one-wave co-residency prices via the clamped
-  // lookup, so the decay applies whenever hint exceeds one wave.
+  // waves = ceil(programs / 56).  Exponents are per mechanism: loop-body
+  // rows decay as waves^-0.05 (B_add_g224 fit), straight-line load-side
+  // prices as waves^-0.32 (guard WDA fit); both are 1.0 within one wave.
+  // Direct rows are one-wave co-residency prices via the clamped lookup, so
+  // the decay applies whenever hint exceeds one wave.
   const double v2Waves =
       std::max(1.0, double(std::max<int64_t>(1, programCountHint)) / 56.0);
   // Formula B loop rows were calibrated with the mild decay; the
@@ -836,7 +838,7 @@ static void mapContiguousV2Completion(
           auto exactIt = tkByGrid.find(programCountHint);
           std::map<int64_t, std::map<int64_t, double>>::iterator loIt;
           std::map<int64_t, std::map<int64_t, double>>::iterator hiIt;
-          if (exactIt != tkByGrid.end()) {
+          if (exactIt != tkByGrid.end() && exactIt->second.size() >= 2) {
             loIt = exactIt;
             hiIt = exactIt;
           } else {
@@ -1024,7 +1026,11 @@ static void mapContiguousV2Completion(
     const std::string key = std::string(direction) + "/" + dtype + "/" +
                             std::to_string(bucket) + "/" + res;
     auto it = maskedGroup ? v2.groupA.end() : v2.groupA.find(key);
-    if (it == v2.groupA.end() && !simd) {
+    // The simt /w<W> retry is for UNMASKED groups only: the bucket above was
+    // chosen at ACTIVE bytes for a masked group while the row formula prices
+    // full bytes - re-entering the table here would pair a row with the
+    // wrong byte count.
+    if (it == v2.groupA.end() && !simd && !maskedGroup) {
       // simt cells are warp-count dependent; try the resolved W first.
       it = v2.groupA.find(key + "/w" +
                           std::to_string(profile.activeWarpCount));
