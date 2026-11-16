@@ -674,3 +674,18 @@ MOV → 向量 load/store。全 lane 统计（wave_dump_summary.json）：
 112 个 program 会继续排布）。注意：仿真器 chip 是 96 条 lane
 （48 核 × 2 veccore），与真卡 56 AIV 不同；grid=112 在其上排布为
 "64 条单 program + 8 条双 program"。
+
+## 22. E14：P 轴曲线分解——T(P) 增长来自 dispatch 而非内存（2026-11-16，回应评审）
+
+- 脚本：`explore_contig/e14_p_decompose.py`；分析：`explore_contig_guard/p_axis_review_e14.md`
+- 五变体（ctl1 / ctlP / sumonly / ldmax / loadsum）× P 扫描，simd/warm，设备侧中位数：
+- 结果：纯标量 store 的 ctlP 单独复现整条 P 曲线（P=32: 3929 vs loadsum 4064）；
+  剥掉 ctlP 后 loadsum−ctlP ≈ 200-300ns 平坦（P 无关）；warm≡cold；
+  sumonly−ctlP（归约链）平坦 → 排除归约链主导。
+- 结论：P 轴曲线主导成分 = 每 block dispatch/prologue 墙钟（评审 4.2 成立）；
+  p_axis(P) 是占用/墙钟形状比，不是每程序内存单价；
+  与 boundary_residual(P) 存在同源叠加（dispatch 在两层各建模一次）。
+- 修正建议：dispatch 归 boundary_residual 一层（按 E14 ctlP 重标，当前
+  1705@56 低估于实差 ~3280）；pAxisFactor 在 P≤56 段应恒为 ~1，
+  高波段保留聚合衰减；group_a 按"整核行价"语义拟合。
+- scatter/compaction 的低网格行修复即本结论的应用（行值吸收了 dispatch）。
