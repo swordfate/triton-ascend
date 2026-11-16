@@ -4614,6 +4614,84 @@ completeCandidateCosts(const SimdSimtCostReport &report,
           : report.logicalProgramCountHint;
   const double simdBoundary =
       scores.allSimd - report.stageModel.allSimd.totalCycles;
+  // calH multi-stream boundary hiding: straight-line kernels with >=2
+  // pure-contiguous memory stages and streaming stores (>=512B chunks)
+  // overlap the launch boundary under the memory stream at 2-3-wave
+  // launches (vector_add/calH anchors).  Linear constant, no exponents.
+  {
+    const auto &stages = report.stageModel.stages;
+    const auto &plan = report.stageModel.allSimd;
+    bool straightLine = true;
+    int64_t memStages = 0;
+    bool streamsOk = true;
+    if (plan.legal && plan.logicalStageCycles.size() == stages.size()) {
+      for (size_t idx = 0; idx < stages.size(); ++idx) {
+        if (stages[idx].features.hasLoop &&
+            stages[idx].iterationCount > 1)
+          straightLine = false;
+        // A compute stage (dot/reduction/scan/atomic) disqualifies the
+        // pure-memory-stream hide: grid_stride_dot's contiguous operand
+        // tiles masked its dot.
+        const auto &feat = stages[idx].features;
+        if (feat.hasDot || feat.hasReduction || feat.hasPrefixScan ||
+            feat.hasAtomicMemory)
+          straightLine = false;
+        const auto &w = stages[idx].workload;
+        if (w.loadBytes <= 0.0 && w.storeBytes <= 0.0)
+          continue;
+        bool allContiguous = true;
+        for (const StageMemoryAccess &access : w.memoryAccesses) {
+          const auto lc = access.layoutClass();
+          if (lc != StageMemoryAccess::LayoutClass::ContiguousShort &&
+              lc != StageMemoryAccess::LayoutClass::ContiguousWide) {
+            allContiguous = false;
+            break;
+          }
+        }
+        if (!allContiguous) {
+          straightLine = false;
+          continue;
+        }
+        ++memStages;
+        for (const StageMemoryAccess &access : w.memoryAccesses) {
+          if (access.store) {
+            const int64_t sb = access.provenContiguousElements() *
+                               (access.elementBits / 8);
+            if (sb > 0 && sb < 512)
+              streamsOk = false;
+          }
+        }
+      }
+    } else {
+      straightLine = false;
+    }
+    // Physical: AutoBlockify caps resident programs at one wave (<=56
+    // physical cores).  Launch: the grid the kernel launched with (hint).
+    const int64_t physicalProgramCount = plan.runtimePhysicalProgramCount;
+    const int64_t launchProgramCount = fallbackPrograms > 0
+                                           ? fallbackPrograms
+                                           : physicalProgramCount;
+    const int64_t launchWaves = (launchProgramCount + 55) / 56;
+    fprintf(stderr,
+            "[hidedbg] straight=%d streamsOk=%d memStages=%lld launchWaves=%lld "
+            "legal=%d szMatch=%d\n",
+            (int)straightLine, (int)streamsOk, (long long)memStages,
+            (long long)launchWaves, (int)plan.legal,
+            (int)(plan.logicalStageCycles.size() == stages.size()));
+    if (straightLine && streamsOk && memStages >= 2) {
+      // Waves follow the LAUNCH program count (the hint), not the
+      // clamped slot count: vector_add hint=97 -> 2 waves.
+      const int64_t waves = launchWaves;
+      if (waves >= 2 && waves <= 3) {
+        constexpr double kMultiStreamHide = 640.0;
+        const double simdBoundary2 =
+            scores.allSimd - report.stageModel.allSimd.totalCycles;
+        scores.allSimd -= std::min(std::max(0.0, simdBoundary2),
+                                   kMultiStreamHide);
+      }
+    }
+  }
+
 
   const double simtBoundary =
       scores.allSimtOnly - report.stageModel.allSimt.totalCycles;

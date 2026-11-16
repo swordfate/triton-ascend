@@ -577,6 +577,12 @@ static void mapContiguousV2Completion(
       const bool storeBearing = nStores >= 1;
       if (storeBearing ? maxStoreChunk > 128 : !bodyMasked)
         maxStoreChunk = 0;
+      fprintf(stderr,
+              "[tinydbg] %s K=%lld nL=%lld nS=%lld dom=%lld maxSC=%lld "
+              "masked=%d",
+              stage.id.c_str(), (long long)K, (long long)nLoads,
+              (long long)nStores, (long long)domBytes,
+              (long long)maxStoreChunk, (int)bodyMasked);
       if (maxStoreChunk > 0 || bodyMasked) {
         double bestChunk = 1e30;
         int64_t bestB = 0;
