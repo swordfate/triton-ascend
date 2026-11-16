@@ -827,15 +827,26 @@ static void mapContiguousV2Completion(
             tkByGrid[rG][rK] = row.second;
         }
         if (!tkByGrid.empty()) {
-          // log2-grid interpolation of T(K) at the hint
+          // log2-grid interpolation of T(K) at the hint.  An exact grid
+          // hit uses that grid's FULL K set alone (stepping lo down to the
+          // grid below would shrink the K set to whatever the lower grid
+          // happens to carry).
           const double lgHint = std::log2(double(std::max<int64_t>(1,
               programCountHint)));
-          auto loIt = tkByGrid.lower_bound(programCountHint);
-          if (loIt != tkByGrid.begin())
-            --loIt;
-          auto hiIt = std::next(loIt);
-          if (loIt->first == programCountHint || hiIt == tkByGrid.end())
-            hiIt = loIt;
+          auto exactIt = tkByGrid.find(programCountHint);
+          std::map<int64_t, std::map<int64_t, double>>::iterator loIt;
+          std::map<int64_t, std::map<int64_t, double>>::iterator hiIt;
+          if (exactIt != tkByGrid.end()) {
+            loIt = exactIt;
+            hiIt = exactIt;
+          } else {
+            loIt = tkByGrid.lower_bound(programCountHint);
+            if (loIt != tkByGrid.begin())
+              --loIt;
+            hiIt = std::next(loIt);
+            if (hiIt == tkByGrid.end())
+              hiIt = loIt;
+          }
           std::vector<std::pair<int64_t, double>> tk;
           for (const auto &kv : loIt->second) {
             const int64_t K = kv.first;
