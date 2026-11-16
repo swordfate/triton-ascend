@@ -104,9 +104,18 @@ struct ContiguousV2Params {
 
 /// P-axis overlap factor: per-program price / price at P=1 (log2-P lerp,
 /// clamped at the table ends).  kind = "loadsum" | "storeonly".
+/// E14 decomposition (a pure scalar-store kernel reproduces the whole
+/// T(P) curve while the per-program memory/reduce unit price stays flat
+/// at 200-300 ns): inside one wave (P <= 56) the unit price does not
+/// depend on P - the growth is per-block dispatch/prologue, which the
+/// candidate-level boundary_residual(P) term owns.  The measured decay is
+/// therefore applied only above one wave (multi-wave aggregate-bandwidth
+/// amortization).
 inline double pAxisFactor(const ContiguousV2Params &params,
                           const std::string &kind, const char *engineShort,
                           const char *res, int64_t programCount) {
+  if (programCount > 0 && programCount <= 56)
+    return 1.0;
   const std::string key = kind + "/" + engineShort + "/" + res;
   auto it = params.pAxis.find(key);
   if (it == params.pAxis.end() || it->second.empty())
