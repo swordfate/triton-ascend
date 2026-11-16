@@ -2,7 +2,7 @@
 
 - 基线：提交 `2e9efcacb8`（"[Costmodel](fix) Keep launch-bound loops accurately priced
   after unified analysis (#3050)"）
-- 终版：分支 `calib/contiguous-ldst-950pr-v2-record`（tip `c5f7caeedf`）
+- 终版：分支 `calib/contiguous-ldst-950pr-v2-record`（tip `8d64ea4187`）
 - 代码主体：`third_party/ascend/costmodel/lib/AscendModel/RouteModel/StageCostModels.cpp`
   （`mapContiguousV2Completion`，基线中不存在，终版约 1715–2560 行）与
   `include/AscendModel/RouteModel/ContiguousLdStV2CostModel.h`
