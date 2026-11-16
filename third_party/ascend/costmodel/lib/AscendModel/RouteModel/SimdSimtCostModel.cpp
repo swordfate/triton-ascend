@@ -4672,12 +4672,6 @@ completeCandidateCosts(const SimdSimtCostReport &report,
                                            ? fallbackPrograms
                                            : physicalProgramCount;
     const int64_t launchWaves = (launchProgramCount + 55) / 56;
-    fprintf(stderr,
-            "[hidedbg] straight=%d streamsOk=%d memStages=%lld launchWaves=%lld "
-            "legal=%d szMatch=%d\n",
-            (int)straightLine, (int)streamsOk, (long long)memStages,
-            (long long)launchWaves, (int)plan.legal,
-            (int)(plan.logicalStageCycles.size() == stages.size()));
     if (straightLine && streamsOk && memStages >= 2) {
       // Waves follow the LAUNCH program count (the hint), not the
       // clamped slot count: vector_add hint=97 -> 2 waves.

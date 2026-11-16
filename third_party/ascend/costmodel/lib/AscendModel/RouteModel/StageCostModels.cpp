@@ -81,8 +81,6 @@ resolveModeProfile(const HardwareProfile &hardware,
   StageModeProfile resolved =
       implementation.mode == StageMode::SIMD ? hardware.simd : hardware.simt;
   if (implementation.mode == StageMode::SIMD) {
-    fprintf(stderr, "[cv2-resolve] SIMD contiguousV2.enabled=%d ga=%d\n", (int)resolved.contiguousV2.enabled,
-        (int)resolved.contiguousV2.groupA.size());
     return resolved;
   }
 
@@ -462,13 +460,15 @@ static void mapContiguousV2Completion(
 
   // Collect eligible contiguous direct accesses.
   std::vector<const StageMemoryAccess *> eligible;
+  bool eligibleContiguousLoads = false;
   for (const StageMemoryAccess &access : work.memoryAccesses) {
     if (access.count <= 0.0)
       continue;
     const auto layoutClass = access.layoutClass();
     if (layoutClass != StageMemoryAccess::LayoutClass::ContiguousShort &&
-        layoutClass != StageMemoryAccess::LayoutClass::ContiguousWide)
+        layoutClass != StageMemoryAccess::LayoutClass::ContiguousWide) {
       continue;
+    }
     if (!access.hasStaticLayout() || access.elementBits / 8 <= 0)
       continue;
     if (access.addressDependsOnLoadedIndex ||
@@ -483,17 +483,45 @@ static void mapContiguousV2Completion(
                       return c == &access;
                     }))
       continue;
+    if (!access.store)
+      eligibleContiguousLoads = true;
     eligible.push_back(&access);
   }
+  // Mixed-stream stages: a small-row strided load shares the DMA engines
+  // with the contiguous streams (permute: the 32B / 96-element-stride c-load
+  // rides with two contiguous 2KB loads).  Admit it so a combined-body row
+  // prices the whole load side once, instead of stacking an isolated
+  // strided tail on top of the contiguous claim.
+  if (eligibleContiguousLoads) {
+    for (const StageMemoryAccess &access : work.memoryAccesses) {
+      if (access.count <= 0.0 || access.store)
+        continue;
+      if (access.layoutClass() != StageMemoryAccess::LayoutClass::StridedWide)
+        continue;
+      if (access.rowBytes() <= 0 || access.rowBytes() > 64)
+        continue;
+      if (!access.hasStaticLayout() || access.elementBits / 8 <= 0)
+        continue;
+      if (access.addressDependsOnLoadedIndex ||
+          access.addressHasNonAffineTensorComputation ||
+          access.addressHasTensorControlFlowSelection)
+        continue;
+      if (std::any_of(claimed.begin(), claimed.end(),
+                      [&access](const StageMemoryAccess *c) {
+                        return c == &access;
+                      }))
+        continue;
+      bool alreadyEligible = false;
+      for (const StageMemoryAccess *e : eligible)
+        if (e == &access)
+          alreadyEligible = true;
+      if (!alreadyEligible)
+        eligible.push_back(&access);
+    }
+  }
   if (eligible.empty()) {
-    fprintf(stderr, "[cv2-hook] %s hint=%lld simd=%d eligible=EMPTY nacc=%d\n",
-            stage.id.c_str(), (long long)programCountHint, (int)simd,
-            (int)work.memoryAccesses.size());
     return;
   }
-  fprintf(stderr, "[cv2-hook] %s hint=%lld simd=%d elig=%d loop=%d\n",
-          stage.id.c_str(), (long long)programCountHint, (int)simd,
-          (int)eligible.size(), (int)hasLoop);
 
   const auto ebName = [](int64_t eb) -> const char * {
     switch (eb) {
@@ -533,22 +561,30 @@ static void mapContiguousV2Completion(
     auto claimAll = [&]() {
       for (const StageMemoryAccess *access : eligible) {
         claimed.push_back(access);
+        // Nested-loop stages present one access with count>1 instances
+        // (permute: the BLOCK1/BLOCK1_SUB shell runs twice per iteration);
+        // the coverage must match the workload's instance count or the
+        // legacy tail re-prices the unclaimed remainder.
+        const int64_t instances = std::max<int64_t>(
+            1, static_cast<int64_t>(std::llround(access->count)));
         const int64_t bytes = v2ElementCount(access) *
                               (access->elementBits / 8);
         if (access->store) {
-          layout.storeBytes += bytes;
-          layout.storeOperations += 1.0;
+          layout.storeBytes += bytes * instances;
+          layout.storeOperations += double(instances);
           layout.storeWarpInstructions +=
-              llvm::divideCeil(v2ElementCount(access), int64_t(32));
+              instances * llvm::divideCeil(v2ElementCount(access),
+                                           int64_t(32));
           layout.storeShapes[std::make_pair(bytes,
-              v2ElementCount(access))] += 1.0;
+              v2ElementCount(access))] += double(instances);
         } else {
-          layout.loadBytes += bytes;
-          layout.loadOperations += 1.0;
+          layout.loadBytes += bytes * instances;
+          layout.loadOperations += double(instances);
           layout.loadWarpInstructions +=
-              llvm::divideCeil(v2ElementCount(access), int64_t(32));
+              instances * llvm::divideCeil(v2ElementCount(access),
+                                           int64_t(32));
           layout.loadShapes[std::make_pair(bytes,
-              v2ElementCount(access))] += 1.0;
+              v2ElementCount(access))] += double(instances);
         }
       }
     };
@@ -577,12 +613,6 @@ static void mapContiguousV2Completion(
       const bool storeBearing = nStores >= 1;
       if (storeBearing ? maxStoreChunk > 128 : !bodyMasked)
         maxStoreChunk = 0;
-      fprintf(stderr,
-              "[tinydbg] %s K=%lld nL=%lld nS=%lld dom=%lld maxSC=%lld "
-              "masked=%d",
-              stage.id.c_str(), (long long)K, (long long)nLoads,
-              (long long)nStores, (long long)domBytes,
-              (long long)maxStoreChunk, (int)bodyMasked);
       if (maxStoreChunk > 0 || bodyMasked) {
         double bestChunk = 1e30;
         int64_t bestB = 0;
@@ -898,10 +928,6 @@ static void mapContiguousV2Completion(
                 (A * share + double(K) * useM * chunkScale) /
                 double(K) * kCyclesPerNano * v2WaveDecay;
             if (perIter > 0.0) {
-              fprintf(stderr,
-                      "[cv2-tier1] %s hint=%lld A=%.1f m=%.3f perIter=%.2f\n",
-                      stage.id.c_str(), (long long)programCountHint, A, m,
-                      perIter);
               resources.load += perIter;
               claimAll();
               return;
@@ -966,10 +992,6 @@ static void mapContiguousV2Completion(
         first->activeElementRatio < 1.0;
     if (maskedGroup)
       effBytes *= first->activeElementRatio;
-    fprintf(stderr,
-            "[faMasked] %s masked=%d eff=%.0f",
-            stage.id.c_str(), (int)maskedGroup, effBytes);
-    fprintf(stderr, "%c", NL);
     int64_t bucket = 1024;
     {
       double eff = double(bytes);
@@ -2208,6 +2230,27 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
   }
   // Unclassified scalar operations have no execution-throughput evidence.
   // Mixed-axis classification does not replace #2528's resource pricing.
+  // Masked contiguous tiles transfer only their active bytes: the padded
+  // tail is lane-masked, never fetched (max_dim1-style padded row tiles:
+  // (64,32) padded masked to (64,8) moves 2KB, not 8KB).
+  double maskedPaddedExcessLoadBytes = 0.0;
+  double maskedPaddedExcessStoreBytes = 0.0;
+  for (const StageMemoryAccess &access : work.memoryAccesses) {
+    if (!(access.masked && access.activeElementRatio > 0.0 &&
+          access.activeElementRatio < 1.0 - 1.0e-9))
+      continue;
+    if (access.addressDependsOnLoadedIndex)
+      continue;
+    const double paddedBytes =
+        double(v2ElementCount(&access)) * (access.elementBits / 8) *
+        std::max<int64_t>(1,
+            static_cast<int64_t>(std::llround(access.count)));
+    const double excess = paddedBytes * (1.0 - access.activeElementRatio);
+    if (access.store)
+      maskedPaddedExcessStoreBytes += excess;
+    else
+      maskedPaddedExcessLoadBytes += excess;
+  }
   if (stage.features.hasIndirectMemory || fitted.load || fitted.store ||
       stage.costModelKind == StageCostModelKind::PartialContinuousTileMemory ||
       work.indirectLoadTransactions > 0.0 ||
@@ -2385,7 +2428,8 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
     // admission policy.
     constexpr double coverageTolerance = 1.0e-9;
     const double uncoveredLoadBytes =
-        std::max(0.0, work.loadBytes - curvedLoadBytes);
+        std::max(0.0,
+            work.loadBytes - curvedLoadBytes - maskedPaddedExcessLoadBytes);
     const double uncoveredLoadOperations =
         std::max(0.0, work.loadOperations - curvedLoadOperations);
     const double uncoveredLoadWarpInstructions =
@@ -2395,7 +2439,8 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
         uncoveredLoadOperations > coverageTolerance ||
         uncoveredLoadWarpInstructions > coverageTolerance;
     const double uncoveredStoreBytes =
-        std::max(0.0, work.storeBytes - curvedStoreBytes);
+        std::max(0.0,
+            work.storeBytes - curvedStoreBytes - maskedPaddedExcessStoreBytes);
     const double uncoveredStoreOperations =
         std::max(0.0, work.storeOperations - curvedStoreOperations);
     const double uncoveredStoreWarpInstructions =
@@ -2443,10 +2488,6 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
     mapStridedShortMemoryCompletion(stage, work, profile, resources, simd,
                                     layout, stridedShortAlreadyClaimed);
     // v2 epoch-calibrated contiguous pricing claims before the legacy curves.
-    fprintf(stderr, "[cv2-mw] stage=%s hint=%lld cv2_enabled=%d ga=%d\n", stage.id.c_str(),
-        (long long)programCountHint,
-        (int)profile.contiguousV2.enabled,
-        (int)profile.contiguousV2.groupA.size());
     mapContiguousV2Completion(stage, work, profile, resources, simd, layout,
                               stridedShortAlreadyClaimed, programCountHint);
     // The store-group curve below must not price a store this pass already did.
@@ -2746,11 +2787,13 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
         resources.store += storeSetup;
       }
       resources.load +=
-          std::max(0.0, work.loadBytes - layout.loadBytes - curvedLoad.bytes) /
+          std::max(0.0, work.loadBytes - layout.loadBytes - curvedLoad.bytes -
+                            maskedPaddedExcessLoadBytes) /
           profile.loadBytesPerCycle;
-      resources.store += std::max(0.0, work.storeBytes - layout.storeBytes -
-                                           curvedStore.bytes) /
-                         profile.storeBytesPerCycle;
+      resources.store +=
+          std::max(0.0, work.storeBytes - layout.storeBytes -
+                            curvedStore.bytes - maskedPaddedExcessStoreBytes) /
+          profile.storeBytesPerCycle;
       if (profile.computedAddressScalarizedLoadCyclesPerElement > 0.0) {
         for (const StageMemoryAccess &access : work.memoryAccesses) {
           if (access.store || access.count <= 0.0 ||
@@ -3310,9 +3353,6 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
   }
   mapMaskedStridedCopyCompletion(stage, work, profile, resources,
                                  stridedShortAlreadyClaimed);
-  if (stage.costModelKind == StageCostModelKind::RowwiseReduction)
-    fprintf(stderr, "[cv2-final] %s load=%.2f store=%.2f\n",
-            stage.id.c_str(), resources.load, resources.store);
   return materializeControlFlow(stage, mode, resources, profile.controlFlow);
 }
 
@@ -3718,9 +3758,14 @@ static double estimateStageBase(const LogicalStage &stage,
   case StageCostModelKind::RowwiseReduction:
     if (mode == StageMode::SIMT && r.multiResultReductionGroupBody > 0.0)
       return r.setup +
-             count * std::max(r.multiResultReductionGroupBody, r.issue);
+             count * std::max({r.multiResultReductionGroupBody,
+                               r.scalar + r.load + r.store + r.criticalPath,
+                               r.issue});
     if (mode == StageMode::SIMT && r.rowwiseReductionGroupBody > 0.0)
-      return r.setup + count * std::max(r.rowwiseReductionGroupBody, r.issue);
+      return r.setup +
+             count * std::max({r.rowwiseReductionGroupBody,
+                               r.scalar + r.load + r.store + r.criticalPath,
+                               r.issue});
     if (mode == StageMode::SIMD && permitsSimdOverlap(stage)) {
       // SIMD rowwise lowering exposes pointwise and reduction service as
       // competing vector-pipe bounds.
