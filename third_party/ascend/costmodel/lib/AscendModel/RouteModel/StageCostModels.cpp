@@ -514,6 +514,7 @@ static void mapContiguousV2Completion(
     // fit when the geometry was calibrated, otherwise via the generic
     // per-op analytical - so the legacy curves never price contiguous
     // streams.
+    bool bodyMasked = false;
     int64_t domBytes = 0, loadBytes = 0, storeBytes = 0;
     int64_t nLoads = 0, nStores = 0;
     for (const StageMemoryAccess *access : eligible) {
@@ -524,6 +525,9 @@ static void mapContiguousV2Completion(
       domBytes = std::max(domBytes, bytes / instances);
       (access->store ? storeBytes : loadBytes) += bytes;
       ++(access->store ? nStores : nLoads);
+      if (access->masked && access->activeElementRatio > 0.0 &&
+          access->activeElementRatio < 1.0)
+        bodyMasked = true;
     }
 
     auto claimAll = [&]() {
@@ -558,7 +562,7 @@ static void mapContiguousV2Completion(
     // The tiny_direct rows carry the effect; the excess of the measured
     // row over the linear T(K)=A+K*m trend is charged per iteration with
     // tiny_store_chain_share (the rest overlaps the route boundary).
-    if (K >= 1 && K <= 8 && !v2.tinyDirectTable.empty() && nStores >= 1) {
+    if (K >= 1 && !v2.tinyDirectTable.empty()) {
       int64_t maxStoreChunk = 0;
       for (const StageMemoryAccess *access : eligible) {
         if (!access->store)
@@ -567,38 +571,58 @@ static void mapContiguousV2Completion(
             maxStoreChunk,
             v2ElementCount(access) * (access->elementBits / 8));
       }
-      if (maxStoreChunk > 0 && maxStoreChunk <= 128 && domBytes >= 512) {
+      // Store-bearing bodies must be tiny-store (<=128B); load-only
+      // bodies admit only when masked (rms_norm evidence: the masked
+      // 16KB-wide loops whose stores fall outside the claim).
+      const bool storeBearing = nStores >= 1;
+      if (storeBearing ? maxStoreChunk > 128 : !bodyMasked)
+        maxStoreChunk = 0;
+      if (maxStoreChunk > 0 || bodyMasked) {
         double bestChunk = 1e30;
         int64_t bestB = 0;
+        double bestMaxK = 0.0;
         for (const auto &row : v2.tinyDirectTable) {
-          int64_t rnL = 0, rns = 0, rB = 0, rK = 0, rG = 0;
-          if (std::sscanf(row.first.c_str(),
-                          "n%lld_s%lld_b%lld_k%lld_g%lld",
-                          (long long *)&rnL, (long long *)&rns,
-                          (long long *)&rB, (long long *)&rK,
-                          (long long *)&rG) != 5)
+          int64_t rnL = 0, rns = 0, rB = 0, rK = 0, rG = 0, rM = 0;
+          int64_t nMatched = std::sscanf(
+              row.first.c_str(), "n%lld_s%lld_b%lld_k%lld_g%lld_m%lld",
+              (long long *)&rnL, (long long *)&rns, (long long *)&rB,
+              (long long *)&rK, (long long *)&rG, (long long *)&rM);
+          if (nMatched == 5)
+            rM = 0;
+          else if (nMatched != 6)
             continue;
           if (rnL != nLoads || rns != nStores)
+            continue;
+          if ((rM != 0) != bodyMasked)
             continue;
           const double chunkDist =
               std::fabs(std::log2(double(std::max<int64_t>(1, domBytes))) -
                         std::log2(double(std::max<int64_t>(1, rB))));
+          if (chunkDist > 1.0)
+            continue;
           if (chunkDist < bestChunk) {
             bestChunk = chunkDist;
             bestB = rB;
           }
+          bestMaxK = std::max(bestMaxK, double(rK));
         }
-        if (bestChunk <= 1.0 && bestB > 0) {
+        if (bestB <= 0 || double(K) > bestMaxK * 1.5 + 1.0)
+          bestB = 0;
+        if (bestB > 0) {
           std::map<int64_t, std::map<int64_t, double>> tkByGrid;
           for (const auto &row : v2.tinyDirectTable) {
-            int64_t rnL = 0, rns = 0, rB = 0, rK = 0, rG = 0;
-            if (std::sscanf(row.first.c_str(),
-                            "n%lld_s%lld_b%lld_k%lld_g%lld",
-                            (long long *)&rnL, (long long *)&rns,
-                            (long long *)&rB, (long long *)&rK,
-                            (long long *)&rG) != 5)
+            int64_t rnL = 0, rns = 0, rB = 0, rK = 0, rG = 0, rM = 0;
+            int64_t nMatched = std::sscanf(
+                row.first.c_str(), "n%lld_s%lld_b%lld_k%lld_g%lld_m%lld",
+                (long long *)&rnL, (long long *)&rns, (long long *)&rB,
+                (long long *)&rK, (long long *)&rG, (long long *)&rM);
+            if (nMatched == 5)
+              rM = 0;
+            else if (nMatched != 6)
               continue;
             if (rnL != nLoads || rns != nStores || rB != bestB)
+              continue;
+            if ((rM != 0) != bodyMasked)
               continue;
             if (row.second > 0.0)
               tkByGrid[rG][rK] = row.second;
@@ -725,14 +749,18 @@ static void mapContiguousV2Completion(
       double bestChunk = 1e30;
       int64_t bestB = 0;
       for (const auto &row : v2.directTable) {
-        int64_t rnL = 0, rns = 0, rB = 0, rK = 0, rG = 0;
-        if (std::sscanf(row.first.c_str(),
-                        "n%lld_s%lld_b%lld_k%lld_g%lld",
-                        (long long *)&rnL, (long long *)&rns,
-                        (long long *)&rB, (long long *)&rK,
-                        (long long *)&rG) != 5)
+        int64_t rnL = 0, rns = 0, rB = 0, rK = 0, rG = 0, rM = 0;
+        int64_t nMatched = std::sscanf(
+            row.first.c_str(), "n%lld_s%lld_b%lld_k%lld_g%lld_m%lld",
+            (long long *)&rnL, (long long *)&rns, (long long *)&rB,
+            (long long *)&rK, (long long *)&rG, (long long *)&rM);
+        if (nMatched == 5)
+          rM = 0;
+        else if (nMatched != 6)
           continue;
         if (rnL != nLoads || rns != nStores)
+          continue;
+        if ((rM != 0) != bodyMasked)
           continue;
         const double chunkDist =
             std::fabs(std::log2(double(std::max<int64_t>(1, domBytes))) -
@@ -746,12 +774,16 @@ static void mapContiguousV2Completion(
         // grid -> (K -> T) of the chosen shape+chunk
         std::map<int64_t, std::map<int64_t, double>> tkByGrid;
         for (const auto &row : v2.directTable) {
-          int64_t rnL = 0, rns = 0, rB = 0, rK = 0, rG = 0;
-          if (std::sscanf(row.first.c_str(),
-                          "n%lld_s%lld_b%lld_k%lld_g%lld",
-                          (long long *)&rnL, (long long *)&rns,
-                          (long long *)&rB, (long long *)&rK,
-                          (long long *)&rG) != 5)
+          int64_t rnL = 0, rns = 0, rB = 0, rK = 0, rG = 0, rM = 0;
+          int64_t nMatched = std::sscanf(
+              row.first.c_str(), "n%lld_s%lld_b%lld_k%lld_g%lld_m%lld",
+              (long long *)&rnL, (long long *)&rns, (long long *)&rB,
+              (long long *)&rK, (long long *)&rG, (long long *)&rM);
+          if (nMatched == 5)
+            rM = 0;
+          else if (nMatched != 6)
+            continue;
+          if ((rM != 0) != bodyMasked)
             continue;
           if (rnL != nLoads || rns != nStores || rB != bestB)
             continue;
@@ -919,22 +951,36 @@ static void mapContiguousV2Completion(
     if (!dtype)
       continue;
     const int64_t bytes = v2ElementCount(first) * (first->elementBits / 8);
+    // Masked groups (padded tile, active lanes): the group_a cells were
+    // calibrated on unmasked bodies; price via the active-byte analytical
+    // with the bucket chosen at the active width.
+    double effBytes = double(bytes);
+    const bool maskedGroup =
+        first->masked && first->activeElementRatio > 0.0 &&
+        first->activeElementRatio < 1.0;
+    if (maskedGroup)
+      effBytes *= first->activeElementRatio;
     int64_t bucket = 1024;
-    double bestDist = 1e30;
-    for (int64_t b :
-         {32, 64, 128, 256, 512, 1024, 4096, 16384}) {
-      const double d = std::fabs(std::log2((double)bytes) -
-                                 std::log2((double)b));
-      if (d < bestDist) {
-        bestDist = d;
-        bucket = b;
+    {
+      double eff = double(bytes);
+      if (maskedGroup)
+        eff = effBytes;
+      double bestDist = 1e30;
+      for (int64_t b :
+           {32, 64, 128, 256, 512, 1024, 4096, 16384}) {
+        const double d = std::fabs(std::log2(std::max(1.0, eff)) -
+                                   std::log2((double)b));
+        if (d < bestDist) {
+          bestDist = d;
+          bucket = b;
+        }
       }
     }
 
     const char *direction = first->store ? "store" : "load";
     const std::string key = std::string(direction) + "/" + dtype + "/" +
                             std::to_string(bucket) + "/" + res;
-    auto it = v2.groupA.find(key);
+    auto it = maskedGroup ? v2.groupA.end() : v2.groupA.find(key);
     if (it == v2.groupA.end() && !simd) {
       // simt cells are warp-count dependent; try the resolved W first.
       it = v2.groupA.find(key + "/w" +
@@ -946,8 +992,11 @@ static void mapContiguousV2Completion(
       // contiguous streams.
       double ana = 0.0;
       for (const StageMemoryAccess *access : members) {
-        const int64_t b = v2ElementCount(access) *
-                          (access->elementBits / 8);
+        double b = double(v2ElementCount(access)) *
+                   double(access->elementBits / 8);
+        if (access->masked && access->activeElementRatio > 0.0 &&
+            access->activeElementRatio < 1.0)
+          b *= access->activeElementRatio;
         if (simd) {
           const bool isStore = access->store;
           const double decay = isStore ? 1.0 : v2WaveDecayLoad;

@@ -86,6 +86,17 @@ struct ContiguousV2Params {
   // linear T(K)=A+K*m trend) charged per iteration; the rest of the
   // excess overlaps the route boundary/launch.
   double tinyStoreChainShare = 0.636;
+  // calH boundary-hiding coefficients: the launch boundary overlaps the
+  // contiguous memory stream (first-load DRAM latency + cross-instance
+  // head/tail overlap), so a regime-constant share of the additive
+  // boundary is subtracted at candidate level.
+  //   hide = boundary * c(wave regime, kernel has contiguous loads)
+  double boundaryHideLoadWave1 = 0.47;
+  double boundaryHideStoreWave1 = 0.28;
+  double boundaryHideLoadWave23 = 0.23;
+  double boundaryHideStoreWave23 = 0.20;
+  double boundaryHideLoadWave4 = 0.20;
+  double boundaryHideStoreWave4 = 0.0;
   double directFixedShare = 0.3;
   // resident program count for the current kernel (grid size)
   int64_t programCountHint = 1;

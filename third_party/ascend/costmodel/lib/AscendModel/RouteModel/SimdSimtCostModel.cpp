@@ -2929,6 +2929,20 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
       }
       cv2.tinyStoreChainShare = reader.optionalNumber(
           *v2, "tiny_store_chain_share", 0.636);
+      if (const auto *bh = v2->getObject("boundary_hide")) {
+        cv2.boundaryHideLoadWave1 = reader.optionalNumber(
+            *bh, "c_load_wave1", 0.47);
+        cv2.boundaryHideStoreWave1 = reader.optionalNumber(
+            *bh, "c_store_wave1", 0.28);
+        cv2.boundaryHideLoadWave23 = reader.optionalNumber(
+            *bh, "c_load_wave23", 0.23);
+        cv2.boundaryHideStoreWave23 = reader.optionalNumber(
+            *bh, "c_store_wave23", 0.20);
+        cv2.boundaryHideLoadWave4 = reader.optionalNumber(
+            *bh, "c_load_wave4", 0.20);
+        cv2.boundaryHideStoreWave4 = reader.optionalNumber(
+            *bh, "c_store_wave4", 0.0);
+      }
       if (const auto *sd = v2->getObject("sdirect")) {
         for (const auto &entry : *sd) {
           if (const auto n = entry.second.getAsNumber())
@@ -3407,6 +3421,20 @@ if (const auto *sp = v2->getObject("s_penalty")) {
       }
       cv2.tinyStoreChainShare = reader.optionalNumber(
           *v2, "tiny_store_chain_share", 0.636);
+      if (const auto *bh = v2->getObject("boundary_hide")) {
+        cv2.boundaryHideLoadWave1 = reader.optionalNumber(
+            *bh, "c_load_wave1", 0.47);
+        cv2.boundaryHideStoreWave1 = reader.optionalNumber(
+            *bh, "c_store_wave1", 0.28);
+        cv2.boundaryHideLoadWave23 = reader.optionalNumber(
+            *bh, "c_load_wave23", 0.23);
+        cv2.boundaryHideStoreWave23 = reader.optionalNumber(
+            *bh, "c_store_wave23", 0.20);
+        cv2.boundaryHideLoadWave4 = reader.optionalNumber(
+            *bh, "c_load_wave4", 0.20);
+        cv2.boundaryHideStoreWave4 = reader.optionalNumber(
+            *bh, "c_store_wave4", 0.0);
+      }
       if (const auto *sd = v2->getObject("sdirect")) {
         for (const auto &entry : *sd) {
           if (const auto n = entry.second.getAsNumber())
@@ -4495,6 +4523,65 @@ static SimdSimtCandidateScores
 completeCandidateCosts(const SimdSimtCostReport &report,
                        const CandidateProfile &profile,
                        int64_t kernelArgumentCount) {
+  // calH boundary-hiding: the launch boundary overlaps the contiguous
+  // memory stream (first-load DRAM latency covers dispatch; consecutive
+  // grid program instances on one core overlap head/tail).  Subtract a
+  // regime-constant share of the additive boundary from the candidate.
+  // Regimes: wave count ceil(programs/56) in {1, 2-3, >=4}; store-only
+  // kernels hide less (no load-latency gap to cover the launch).
+  // Purely linear - no exponents.
+  auto hideShareForPlan = [&](const StageRoutePlan &plan,
+                              int64_t fallbackPrograms) -> double {
+    // CandidateProfile does not carry the contiguousV2 tables; mirror the
+    // profile keys contiguous_ldst_v2.boundary_hide here (calibrated).
+    // DISABLED pending calI clean refit: a global hide double-counts the
+    // tiny-store chainShare and share=0.05 terms that were calibrated
+    // against the additive boundary.  Re-enable only for the gated scope
+    // (straight-line streaming-store kernels) with the calI table.
+    constexpr double kHideLoadWave1 = 0.0;
+    constexpr double kHideStoreWave1 = 0.0;
+    constexpr double kHideLoadWave23 = 0.0;
+    constexpr double kHideStoreWave23 = 0.0;
+    constexpr double kHideLoadWave4 = 0.0;
+    constexpr double kHideStoreWave4 = 0.0;
+    const int64_t programs = plan.runtimePhysicalProgramCount > 0
+                                 ? plan.runtimePhysicalProgramCount
+                                 : std::max<int64_t>(1, fallbackPrograms);
+    const int64_t waves = (programs + 55) / 56;
+    bool hasContiguousLoad = false;
+    const auto &stages = report.stageModel.stages;
+    if (!plan.legal ||
+        plan.logicalStageCycles.size() != stages.size())
+      return 0.0;
+    for (size_t idx = 0; idx < stages.size(); ++idx) {
+      if (plan.logicalStageCycles[idx] <= 0.0)
+        continue;
+      const auto &w = stages[idx].workload;
+      if ((w.loadBytes <= 0.0 && w.storeBytes <= 0.0) ||
+          w.memoryAccesses.empty())
+        continue;
+      bool allContiguous = true;
+      for (const StageMemoryAccess &access : w.memoryAccesses) {
+        const auto lc = access.layoutClass();
+        if (lc != StageMemoryAccess::LayoutClass::ContiguousShort &&
+            lc != StageMemoryAccess::LayoutClass::ContiguousWide) {
+          allContiguous = false;
+          break;
+        }
+      }
+      if (!allContiguous)
+        continue;
+      if (w.loadBytes > 0.0) {
+        hasContiguousLoad = true;
+        break;
+      }
+    }
+    if (waves <= 1)
+      return hasContiguousLoad ? kHideLoadWave1 : kHideStoreWave1;
+    if (waves <= 3)
+      return hasContiguousLoad ? kHideLoadWave23 : kHideStoreWave23;
+    return hasContiguousLoad ? kHideLoadWave4 : kHideStoreWave4;
+  };
   SimdSimtCandidateScores scores = report.candidateCosts;
   const bool routeHasGlobalLoad = hasGlobalLoad(report.stageModel);
   scores.allSimd +=
@@ -4521,6 +4608,25 @@ completeCandidateCosts(const SimdSimtCostReport &report,
           "native_indirect_chain_applied"))
     scores.allSimtOnly = report.stageModel.allSimt.diagnostic<double>(
         "native_indirect_chain_elapsed_system_cycles");
+  const int64_t fallbackPrograms =
+      report.sourceLogicalProgramCountHint > 0
+          ? report.sourceLogicalProgramCountHint
+          : report.logicalProgramCountHint;
+  const double simdBoundary =
+      scores.allSimd - report.stageModel.allSimd.totalCycles;
+
+  const double simtBoundary =
+      scores.allSimtOnly - report.stageModel.allSimt.totalCycles;
+  if (simdBoundary > 0.0) {
+    const double share = hideShareForPlan(report.stageModel.allSimd,
+                                          fallbackPrograms);
+    scores.allSimd -= std::min(simdBoundary, simdBoundary * share);
+  }
+  if (simtBoundary > 0.0) {
+    const double share = hideShareForPlan(report.stageModel.allSimt,
+                                          fallbackPrograms);
+    scores.allSimtOnly -= std::min(simtBoundary, simtBoundary * share);
+  }
   return scores;
 }
 
