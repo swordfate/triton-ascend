@@ -966,6 +966,10 @@ static void mapContiguousV2Completion(
         first->activeElementRatio < 1.0;
     if (maskedGroup)
       effBytes *= first->activeElementRatio;
+    fprintf(stderr,
+            "[faMasked] %s masked=%d eff=%.0f",
+            stage.id.c_str(), (int)maskedGroup, effBytes);
+    fprintf(stderr, "%c", NL);
     int64_t bucket = 1024;
     {
       double eff = double(bytes);
