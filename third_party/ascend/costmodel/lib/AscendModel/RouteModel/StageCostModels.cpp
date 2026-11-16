@@ -941,7 +941,20 @@ static void mapContiguousV2Completion(
                 (A * share + double(K) * useM * chunkScale) /
                 double(K) * kCyclesPerNano * v2WaveDecay;
             if (perIter > 0.0) {
-              resources.load += perIter;
+              // Charge by engine direction: a store-only group competes
+              // with the store stream (storeService), not the load stream
+              // (strided_scatter/compaction: adding a store-side claim
+              // onto resources.load serialised it with the independent
+              // strided load stream).
+              const bool allStores =
+                  std::all_of(eligible.begin(), eligible.end(),
+                              [](const StageMemoryAccess *a) {
+                                return a->store;
+                              });
+              if (allStores)
+                resources.store += perIter;
+              else
+                resources.load += perIter;
               claimAll();
               return;
             }
@@ -963,7 +976,13 @@ static void mapContiguousV2Completion(
            double(loadBytes + storeBytes) /
                profile.independentLoadGroupBytesPerCycle) *
           v2WaveDecay;
-      resources.load += perIter * kCyclesPerNano;
+      const bool allStoresT2 =
+          std::all_of(eligible.begin(), eligible.end(),
+                      [](const StageMemoryAccess *a) { return a->store; });
+      if (allStoresT2)
+        resources.store += perIter * kCyclesPerNano;
+      else
+        resources.load += perIter * kCyclesPerNano;
       claimAll();
       return;
     }
