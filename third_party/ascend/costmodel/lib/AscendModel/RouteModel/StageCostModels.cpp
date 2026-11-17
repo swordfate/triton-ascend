@@ -591,6 +591,13 @@ static void mapContiguousV2Completion(
       }
     };
 
+    // Phase-5 audit switch: ASCEND_V2_SKIP_ROWS=1 bypasses the
+    // measured-row tiers (1a tiny_direct + 1 direct) so loop bodies
+    // fall to the envelope / tier-3 analytical - the per-family
+    // marginal value of the row tables is the gate delta under this
+    // switch.  Audit-only; default off.
+    const char *skipRowsEnv = ::getenv("ASCEND_V2_SKIP_ROWS");
+    const bool skipRows = skipRowsEnv && skipRowsEnv[0] != '0';
     // ---- Tier 1a: calF2 tiny-store loop bodies --------------------------
     // A loop body whose stores are all tiny (<=128B) beside a large
     // dominant chunk (>=512B) runs a latency chain: the tiny dependent IO
@@ -600,7 +607,7 @@ static void mapContiguousV2Completion(
     // The tiny_direct rows carry the effect; the excess of the measured
     // row over the linear T(K)=A+K*m trend is charged per iteration with
     // tiny_store_chain_share (the rest overlaps the route boundary).
-    if (K >= 1 && !v2.tinyDirectTable.empty()) {
+    if (!skipRows && K >= 1 && !v2.tinyDirectTable.empty()) {
       int64_t maxStoreChunk = 0;
       for (const StageMemoryAccess *access : eligible) {
         if (!access->store)
@@ -784,7 +791,7 @@ static void mapContiguousV2Completion(
     // gate the per-iteration price is
     // interpolated across ALL measured grids in log2-grid space, then
     // T(K) = A + K*m is fitted over the swept K rows.
-    if (programCountHint <= 224) {
+    if (!skipRows && programCountHint <= 224) {
       double bestChunk = 1e30;
       int64_t bestB = 0;
       for (const auto &row : v2.directTable) {
