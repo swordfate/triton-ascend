@@ -2917,16 +2917,26 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
           cv2.mixKappa = *v;
         cv2.mixEnvelopeEnabled = true;
       }
-      if (const auto *se = v2->getObject("loop_envelope_store_simt")) {
-        if (auto arr = se->getArray("bytes"))
-          for (int i = 0; i < 4 && i < static_cast<int>(arr->size()); ++i)
-            if (const auto v = (*arr)[i].getAsNumber())
-              cv2.simtStoreBytes[i] = *v;
-        if (auto arr = se->getArray("ts_ns"))
-          for (int i = 0; i < 4 && i < static_cast<int>(arr->size()); ++i)
-            if (const auto v = (*arr)[i].getAsNumber())
-              cv2.simtStoreTS[i] = *v;
-        cv2.simtStoreEnvelopeEnabled = true;
+      if (const auto *se = v2->getObject("loop_envelope_line_simt")) {
+        if (const auto v = se->getNumber("l2_bytes"))
+          cv2.simtLineL2Bytes = *v;
+        const std::pair<const char *, double *> tables[] = {
+            {"load_line16_l2", cv2.simtLoadLine16L2},
+            {"load_line16_dram", cv2.simtLoadLine16Dram},
+            {"load_line32_l2", cv2.simtLoadLine32L2},
+            {"load_line32_dram", cv2.simtLoadLine32Dram},
+            {"load_line64_l2", cv2.simtLoadLine64L2},
+            {"load_line64_dram", cv2.simtLoadLine64Dram},
+            {"store_line_l2", cv2.simtStoreLineL2},
+            {"store_line_dram", cv2.simtStoreLineDram}};
+        for (const auto &kv : tables) {
+          if (auto arr = se->getArray(kv.first))
+            for (int i = 0; i < 4 && i < static_cast<int>(arr->size());
+                 ++i)
+              if (const auto v = (*arr)[i].getAsNumber())
+                kv.second[i] = *v;
+        }
+        cv2.simtLineEnvelopeEnabled = true;
       }
       if (const auto *ck = v2->getObject("group_a_ct_kc")) {
         for (const auto &entry : *ck) {
@@ -3428,16 +3438,26 @@ if (const auto *sp = v2->getObject("s_penalty")) {
           cv2.groupA[cv2StripEnginePrefix(entry.first)] = g;
         }
       }
-      if (const auto *se = v2->getObject("loop_envelope_store_simt")) {
-        if (auto arr = se->getArray("bytes"))
-          for (int i = 0; i < 4 && i < static_cast<int>(arr->size()); ++i)
-            if (const auto v = (*arr)[i].getAsNumber())
-              cv2.simtStoreBytes[i] = *v;
-        if (auto arr = se->getArray("ts_ns"))
-          for (int i = 0; i < 4 && i < static_cast<int>(arr->size()); ++i)
-            if (const auto v = (*arr)[i].getAsNumber())
-              cv2.simtStoreTS[i] = *v;
-        cv2.simtStoreEnvelopeEnabled = true;
+      if (const auto *se = v2->getObject("loop_envelope_line_simt")) {
+        if (const auto v = se->getNumber("l2_bytes"))
+          cv2.simtLineL2Bytes = *v;
+        const std::pair<const char *, double *> tables[] = {
+            {"load_line16_l2", cv2.simtLoadLine16L2},
+            {"load_line16_dram", cv2.simtLoadLine16Dram},
+            {"load_line32_l2", cv2.simtLoadLine32L2},
+            {"load_line32_dram", cv2.simtLoadLine32Dram},
+            {"load_line64_l2", cv2.simtLoadLine64L2},
+            {"load_line64_dram", cv2.simtLoadLine64Dram},
+            {"store_line_l2", cv2.simtStoreLineL2},
+            {"store_line_dram", cv2.simtStoreLineDram}};
+        for (const auto &kv : tables) {
+          if (auto arr = se->getArray(kv.first))
+            for (int i = 0; i < 4 && i < static_cast<int>(arr->size());
+                 ++i)
+              if (const auto v = (*arr)[i].getAsNumber())
+                kv.second[i] = *v;
+        }
+        cv2.simtLineEnvelopeEnabled = true;
       }
       if (const auto *ck = v2->getObject("group_a_ct_kc")) {
         for (const auto &entry : *ck) {

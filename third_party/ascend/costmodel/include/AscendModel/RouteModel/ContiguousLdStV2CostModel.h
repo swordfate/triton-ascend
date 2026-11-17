@@ -68,12 +68,22 @@ struct ContiguousV2Params {
   double mixTL[4] = {76.3, 96.4, 167.9, 334.7};
   double mixTS[4] = {79.6, 93.9, 157.4, 276.1};
   double mixKappa = 0.18;
-  // E17g (2026-11-18): simt store-only envelope (clock64 sweep;
-  // ~21 B/ns linear across 4/16/32KB).  Load-only / mixed simt bodies
-  // stay on tier 3 until the E17h residency-controlled sweep.
-  bool simtStoreEnvelopeEnabled = false;
-  double simtStoreBytes[4] = {4096.0, 8192.0, 16384.0, 32768.0};
-  double simtStoreTS[4] = {196.0, 388.0, 788.0, 1557.0};
+  // E17h2/E17i (2026-11-18): SIMT per-line envelope, measured on both
+  // directions.  Loads are width-sensitive (fp16 64B instructions waste
+  // half the 128B DCache line) with a 4KB issue penalty and a 32KB jump
+  // (queue-depth hypothesis); stores are width-independent and nearly
+  // size-flat at L2.  Residency: footprint (load+store bytes x K x
+  // programs) vs L2 128MB.
+  bool simtLineEnvelopeEnabled = false;
+  double simtLineL2Bytes = 134217728.0;
+  double simtLoadLine16L2[4] = {13.63, 12.77, 15.03, 28.11};
+  double simtLoadLine16Dram[4] = {16.97, 22.12, 31.44, 50.85};
+  double simtLoadLine32L2[4] = {11.26, 8.14, 5.97, 11.69};
+  double simtLoadLine32Dram[4] = {15.19, 11.70, 10.59, 23.36};
+  double simtLoadLine64L2[4] = {11.26, 8.14, 5.97, 11.69};
+  double simtLoadLine64Dram[4] = {15.19, 11.70, 10.59, 23.36};
+  double simtStoreLineL2[4] = {6.22, 6.46, 6.08, 6.08};
+  double simtStoreLineDram[4] = {13.19, 18.41, 22.55, 17.48};
   // 2026-11-17 group_a compression: per-direction/residency cTransfer
   // ratio (cTransfer = kc * marginal; Q is structural, groupAQueues
   // below).  keys: "load/warm", "load/cold", "store/warm", "store/cold".
@@ -188,23 +198,14 @@ inline double envelopeCurve(const double *sizes, const double *points,
   return v;
 }
 
-/// E17g simt store-only envelope: per-iteration ns of a loop body
-/// moving storeBytes through the simt LSU path (measured ~21 B/ns,
-/// linear across 4/16/32KB; probe probes/e17g_simt_sweep.py u0_s*).
-inline double simtStoreEnvelopePerIter(const ContiguousV2Params &params,
-                                       double storeBytes) {
-  return envelopeCurve(params.simtStoreBytes, params.simtStoreTS,
-                       storeBytes);
-}
-
+/// E17 mix envelope: per-iteration ns of a loop body moving loadBytes
+/// of loads and storeBytes of stores (non-aliased); a single-direction
+/// body takes the pure direction curve.
 inline double mixEnvelopePerIter(const ContiguousV2Params &params,
                                  double loadBytes, double storeBytes) {
   auto curve = [&](const double *points, double bytes) {
     return envelopeCurve(params.mixBytes, points, bytes);
   };
-  // Unified set: single-direction bodies take the pure direction curve
-  // (TL/TS were measured with load-only / store-only probes; the mix
-  // term vanishes when one stream is absent).
   if (storeBytes <= 0.0)
     return curve(params.mixTL, loadBytes);
   if (loadBytes <= 0.0)
@@ -214,6 +215,36 @@ inline double mixEnvelopePerIter(const ContiguousV2Params &params,
   return std::max(tl, ts) + params.mixKappa * std::min(tl, ts);
 }
 
+/// E17h2/E17i SIMT line envelope: per-128B-line cost for one direction
+/// (bits selects the load width table; stores share one width-free
+/// table), interpolated over the per-iteration transaction size.
+inline const double *simtLineTable(const ContiguousV2Params &params,
+                                   int bits, bool dram, bool isStore) {
+  if (isStore)
+    return dram ? params.simtStoreLineDram : params.simtStoreLineL2;
+  if (bits <= 16)
+    return dram ? params.simtLoadLine16Dram : params.simtLoadLine16L2;
+  if (bits <= 32)
+    return dram ? params.simtLoadLine32Dram : params.simtLoadLine32L2;
+  return dram ? params.simtLoadLine64Dram : params.simtLoadLine64L2;
+}
+
+inline double simtLineEnvelopePerIter(const ContiguousV2Params &params,
+                                      double loadBytes, int loadBits,
+                                      double storeBytes, bool dram) {
+  double perIter = 0.0;
+  if (loadBytes > 0.0)
+    perIter += (loadBytes / 128.0) *
+               envelopeCurve(params.mixBytes,
+                             simtLineTable(params, loadBits, dram, false),
+                             loadBytes);
+  if (storeBytes > 0.0)
+    perIter += (storeBytes / 128.0) *
+               envelopeCurve(params.mixBytes,
+                             simtLineTable(params, 32, dram, true),
+                             storeBytes);
+  return perIter;
+}
 /// Structural Q (2026-11-17 group_a compression): the queue-depth knee
 /// of the segmented group price, from the byte count instead of a stored
 /// per-cell value.  Store streams hold a flat 8-deep queue; load streams

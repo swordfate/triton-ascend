@@ -1007,18 +1007,39 @@ static void mapContiguousV2Completion(
       claimAll();
       return;
     }
-    // Unified set phase 3: simt store-only bodies take the E17g store
-    // envelope (~21 B/ns, clock64-measured).  Load-only and mixed simt
-    // bodies stay on the tier-3 warp-instruction analytical: the simt
-    // load side is not a bytes-function (residency + issue-slot
-    // effects, probes/e17g6_results.json) - merge it after E17h.
-    if (!simd && profile.contiguousV2.simtStoreEnvelopeEnabled &&
-        loadBytes == 0.0 && storeBytes > 0.0 &&
+    // Unified set phase 3c: SIMT per-line envelope, both directions
+    // (E17h2/E17i measured tables).  Loads are width-sensitive with a
+    // 4KB issue penalty and a 32KB jump; stores are width-independent
+    // and nearly size-flat.  Residency by footprint vs L2 128MB.
+    // Mixed simt bodies take the serial sum (LSU shows no simd-style
+    // load/store overlap, E17g).
+    if (!simd && profile.contiguousV2.simtLineEnvelopeEnabled &&
+        (loadBytes > 0.0 || storeBytes > 0.0) &&
         stage.iterationCount >= 1) {
+      const double footprint = (loadBytes + storeBytes) *
+          double(std::max<int64_t>(1, stage.iterationCount)) *
+          double(std::max<int64_t>(1, programCountHint));
+      const bool dram = footprint > profile.contiguousV2.simtLineL2Bytes;
+      int loadBits = 32;
+      double bestLoad = 0.0;
+      for (const StageMemoryAccess *access : eligible) {
+        if (access->store)
+          continue;
+        const double bytes = double(v2ElementCount(access)) *
+                             (access->elementBits / 8);
+        if (bytes > bestLoad) {
+          bestLoad = bytes;
+          loadBits = access->elementBits;
+        }
+      }
       const double perIter =
-          contiguous_v2::simtStoreEnvelopePerIter(profile.contiguousV2,
-                                                  storeBytes);
-      resources.store += perIter * kCyclesPerNano;
+          contiguous_v2::simtLineEnvelopePerIter(
+              profile.contiguousV2, loadBytes, loadBits, storeBytes,
+              dram);
+      if (loadBytes == 0.0)
+        resources.store += perIter * kCyclesPerNano;
+      else
+        resources.load += perIter * kCyclesPerNano;
       claimAll();
       return;
     }

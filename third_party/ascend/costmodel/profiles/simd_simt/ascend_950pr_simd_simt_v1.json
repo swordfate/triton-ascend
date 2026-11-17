@@ -5315,20 +5315,63 @@
      "store/warm": 0.988,
      "store/cold": 1.002
     },
-    "loop_envelope_store_simt": {
+    "loop_envelope_line_simt": {
+     "l2_bytes": 134217728,
      "bytes": [
       4096,
       8192,
       16384,
       32768
      ],
-     "ts_ns": [
-      196.0,
-      388.0,
-      788.0,
-      1557.0
+     "load_line16_l2": [
+      13.63,
+      12.77,
+      15.03,
+      28.11
      ],
-     "source": "E17g clock64 sweep 2026-11-18 (u0_s* cells, ~21 B/ns linear; probes/e17g_simt_sweep.py); load-only and mixed simt bodies stay on tier 3 pending E17h"
+     "load_line16_dram": [
+      16.97,
+      22.12,
+      31.44,
+      50.85
+     ],
+     "load_line32_l2": [
+      11.26,
+      8.14,
+      5.97,
+      11.69
+     ],
+     "load_line32_dram": [
+      15.19,
+      11.7,
+      10.59,
+      23.36
+     ],
+     "load_line64_l2": [
+      11.26,
+      8.14,
+      5.97,
+      11.69
+     ],
+     "load_line64_dram": [
+      15.19,
+      11.7,
+      10.59,
+      23.36
+     ],
+     "store_line_l2": [
+      6.22,
+      6.46,
+      6.08,
+      6.08
+     ],
+     "store_line_dram": [
+      13.19,
+      18.41,
+      22.55,
+      17.48
+     ],
+     "source": "E17h2 load matrix + E17i store matrix, clock64 slope K16/K32 2026-11-18; 64-bit load row reuses 32-bit (inferred); 32KB load jump mechanism open (per-AIV queue depth hypothesis)"
     }
    }
   },
