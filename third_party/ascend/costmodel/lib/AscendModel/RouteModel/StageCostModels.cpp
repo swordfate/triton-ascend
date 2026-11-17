@@ -779,8 +779,9 @@ static void mapContiguousV2Completion(
     // Rows were measured at launches of up to 224 programs (4 waves); their
     // per-program prices do not compose with > 4-wave slot arithmetic
     // (muls_add: the g224 row x 37 slot-iters measured 2.6x over), so the
-    // tier is gated to hint <= 224 and larger launches fall to the
-    // aggregate envelope.  Within the gate the per-iteration price is
+    // tier is gated to hint <= 224 and larger launches fall through to
+    // the tier-2 mix envelope / tier-3 analytical below.  Within the
+    // gate the per-iteration price is
     // interpolated across ALL measured grids in log2-grid space, then
     // T(K) = A + K*m is fitted over the swept K rows.
     if (programCountHint <= 224) {
@@ -963,24 +964,21 @@ static void mapContiguousV2Completion(
       }
     }
 
-    // ---- Tier 2: aggregate-bandwidth envelope (simd) --------------------
-    // The pipelined-loop regime amortizes per-operation startup: one
-    // iteration moves bodyBytes at the aggregate MTE rate with a single
-    // iteration startup (calG: ~83 B/cycle across a full 56-program
-    // wave).  This is the calibrated fallback for geometries the direct
-    // table does not cover; both streams charge into the same envelope
-    // (the measured mixed-body prices it approximates include both).
-    // E17 (2026-11-17): MIXED bodies (loads and stores both present)
-    // follow the per-direction E17 curves instead - the byte-sum
-    // envelope over-prices skewed mixes by up to +76% (2L+1S measured
-    // 115.7 ns/iter vs envelope 160.4); max+kappa*min tracks the sweep
-    // within +/-8%.  Single-direction bodies keep the byte-sum envelope
-    // (gate-validated on memory_stream).  Simt keeps tier 3 (no
-    // aggregate calibration for the LSU/DCache path).
-    // The E17 curves were calibrated on steady loops (K>=16); low-trip
-    // bodies (e.g. muls_add/memory_stream loop-once shells pipelined 37
-    // deep per slot) never reach that regime and must keep the prior
-    // envelope (gate: 4 regressions -17~-23% without this gate).
+    // ---- Tier 2: per-direction mix envelope (simd) ----------------------
+    // E17 (2026-11-17): pipelined-loop MIXED bodies (loads and stores
+    // both present) are priced per direction with the E17 curves:
+    // perIter = max(TL(loadBytes), TS(storeBytes)) + kappa*min(...).
+    // The former byte-sum aggregate envelope (one ~83 B/cycle stream for
+    // load+store together) over-priced skewed mixes by up to +76% (2L+1S
+    // measured 115.7 ns/iter vs envelope 160.4); max+kappa*min tracks
+    // the sweep within +/-8%.  Simt keeps tier 3 (no aggregate
+    // calibration for the LSU/DCache path).
+    // The iterationCount >= 16 gate is the calibration domain of the E17
+    // curves: they were measured on steady loops with 16+ iterations per
+    // program.  Below the gate the curves are unvalidated (low-trip
+    // bodies are launch/startup-dominated), so those bodies fall through
+    // to the per-op analytical in tier 3, like single-direction bodies
+    // do since the byte-sum aggregate envelope was removed.
     if (simd && profile.contiguousV2.mixEnvelopeEnabled && loadBytes > 0.0 &&
         storeBytes > 0.0 && stage.iterationCount >= 16) {
       const double perIter =
@@ -990,22 +988,12 @@ static void mapContiguousV2Completion(
       claimAll();
       return;
     }
-    if (simd && profile.independentLoadGroupBytesPerCycle > 0.0) {
-      const double perIter =
-          (profile.independentLoadGroupIterationStartupCycles +
-           double(loadBytes + storeBytes) /
-               profile.independentLoadGroupBytesPerCycle) *
-          v2WaveDecay;
-      const bool allStoresT2 =
-          std::all_of(eligible.begin(), eligible.end(),
-                      [](const StageMemoryAccess *a) { return a->store; });
-      if (allStoresT2)
-        resources.store += perIter * kCyclesPerNano;
-      else
-        resources.load += perIter * kCyclesPerNano;
-      claimAll();
-      return;
-    }
+    // (The former byte-sum aggregate envelope was removed: it was a
+    // regime-local fit for trip-1 slot-pipelined and load-only
+    // bodies, superseded by the E17 per-direction curves for mixed
+    // bodies; single-direction and trip-1 bodies now take the per-op
+    // analytical below.  See review doc 3.5 for the measured
+    // trade-offs that led to this removal.)
     // ---- Tier 3: generic per-op analytical (the kept fallback) ----------
     const std::pair<double, double> ana = analyticalPerIter();
     resources.load += ana.first * kCyclesPerNano;

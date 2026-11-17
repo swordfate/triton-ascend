@@ -1035,6 +1035,33 @@ cumsum op 模型本身不准，排除在范围外，不计入）。guard 部分�
 （小 K 信噪比研究），数据
 `e17_results.json`/`e17b_results.json`/`e17b_k_sweep_output.txt`。
 
+**gather/grid-stride 族的 hint=grid 实验（否决）**：同一模式延伸到
+gather_dot/grid_stride_gather/grid_stride_dot 三 bench（launch
+grid=min(p,56)，hint=logical_programs）——p≥112 的 case hint≠grid。
+hint=grid 后 8 case 对账（pred µs，套件实测参考）：
+
+| case | 实测 | hint=logical（86 态） | hint=grid |
+|---|---|---|---|
+| gather_dot k16 (p224) | 12.186 | 7.895（−35.2% FAIL） | **3.723（−69.5% ✗✗）** |
+| gather_dot p112 | 6.061 | 5.114（−15.6% FAIL） | **3.723（−38.6% ✗）** |
+| gather_dot p56 | 4.619 | 3.722（−19.4% FAIL） | 3.722（不变，hint 已=grid） |
+| grid_stride_gather p224 | 4.988 | 6.000（+20.4% FAIL） | **3.002（−39.8% ✗）** |
+| grid_stride_dot p56 | 3.976 | 3.531（−11.2% FAIL） | 3.531（不变，hint 已=grid） |
+| grid_stride_dot p112 | 4.720 | 4.435（−6.0% PASS） | 4.435（不变） |
+| grid_stride_dot p336 | 6.035 | 5.175（−14.3% FAIL） | 5.428（−10.0% 边缘） |
+| grid_stride_dot p448 | 6.000 | 5.538（−7.7% PASS） | 5.787（−3.6% PASS） |
+
+**否决**：gather 族的模型（间接 load/gather-dot 标定）按
+logical_programs 契约标定，hint=grid 使 p224/p112 大幅恶化；仅
+p336/p448 两个 dot 点小幅改善。该族保持 hint=logical_programs。
+
+**最终采纳形态的全量 gate（2026-11-17）**：三 kernel hint=grid +
+旧 Tier 2 删除 + E17 包络无 K 门：**100-case 83/100**（对比
+共存放态 86/100）：muls_add×2 改善（−4.2%/−8.6% 双 PASS）、
+memory_stream_l4 −12.2% FAIL（根因已定位，见上）、cumsum×2
+−79.9/−86.1% FAIL（用户裁定排除：cumsum op 模型本身不准）、
+其余 97 case 与 86 态逐位一致。guard 按指示未跑。
+
 **E17d 可靠性研究（回应"E17b 的 K 轴数据噪声大、要测准"）**：
 方法 × 卡 × dst 轮换的受控对照（混合体 4KB/访问，30 次×56 程序
 中位，双卡复测）——**卡 2 与卡 3 逐位一致，SYS_CNT 窗口法可复现**，
