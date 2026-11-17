@@ -989,11 +989,32 @@ Tier 2（B_add/B_copy/B_store 走 Tier 1 行表命中），升级对既有集合
 110.7（+6.7%）✓、字节求和 160.4（+55%）✗、Tier 3 259.5（+150%）✗。
 **建议**：grid-stride launch-bound 循环建议向模型传物理 grid 作为
 hint（保留 trip 推导），使稳态混合包络可用；现行 harness 传
-n_blocks 的约定按指示保持不变，已记录。探针：
-`probes/e17_mix_matrix.py`、`probes/e17c_grid_stride.py`、
-`probes/e17b_k_sweep.py`（K 轴 g(K) 扫描显示小 K 填充、K=16 甜点、
-大 K 足迹墙的非单调形状——逐 K 因子表不可靠，K 轴精细建模记录为
-后续工作；数据 `e17_results.json`/`e17b_results.json`）。
+n_blocks 的约定按指示保持不变，已记录。
+
+**hint=grid 一刀切实验（否决，逐 kernel 契约）**：把 5 个
+hint=n_blocks/rows 的 bench 统一改为 hint=grid 后实测对账：
+
+| case | hint=grid 预测 | 实测 | 误差 | 原 hint 误差 |
+|---|---|---|---|---|
+| muls_add 2097152 | 6.345 | 6.625 | **−4.2%** ✓ | +6.14%（改善） |
+| muls_add 1048576 | 4.339 | 4.746 | −8.6% ✓ | −0.75%（变差） |
+| memory_stream l4 | 8.813 | 10.032 | **−12.2% ✗** | +0.36%（回归） |
+| memory_stream l2 | 4.335 | 4.645 | −6.7% ✓ | +1.31% |
+| cumsum w256 | 2.986 | 14.856 | **−79.9% ✗✗** | PASS |
+| cumsum w128_rev | 2.317 | 16.628 | **−86.1% ✗✗** | FAIL |
+
+trip/slot 全部正确流出（37/19/32、slot=1），但预测精度分裂：只有
+muls_add（乘加体、无串行依赖、计算轻）受益；memory_stream 的逐
+trip 实测 271ns 远高于连续探针稳态（106~210，grid-stride 散布 +
+每 trip 开销）；cumsum 是**串行扫描**（行间依赖、计算受限），
+trip=37 视图 + 稳态包络完全错配。**结论**：hint 表示是逐 kernel
+的建模契约——无串行依赖且计算轻的 grid-stride 体适用 trip=37 +
+稳态包络；slot 流水体（trip=1）和计算受限体必须保留原表示。一刀
+切改动被数据否决，5 个 bench 已全部回滚
+（`bench_muls_add_hint56.py` 保留为实验记录）。E17 系探针：
+`probes/e17_mix_matrix.py`（双向扫描）、`probes/e17c_grid_stride.py`
+（grid-stride 对照）、`probes/e17b_k_sweep.py`（K 轴扫描，数据
+`e17_results.json`/`e17b_results.json`/`e17b_k_sweep_output.txt`）。
 
 **E17d 可靠性研究（回应"E17b 的 K 轴数据噪声大、要测准"）**：
 方法 × 卡 × dst 轮换的受控对照（混合体 4KB/访问，30 次×56 程序
