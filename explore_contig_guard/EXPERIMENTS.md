@@ -689,3 +689,20 @@ block**（块终止标记 `blkDim: 72`）→ 64 条 lane 各 1 个 + 8 条 lane
 `MOV_XD_SPR X0, PARA_BASE` 出现 2 次（tick 21629 → 24171），同一条
 lane 先后执行 2 个 program；所有 lane 的首 program 起始 tick 挤在
 21573–21681（一条波同时上场）。
+
+### 21.3 grid=112 的 visualize_data.bin 产不出来（2026-11-17 结论）
+
+对 grid > 仿真 lane 数（64）的发射，这套仿真器在**全部 block 执行完、
+指令流 dump 完**之后，系统时钟继续空转不收敛：grid=112 实测跑了 14.5 小时、
+dump 18G 仍以 ~10MB/s 增长，结束产物（`simulator/visualize_data.bin`、
+`trace.json`）永远不生成；grid=72 同样复现（14 分钟 6.9G）。已终止并清理。
+
+因此：
+- grid=112 的 `visualize_data.bin` **不存在**；它的指令级波证据改由
+  `g112_dump/`（96 条 lane 的 `*.instr_log.dump` + `aicore_binary.o`，
+  已在本地）承载——`core20.veccore1.instr_log.dump` 里同 lane 两个
+  program 的入口相隔 tick 21629 → 24171。
+- 时间线可用 MindStudio Insight 直接打开 g112_dump 里的 per-core dump
+  文件查看（不依赖 visualize_data.bin）。
+- grid=8 的 `simulator/visualize_data.bin` 已在本地
+  `camodel_wave_demo/OPPROF_20261116201717_*/simulator/`。
