@@ -381,6 +381,62 @@ const double uncoveredLoadBytes =
 **效果**：max_dim1 +12.10% → +9.16%（PASS；剩余误差来自形状太小、
 测量噪声 ~5%）。
 
+**证据：被掩码的 lane 到底搬不搬数据？（判别实验 E15，卡 2）**
+
+质疑：硬件会不会把整个补齐瓦片都搬回来、只是把不要的 lane 填 0？
+如果是那样，按活跃字节计价反而错。判别方法：做 (64×512) fp32 瓦片
+（每程序 128KB 足迹不变），只改掩码活跃列数，看时间跟不跟着活跃
+字节数走：
+
+| 变体 | 活跃列 | 活跃字节/程序 | 实测（ns，profiler 中位） |
+|---|---|---|---|
+| rowsum（load+归约+小 store） | 512/512 | 128 KB | 2991.0 |
+| rowsum | 4/512 | 1 KB | 1970.0 |
+| rowsum | 1/512 | 0.25 KB | 1982.0 |
+| rowfill（load+掩码 store 回写） | 512/512 | 128 KB | 4016.0 |
+| rowfill | 4/512 | 1 KB | 2024.5 |
+| rowfill | 1/512 | 0.25 KB | 1686.0 |
+
+结论：如果硬件"全搬再填零"，三行时间应几乎相同；实测 load+store 侧
+128KB→1KB 时间从 4016 降到 2024（差出的 ~2µs 正是 ~127KB 的搬运
+时间），load 侧从 2991 降到 1970 后在更低活跃度上进入平台
+（1970≈1982——固定开销+ sector 粒度的地板）。**被掩码的 lane 不发
+访存请求，只有活跃字节真正搬运**（探针
+`probes/e15_masked_transfer_width.py`）。旁证：max_dim1 修复把预测
+降了 36.7ns，恰等于补齐超额字节 6144B ÷ 167.6B/cycle——账目对得上。
+
+**只对"编译期可证"的掩码生效（回应 constexpr 疑问）**：是的——
+修正只在 `0 < activeElementRatio < 1−1e-9`（静态可证部分活跃）时
+触发；max_dim1 的 M/N 是 constexpr 所以比例静态可知。运行期掩码
+（如 fused_softmax 的 n_cols=257 是启动参数）比例未知，不触发修正，
+也不需要。
+
+**减法发生在哪、为什么不在估算 load 时间时直接减（问答）**：模型里
+"字节 → 时间"的换算有两类位置——
+
+1. **逐访问估算处**：直线段掩码组在估算时**就已经按活跃字节算**
+   （Formula A 掩码组：`effBytes = bytes × activeElementRatio`，
+   桶按活跃宽度选；掩码组解析式同样 `b ×= ratio`）——max_dim1 的
+   load 主体走的就是这一条，不存在"先按满字节算再减"；
+2. **未覆盖尾项**：所有机制认领后剩下的字节池，才做
+   `剩余字节 ÷ loadBytesPerCycle` 的换算。超额字节项在这一步之前
+   减掉：
+
+   ```cpp
+   uncoveredLoadBytes = max(0, work.loadBytes      // 工作量记账（满字节）
+                               - layout.loadBytes   // 已被各机制认领记账
+                               - curvedLoad.bytes
+                               - maskedPaddedExcessLoadBytes); // ← 在这里减
+   resources.load += uncoveredLoadBytes / loadBytesPerCycle;
+   ```
+
+   之所以不在 work.loadBytes 的记账处直接减：记账是所有机制共享的
+   底账（认领覆盖核对、驻留足迹、聚合包络都读它）；被实测曲线/行
+   认领的部分，其实测值本身已经体现了真实搬运量，再减一次就是双重
+   修正。所以修正被限定在"按字节数折算时间的兜底除法"这一处，
+   `max(0,·)` 保证减出负数时（全部已被满字节记账覆盖）钳为 0，
+   账目自洽。
+
 ## 3.2 机制一：直线段分组价——"同形状的访存第 1 条全价、后面打折"（G1/G2）
 
 **kernel（vector_add，`test_01_vector_add.py`，n=98432 个 float，BLOCK=1024，
