@@ -2917,6 +2917,13 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
           cv2.mixKappa = *v;
         cv2.mixEnvelopeEnabled = true;
       }
+      if (const auto *te = v2->getObject("tiny_store_excess")) {
+        if (const auto v = te->getNumber("per_store_ns"))
+          cv2.tinyStoreExcessNs = *v;
+        if (const auto v = te->getNumber("capacity2_min_bytes"))
+          cv2.tinyStoreCapacity2Bytes = *v;
+        cv2.tinyStoreExcessEnabled = true;
+      }
       if (const auto *se = v2->getObject("loop_envelope_line_simt")) {
         if (const auto v = se->getNumber("l2_bytes"))
           cv2.simtLineL2Bytes = *v;
@@ -3437,6 +3444,13 @@ if (const auto *sp = v2->getObject("s_penalty")) {
               reader.optionalNumber(*o, "Q", 0.0));
           cv2.groupA[cv2StripEnginePrefix(entry.first)] = g;
         }
+      }
+      if (const auto *te = v2->getObject("tiny_store_excess")) {
+        if (const auto v = te->getNumber("per_store_ns"))
+          cv2.tinyStoreExcessNs = *v;
+        if (const auto v = te->getNumber("capacity2_min_bytes"))
+          cv2.tinyStoreCapacity2Bytes = *v;
+        cv2.tinyStoreExcessEnabled = true;
       }
       if (const auto *se = v2->getObject("loop_envelope_line_simt")) {
         if (const auto v = se->getNumber("l2_bytes"))

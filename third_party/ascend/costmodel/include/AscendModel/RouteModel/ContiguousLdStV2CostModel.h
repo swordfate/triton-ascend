@@ -74,6 +74,14 @@ struct ContiguousV2Params {
   // (queue-depth hypothesis); stores are width-independent and nearly
   // size-flat at L2.  Residency: footprint (load+store bytes x K x
   // programs) vs L2 128MB.
+  // E18b (2026-11-18): tiny dependent-store excess.  A loop body's
+  // tiny (<=128B) load-dependent stores serialize once their count
+  // exceeds the pipeline hidden capacity C (C=2 at >=16KB dominant
+  // load, else 1); each excess store costs ~97 ns/iter (measured
+  // 93-99 across 2/4/16KB loads - geometry-independent).
+  bool tinyStoreExcessEnabled = false;
+  double tinyStoreExcessNs = 97.0;
+  double tinyStoreCapacity2Bytes = 16384.0;
   bool simtLineEnvelopeEnabled = false;
   double simtLineL2Bytes = 134217728.0;
   double simtLoadLine16L2[4] = {13.63, 12.77, 15.03, 28.11};

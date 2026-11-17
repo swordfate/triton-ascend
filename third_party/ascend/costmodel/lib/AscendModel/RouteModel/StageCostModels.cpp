@@ -997,13 +997,41 @@ static void mapContiguousV2Completion(
       const double perIter =
           contiguous_v2::mixEnvelopePerIter(profile.contiguousV2, loadBytes,
                                             storeBytes) * v2WaveDecay;
+      // Unified set phase 4 (E18b): tiny load-dependent stores serialize
+      // once their count exceeds the pipeline hidden capacity C (2 at
+      // >=16KB dominant load, else 1); each excess store costs ~97
+      // ns/iter (the dependent-store round trip).  Applies to mixed
+      // bodies with all-tiny stores; big-store mixes are covered by the
+      // mix formula; measured-row families (tier 1a) keep precedence.
+      double perIterEff = perIter;
+      if (profile.contiguousV2.tinyStoreExcessEnabled && loadBytes > 0.0 &&
+          storeBytes > 0.0) {
+        int64_t maxStoreChunk = 0;
+        for (const StageMemoryAccess *access : eligible) {
+          if (!access->store)
+            continue;
+          maxStoreChunk = std::max<int64_t>(
+              maxStoreChunk,
+              v2ElementCount(access) * (access->elementBits / 8));
+        }
+        if (maxStoreChunk > 0 && maxStoreChunk <= 128 && nStores >= 1) {
+          const int64_t cap =
+              domBytes >= int64_t(
+                              profile.contiguousV2.tinyStoreCapacity2Bytes)
+                  ? 2
+                  : 1;
+          perIterEff +=
+              std::max(0.0, double(nStores - cap)) *
+              profile.contiguousV2.tinyStoreExcessNs;
+        }
+      }
       const bool allStoresEnv =
           std::all_of(eligible.begin(), eligible.end(),
                       [](const StageMemoryAccess *a) { return a->store; });
       if (allStoresEnv)
-        resources.store += perIter * kCyclesPerNano;
+        resources.store += perIterEff * kCyclesPerNano;
       else
-        resources.load += perIter * kCyclesPerNano;
+        resources.load += perIterEff * kCyclesPerNano;
       claimAll();
       return;
     }
