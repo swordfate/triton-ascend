@@ -1032,8 +1032,9 @@ grid_stride_gather）的 hint 一律 = grid（多维 grid 取乘积，trip
 方向包络计价（单方向体/低 trip 体落 Tier 3 逐 op 解析）。终版与
 基线（git2e9efcac）的同 harness、同 hint 口径全量对账
 （`_100case_baseline_vs_commit_gridhint.md`，2026-11-17）：**95 例
-可评中基线 75 PASS、终版 81 PASS**；route 100 例无一变化；终版
-唯一回归 memory_stream l4（+3.4%→−12.2%，根因见下），改善 7 例
+可评中基线 75 PASS、终版（E17f 修复轮，git74685b79）82 PASS**；
+route 100 例无一变化；**相对基线 0 回归**（memory_stream l4 曾是
+唯一回归 +3.4%→−12.2%，E17f 修复后 −2.84% PASS，见下），改善 7 例
 （rowred、reduce_sum_epilogue、associative_scan、vector_add、
 max_dim1、cumprod、grid_stride_dot_p112）；cumsum×2 在基线同口径
 下同样 −79.9/−86.1% FAIL（两版同病：cumsum op 模型本身，用户裁定
@@ -1083,13 +1084,13 @@ logical_programs 契约标定，hint=grid 使 p224/p112 大幅恶化；仅
 p336/p448 两个 dot 点小幅改善（该族随后按评审指示也统一
 hint=grid，见下方最终采纳形态；预测差异以 16-case 对账为准）。
 
-**终版全量对账（2026-11-17）**：两轮 compile-only 100-case（仅换
-wheel：基线 git2e9efcac vs 终版 git9e6dd2a7，harness 与 hint 完全
-一致）的逐 case 全表、翻转清单与回归根因见
-`_100case_baseline_vs_commit_gridhint.md`。要点：route 100 例无一
-变化；95 例可评 75→81 PASS；唯一回归 memory_stream_l4
-（+3.4%→−12.2%，根因见上）；改善 7 例；cumsum×2 两版同 FAIL
-（排除）；5 例无实测不可评。
+**终版全量对账（2026-11-17）**：compile-only 100-case（仅换
+wheel：基线 git2e9efcac vs 中间版 git9e6dd2a7 vs E17f 修复版
+git74685b79，harness 与 hint 完全一致）的逐 case 全表、翻转清单与
+回归根因见 `_100case_baseline_vs_commit_gridhint.md`。要点：route
+100 例全程无一变化；95 例可评 75→81→**82 PASS**；E17f 轮 ms_l4
+−12.2%→−2.84% PASS 且其余 99 case 逐位不变；相对基线 **0 回归、
+7 改善**；cumsum×2 各版同 FAIL（排除）；5 例无实测不可评。
 
 **E17d 可靠性研究（回应"E17b 的 K 轴数据噪声大、要测准"）**：
 方法 × 卡 × dst 轮换的受控对照（混合体 4KB/访问，30 次×56 程序
