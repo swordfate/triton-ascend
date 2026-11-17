@@ -948,6 +948,53 @@ E16/E16b 的探针方法可直接用于未来把这两层升级为"按 (事务�
 驻留) 插值"的速率模型。探针：`probes/e16b_rate_limit.py`
 （数据 `e16b_results.json`）。
 
+**混合体 Tier 2 升级：max+κ·min 逐方向模型（E17/E17c，2026-11-17，
+已实现并通过 gate）**。评审提出：load/store 应分开算（不同通道），
+能否并行取决于下次迭代是否依赖本次 store 的结果，且各方向速率
+随数据量变化。E17 双向扫描（load-only L∈{4,8,16,32}KB、store-only
+S 同、混合 7 点、in-place 对照；K=16/32 斜率，grid=56）得到：
+
+- **单方向时间曲线（凹形，速率随事务增大 53.7→97.9 B/ns）**：
+  TL = {4KB:76.3, 8KB:96.4, 16KB:167.9, 32KB:334.7} ns，
+  TS = {4KB:79.6, 8KB:93.9, 16KB:157.4, 32KB:276.1} ns（K=32 稳态）；
+- **混合体 = max(TL,TS) + κ×min(TL,TS)，κ=0.18**：7 个混合点全部
+  ±8% 内（现字节求和包络同点 +21%~+76%——偏斜混合 2L+1S 最差）；
+- **别名（in-place 读改写）= 275.3 ns/迭代**（8KB/8KB），超过纯串行
+  和 190.3——loop-carried 依赖强制全串行，与非别名 119.6 截然不同
+  （代价模型暂无别名检测，记录为限制）。
+
+**实现与 gate**：混合体（load、store 均非零）且 `iterationCount≥16`
+（E17 标定的 K 范围）时，Tier 2 改用上述 max+κ·min 曲线（log2-B
+插值、端点钳制）；单方向体保留旧字节求和包络（memory_stream 靠它
+过 gate，不动）；simt 仍走 Tier 3。JSON 新键
+`simd.memory.contiguous_ldst_v2.loop_envelope_mix`（bytes/tl_ns/
+ts_ns 3×4 + kappa，共 13 个数）。gate：**100-case 86/100、guard
+51/96（7/24）与替换前逐位一致**——现套件没有 K≥16 的混合体落到
+Tier 2（B_add/B_copy/B_store 走 Tier 1 行表命中），升级对既有集合
+零风险、对未来几何修复偏斜混合的 +39%~+76% 高估。
+第一轮实现曾把 muls_add 打到 −17%——它虽名义有循环，但每逻辑程序
+只 trip 1 次（2048 逻辑程序 ÷ 56 物理流水 37 深），稳态模型不适用，
+`iterationCount≥16` 门由此而来。
+
+**表示层实验（E17c + hint 对照，回应"trip 应该是 37"）**：muls_add
+实际 launch grid=56（`grid=min(n_blocks,56)`），grid-stride 循环
+真实 trip≈37；route.json 的 trip=1 是分析器按
+`logical_program_count_hint=n_blocks(2048)` 规范化的视图
+（2048 逻辑程序 × 1 trip，slot 深度 37）。两种表示描述同一执行但
+选中不同公式：trip=1 视图 → 旧包络（含每程序启动）→ +6.14%；
+**trip=37 视图（hint 改传 56）→ trip=37、slot=1、iterationCount=37
+≥16 → E17 混合包络 → 预测 6.345µs vs 实测 6.625µs（−4.2%）**，
+比旧视图更准且方向相反。E17c 直接对账：同 body 的 grid-stride 寻址
+103.7 ns/trip vs 连续寻址 101.2（散布惩罚仅 +2.5%），Tier 2 公式
+110.7（+6.7%）✓、字节求和 160.4（+55%）✗、Tier 3 259.5（+150%）✗。
+**建议**：grid-stride launch-bound 循环建议向模型传物理 grid 作为
+hint（保留 trip 推导），使稳态混合包络可用；现行 harness 传
+n_blocks 的约定按指示保持不变，已记录。探针：
+`probes/e17_mix_matrix.py`、`probes/e17c_grid_stride.py`、
+`probes/e17b_k_sweep.py`（K 轴 g(K) 扫描显示小 K 填充、K=16 甜点、
+大 K 足迹墙的非单调形状——逐 K 因子表不可靠，K 轴精细建模记录为
+后续工作；数据 `e17_results.json`/`e17b_results.json`）。
+
 **三问澄清（Tier 2 / Tier 3 的关系、K、引擎限制）**：
 
 1. **为什么有了 Tier 2 还要 Tier 3？** 三个理由：(a) **Tier 2 是

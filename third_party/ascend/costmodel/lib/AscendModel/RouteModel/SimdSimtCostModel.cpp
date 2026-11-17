@@ -2900,6 +2900,23 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
           cv2.groupA[cv2StripEnginePrefix(entry.first)] = g;
         }
       }
+      if (const auto *me = v2->getObject("loop_envelope_mix")) {
+        if (auto arr = me->getArray("bytes"))
+          for (int i = 0; i < 4 && i < static_cast<int>(arr->size()); ++i)
+            if (const auto v = (*arr)[i].getAsNumber())
+              cv2.mixBytes[i] = *v;
+        if (auto arr = me->getArray("tl_ns"))
+          for (int i = 0; i < 4 && i < static_cast<int>(arr->size()); ++i)
+            if (const auto v = (*arr)[i].getAsNumber())
+              cv2.mixTL[i] = *v;
+        if (auto arr = me->getArray("ts_ns"))
+          for (int i = 0; i < 4 && i < static_cast<int>(arr->size()); ++i)
+            if (const auto v = (*arr)[i].getAsNumber())
+              cv2.mixTS[i] = *v;
+        if (const auto v = me->getNumber("kappa"))
+          cv2.mixKappa = *v;
+        cv2.mixEnvelopeEnabled = true;
+      }
       if (const auto *ck = v2->getObject("group_a_ct_kc")) {
         for (const auto &entry : *ck) {
           if (const auto v = entry.second.getAsNumber())

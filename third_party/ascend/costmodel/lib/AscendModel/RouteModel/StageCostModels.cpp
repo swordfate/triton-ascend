@@ -970,6 +970,26 @@ static void mapContiguousV2Completion(
     // wave).  This is the calibrated fallback for geometries the direct
     // table does not cover; both streams charge into the same envelope
     // (the measured mixed-body prices it approximates include both).
+    // E17 (2026-11-17): MIXED bodies (loads and stores both present)
+    // follow the per-direction E17 curves instead - the byte-sum
+    // envelope over-prices skewed mixes by up to +76% (2L+1S measured
+    // 115.7 ns/iter vs envelope 160.4); max+kappa*min tracks the sweep
+    // within +/-8%.  Single-direction bodies keep the byte-sum envelope
+    // (gate-validated on memory_stream).  Simt keeps tier 3 (no
+    // aggregate calibration for the LSU/DCache path).
+    // The E17 curves were calibrated on steady loops (K>=16); low-trip
+    // bodies (e.g. muls_add/memory_stream loop-once shells pipelined 37
+    // deep per slot) never reach that regime and must keep the prior
+    // envelope (gate: 4 regressions -17~-23% without this gate).
+    if (simd && profile.contiguousV2.mixEnvelopeEnabled && loadBytes > 0.0 &&
+        storeBytes > 0.0 && stage.iterationCount >= 16) {
+      const double perIter =
+          contiguous_v2::mixEnvelopePerIter(profile.contiguousV2, loadBytes,
+                                            storeBytes) * v2WaveDecay;
+      resources.load += perIter * kCyclesPerNano;
+      claimAll();
+      return;
+    }
     if (simd && profile.independentLoadGroupBytesPerCycle > 0.0) {
       const double perIter =
           (profile.independentLoadGroupIterationStartupCycles +
