@@ -858,6 +858,32 @@ Tier 3 在 989-994，`analyticalPerIter` lambda 定义于 ~757。）
 计时——`MOV $0, SYS_CNT` 读设备周期计数器，ns=ticks×1.00008，
 指南 6.1 方法；grid=56，4KB/访问，中位数）**：
 
+**探针 kernel 核心代码**（完整源码 `probes/e16_mixed_stream.py`，
+探针只带最少脚手架——累加防删、时间戳读寄存器）：
+
+```python
+@triton.jit
+def _sys_cnt():
+    return tl.inline_asm_elementwise(
+        asm="MOV $0, SYS_CNT", constraints="=l", args=[],
+        dtype=tl.int64, is_pure=False, pack=1)   # is_pure=False 防止被 CSE
+
+@triton.jit
+def e16_mixed(src, dst, tick_ptr, iters: tl.constexpr, BLOCK: tl.constexpr):
+    pid = tl.program_id(0)
+    lane = tl.arange(0, BLOCK)
+    base = pid * iters * BLOCK
+    t0 = _sys_cnt()                              # 循环窗口起点
+    for step in range(iters):                    # 每迭代 1 load + 1 store
+        v = tl.load(src + base + step * BLOCK + lane)
+        tl.store(dst + base + step * BLOCK + lane, v + 1.0)
+    t1 = _sys_cnt()                              # 窗口终点
+    tl.store(tick_ptr + pid * 2, t0)             # 每 program 记录自己的
+    tl.store(tick_ptr + pid * 2 + 1, t1)         # t0/t1，host 取中位
+# 同族变体：e16_ld_only（循环内只 load，收尾 1 条小 store 消费）、
+# e16_st_only（循环内只 store 常数）、e16_mixed21（每迭代 2L+1S）。
+```
+
 | 探针体 | 每迭代实测（斜率法） | 合成速率 B/ns |
 |---|---|---|
 | 仅 load（K=16/32 斜率） | 83.4 | 49.1 |
@@ -883,6 +909,37 @@ Tier 3 在 989-994，`analyticalPerIter` lambda 定义于 ~757。）
 载速率移动 106.3 B/ns）——更物理的改进是"合成速率随配比"的
 一条曲线，记录为后续工作。探针：
 `probes/e16_mixed_stream.py`（数据 `e16_results.json`）。
+
+**E16b 追问：实测速率为什么远低于 Tier 3 的 167.56 B/cycle？
+（你的两个假设都命中了：依赖链 + 事务太小；另发现驻留强影响）**
+
+| 变体（仅 load，grid=56，每迭代字节数） | ns/迭代 | 达到 B/ns |
+|---|---|---|
+| base：`acc += load`（串行累加依赖链）、4KB、L2 热 | 80.4 | **50.9** |
+| indep4：4 条独立累加链、16KB、L2 热 | 191.0 | **85.8**（+69%） |
+| bigblock：`acc += load`、**16KB 事务**、L2 热 | 82.9 | **197.6**（超 167.56！） |
+| base、4KB、**DRAM 冷**（轮换缓冲） | 165.5 | 24.8 |
+| indep4、16KB、DRAM 冷 | 280.6 | 58.4 |
+| 单发 64KB、L2 热（Tier 3 公式 regime） | 1347.1 | 48.6 |
+| 单发 16KB、L2 热 | 395.0 | 41.5 |
+
+四条结论：(1) **累加依赖链是第一个限制**——`acc += load` 让每条
+load 等前一条的加法释放寄存器，打破依赖后 4KB 速率 +69%；(2)
+**4KB 事务是第二个限制**——16KB 事务 + 独立链实测 197.6 B/ns，
+**超过 167.56 常数本身**：该常数在其标定 regime（≥16KB、独立、
+L2 热）是可达的，不是虚标；(3) **驻留强影响**——DRAM 冷使同几何
+速率减半（50.9→24.8），Tier 2/3 的常数默认 L2 热口径；(4) **共驻
+竞争**——单发 64KB 的实测 48.6 B/ns 是 56 程序同时竞争下的值，
+Tier 3 公式对它给 496ns、实测 1347ns（常数不含共驻竞争，这正是
+候选层 P 轴/边界项要补的维度）。
+
+**给评审的结论**：不存在单一的"load 带宽"或"store 带宽"——实测
+速率 = f(事务大小, 依赖结构, L2/DRAM 驻留, 共驻程序数)。Tier 2 的
+83.26 与 Tier 3 的 167.56 是**各自 regime 的局部拟合斜率**（前者：
+满波 1:1 混合稳态；后者：短事务逐 op 分析），不是器件物理峰值；
+E16/E16b 的探针方法可直接用于未来把这两层升级为"按 (事务大小 ×
+驻留) 插值"的速率模型。探针：`probes/e16b_rate_limit.py`
+（数据 `e16b_results.json`）。
 
 **三问澄清（Tier 2 / Tier 3 的关系、K、引擎限制）**：
 
