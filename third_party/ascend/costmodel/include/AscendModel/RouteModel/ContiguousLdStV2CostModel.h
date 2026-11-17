@@ -156,8 +156,10 @@ inline double pAxisFactor(const ContiguousV2Params &params,
   return lo->second + w * (hi->second - lo->second);
 }
 
-/// E17 mixed-body envelope: per-iteration ns of a loop body moving
-/// loadBytes of loads and storeBytes of stores (non-aliased).  Each
+/// E17 envelope (unified set): per-iteration ns of a loop body moving
+/// loadBytes of loads and storeBytes of stores (non-aliased); a
+/// single-direction body (one side zero) takes the pure direction
+/// curve.  Each
 /// direction follows its measured concave curve (rate ramps with
 /// transaction size); the two streams overlap, so the body pays the
 /// larger stream plus a fitted share of the smaller (DRAM contention).
@@ -179,6 +181,13 @@ inline double mixEnvelopePerIter(const ContiguousV2Params &params,
     }
     return v;
   };
+  // Unified set: single-direction bodies take the pure direction curve
+  // (TL/TS were measured with load-only / store-only probes; the mix
+  // term vanishes when one stream is absent).
+  if (storeBytes <= 0.0)
+    return curve(params.mixTL, loadBytes);
+  if (loadBytes <= 0.0)
+    return curve(params.mixTS, storeBytes);
   const double tl = curve(params.mixTL, loadBytes);
   const double ts = curve(params.mixTS, storeBytes);
   return std::max(tl, ts) + params.mixKappa * std::min(tl, ts);

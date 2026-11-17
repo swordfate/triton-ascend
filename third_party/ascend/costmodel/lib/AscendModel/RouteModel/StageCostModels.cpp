@@ -979,21 +979,34 @@ static void mapContiguousV2Completion(
     // bodies are launch/startup-dominated), so those bodies fall through
     // to the per-op analytical in tier 3, like single-direction bodies
     // do since the byte-sum aggregate envelope was removed.
-    if (simd && profile.contiguousV2.mixEnvelopeEnabled && loadBytes > 0.0 &&
-        storeBytes > 0.0 && stage.iterationCount >= 16) {
+    // Unified set (2026-11-17): single-direction bodies enter the
+    // envelope too - TL/TS are measured with load-only / store-only
+    // probes, so the mix formula degenerates to the pure direction when
+    // the other stream is absent.  Direction-aware charging mirrors the
+    // strided-group tier (a store-only body competes with the store
+    // stream, not the load stream).
+    if (simd && profile.contiguousV2.mixEnvelopeEnabled &&
+        (loadBytes > 0.0 || storeBytes > 0.0) &&
+        stage.iterationCount >= 16) {
       const double perIter =
           contiguous_v2::mixEnvelopePerIter(profile.contiguousV2, loadBytes,
                                             storeBytes) * v2WaveDecay;
-      resources.load += perIter * kCyclesPerNano;
+      const bool allStoresEnv =
+          std::all_of(eligible.begin(), eligible.end(),
+                      [](const StageMemoryAccess *a) { return a->store; });
+      if (allStoresEnv)
+        resources.store += perIter * kCyclesPerNano;
+      else
+        resources.load += perIter * kCyclesPerNano;
       claimAll();
       return;
     }
     // (The former byte-sum aggregate envelope was removed: it was a
-    // regime-local fit for trip-1 slot-pipelined and load-only
-    // bodies, superseded by the E17 per-direction curves for mixed
-    // bodies; single-direction and trip-1 bodies now take the per-op
-    // analytical below.  See review doc 3.5 for the measured
-    // trade-offs that led to this removal.)
+    // regime-local fit for trip-1 slot-pipelined bodies.  K>=16 bodies -
+    // mixed or single-direction - take the per-direction envelope above;
+    // trip-1 / low-trip bodies take the per-op analytical below until
+    // the A(P)+K*m splice lands.  See the unified-set doc and review
+    // 3.5 for the measured trade-offs.)
     // ---- Tier 3: generic per-op analytical (the kept fallback) ----------
     const std::pair<double, double> ana = analyticalPerIter();
     resources.load += ana.first * kCyclesPerNano;
