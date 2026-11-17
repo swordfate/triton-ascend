@@ -785,7 +785,14 @@ tiny_direct 全部 20 行数值见 §4.3。
 
 ```python
 # bench_muls_add_costmodel.py：n=2097152 个 fp32 的乘加
-# launch grid = 2048 个程序 = 37 波（每个 AIV 背靠背跑 37 个程序）
+# 物理发射 grid = 56；逻辑程序数（hint）= 2048；
+# kernel 是 grid-stride 循环：每个程序处理 block 序列 pid, pid+56, ...
+# → 每程序循环 37 次（route.json: runtime_loop_iteration_count=37）
+# 注意：route.json 里 workload_trip_count=1 是 IR 分析器的占位值
+# （grid-stride 的 trip 依赖 tt.get_num_programs，静态不可解析、
+# supported=False），不是真实循环次数；"每 slot 排队 37 个逻辑
+# 程序"（logical_programs_per_scheduling_slot=37）是同一事实的
+# 另一种编码。
 ```
 
 机制二的行表只测到 4 波（grid ≤224）：muls_add 的 2048 程序远超
