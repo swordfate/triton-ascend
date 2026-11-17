@@ -824,6 +824,31 @@ perIter = (IterationStartup + (loadBytes+storeBytes)/AggregateRate)
   simt: warp 指令条数 / 每 cycle warp 指令数
 ```
 
+**为什么 Tier 2 是"load+store 加一起除聚合带宽"？与直接用 Tier 3
+差在哪（数值对比，真实常数）**：Tier 2 建模的是深流水稳态——会落
+到这层的循环体（大 launch、迭代多）里，每迭代的多次访问启动全部
+流水化掉，稳态只由卡级可达聚合带宽决定；该速率已含两个方向、全部
+核心分摊 DRAM 的效果，所以两个方向的字节属于同一个分母，拆开除
+各自速率会把 DRAM 给不了的并行度重复计入。数值对比（每迭代
+1 条 4KB load + 1 条 4KB store）：
+
+```
+Tier 3（逐访问，不摊销）:
+  load  = 105.31 + 4096/167.56 = 129.7ns（load 桶）
+  store =  90.95 + 4096/213.13 = 110.2ns（store 桶）
+  流水段取 max → 129.7ns/迭代
+Tier 2（每次迭代一次启动 + 聚合速率）:
+  12.79 + 8192/83.26 = 111.2ns/迭代
+```
+
+访问条数越多差距越大：每迭代 4 load + 2 store（各 4KB）时
+Tier 3 = max(4×129.7, 2×110.2) = 518.8ns（6 次启动各付各的），
+Tier 2 = 12.79 + 24576/83.26 = 307.9ns——1.7 倍的差就是"逐 op
+启动没摊销"的误差。两个 Tier 各管一个 regime：Tier 2 管稳态
+带宽型（simd 大循环），Tier 3 管启动主导型和 simt。
+（Tier 2 代码 StageCostModels.cpp:971-987，加总除带宽在 977-979；
+Tier 3 在 989-994，`analyticalPerIter` lambda 定义于 ~757。）
+
 **三问澄清（Tier 2 / Tier 3 的关系、K、引擎限制）**：
 
 1. **为什么有了 Tier 2 还要 Tier 3？** 三个理由：(a) **Tier 2 是
