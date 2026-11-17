@@ -824,6 +824,39 @@ perIter = (IterationStartup + (loadBytes+storeBytes)/AggregateRate)
   simt: warp 指令条数 / 每 cycle warp 指令数
 ```
 
+**三问澄清（Tier 2 / Tier 3 的关系、K、引擎限制）**：
+
+1. **为什么有了 Tier 2 还要 Tier 3？** 三个理由：(a) **Tier 2 是
+   simd 专用的**（代码 `if (simd && independentLoadGroupBytesPerCycle
+   > 0)`，StageCostModels.cpp:972）——聚合带宽 83.26 B/cycle 是在
+   simd 的 MTE 流上测的，simt 走 LSU/DCache、吞吐以 warp 指令计，
+   没有这层标定，simt 循环体直接落 Tier 3；(b) Tier 2 把整个循环
+   体当成"一条流"，表达不了 load/store 分开计价——Tier 3 的
+   load/store 分桶保留这个细节；(c) 兜底链必须以"任何输入都有
+   答案"的一层终结。**血统**：Tier 2 复用的是基线路径二的标定
+   常数（`independent_loop_load_group` 扫描），但"把它用作循环体
+   兜底"是 v2 的安排（基线的同款公式只管直线段的 load 前缀）；
+   **Tier 3 就是基线兜底公式本身**（simd 分支逐 op 启动+字节/带宽、
+   simt 分支 warp 指令/速率），v2 原样保留。
+
+2. **为什么 Tier 2 不体现"K 影响每迭代时间"？** 刻意的设计取舍。
+   实测里 K 强依赖的场景（小 K 的延迟链、小 store 翘头）已被
+   升级到实测层处理——第 1 优先的 A+K×m 拟合、第 1a 优先的
+   翘头项 excess×0.636。会落到 Tier 2 的几何（>224 程序的大
+   launch、无标定家族），流水深、带宽主导，每迭代时间已收敛到
+   与 K 无关的平坦区——muls_add（37 波）用常数包络 +6.14% 即是
+   验证。**诚实边界**：若某几何同时"落 Tier 2 且 K 强依赖"（小
+   launch 不会——它有行表；无标定家族的小 K 循环会），Tier 2
+   会失真，这是已知残留，靠 gate 抽查把守。
+
+3. **Tier 2 确实是 load+store 加在一起除以聚合带宽，且仅限 simd**
+   （你的观察正确，原文漏写了引擎限制，已补）。除以"字节带宽"
+   的做法在两层里的适用范围：Tier 2 仅 simd（simt 无此标定）；
+   Tier 3 是**分方向**的——load 字节/load 带宽、store 字节/store
+   带宽分桶计价，simd 用字节速率、simt 用 warp 指令速率。基线
+   本身并没有"load+store 加一起"的循环体包络（它的同款公式只管
+   直线段 load 前缀），这个用法是 v2 的延伸。
+
 **掩码与依赖在这层怎么处理**：不在这层处理——**资格判定在进
 瀑布之前统一做**（§3.3 的准入清单：地址依赖加载下标、非仿射
 地址、部分掩码 store 等不进认领集合，走各自的责任曲线）。进入
