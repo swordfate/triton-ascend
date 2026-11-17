@@ -54,6 +54,12 @@ struct ContiguousV2Params {
   int64_t l2CacheBytes = 0;
   // keys: "<direction>/<dtype>/<bytes>/<residency>"  (engine = this profile)
   std::map<std::string, ContiguousV2Group> groupA;
+  // 2026-11-17 group_a compression: per-direction/residency cTransfer
+  // ratio (cTransfer = kc * marginal; Q is structural, groupAQueues
+  // below).  keys: "load/warm", "load/cold", "store/warm", "store/cold".
+  std::map<std::string, double> groupACtKc = {
+      {"load/warm", 1.231}, {"load/cold", 2.768},
+      {"store/warm", 1.003}, {"store/cold", 1.021}};
   // keys: "<body>/<dtype>/<bytes>/<residency>"
   std::map<std::string, ContiguousV2Loop> loopB;
   // keys: "<dtype>"
@@ -134,6 +140,34 @@ inline double pAxisFactor(const ContiguousV2Params &params,
   const double w = (double)(programCount - lo->first) /
                    (double)(hi->first - lo->first);
   return lo->second + w * (hi->second - lo->second);
+}
+
+/// Structural Q (2026-11-17 group_a compression): the queue-depth knee
+/// of the segmented group price, from the byte count instead of a stored
+/// per-cell value.  Store streams hold a flat 8-deep queue; load streams
+/// scale it with in-flight bytes (warm 64KB / cold 32KB, clamped to the
+/// calibrated range).  Verified against every stored warm load cell and
+/// every store cell before the stored values were dropped.
+inline int64_t groupAQueues(bool store, int64_t bytes, bool warm) {
+  if (store)
+    return 8;
+  const int64_t kq = warm ? 65536 : 32768;
+  const int64_t hi = warm ? 32 : 8;
+  int64_t q = kq / (bytes < 1 ? 1 : bytes);
+  q = q < 4 ? 4 : (q > hi ? hi : q);
+  return q;
+}
+
+/// Structural cTransfer: the transfer-limited per-access price of the
+/// n>Q regime as a fixed multiple of the queue-depth marginal (median
+/// ratio of the dropped stored values, per direction/residency).
+inline double groupACTransfer(const ContiguousV2Params &params,
+                              bool store, bool warm, double marginal) {
+  const auto it = params.groupACtKc.find(
+      std::string(store ? "store" : "load") + "/" +
+      (warm ? "warm" : "cold"));
+  const double kc = it != params.groupACtKc.end() ? it->second : 1.0;
+  return marginal * kc;
 }
 
 /// Static description of one contiguous access stream.
@@ -218,12 +252,13 @@ inline double evaluateContiguousV2Ns(const ContiguousV2Params &params,
     return 0.0;
   const ContiguousV2Group &g = it->second;
   const int64_t n = instances;
-  double total;
-  if (g.Q > 0 && n > g.Q)
-    total = g.first + (g.Q - 1) * g.marginal + (n - g.Q) * g.cTransfer;
-  else
-    total = g.first + (n - 1) * g.marginal;
-  return total;
+  const int64_t q = groupAQueues(access.store, bytes, warm);
+  if (n > q) {
+    const double cT =
+        groupACTransfer(params, access.store, warm, g.marginal);
+    return g.first + (q - 1) * g.marginal + (n - q) * cT;
+  }
+  return g.first + (n - 1) * g.marginal;
 }
 
 } // namespace contiguous_v2

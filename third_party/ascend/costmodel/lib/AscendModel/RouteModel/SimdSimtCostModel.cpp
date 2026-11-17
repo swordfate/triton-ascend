@@ -2892,10 +2892,18 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
           contiguous_v2::ContiguousV2Group g;
           g.first = reader.number(*o, "first", "cv2.group_a");
           g.marginal = reader.number(*o, "marginal", "cv2.group_a");
-          g.cTransfer = reader.number(*o, "c_transfer", "cv2.group_a");
+          // 2026-11-17 group_a compression: Q/c_transfer may be absent -
+          // they are structural now (groupAQueues / groupACTransfer).
+          g.cTransfer = reader.optionalNumber(*o, "c_transfer", 0.0);
           g.Q = static_cast<int64_t>(
-              reader.number(*o, "Q", "cv2.group_a"));
+              reader.optionalNumber(*o, "Q", 0.0));
           cv2.groupA[cv2StripEnginePrefix(entry.first)] = g;
+        }
+      }
+      if (const auto *ck = v2->getObject("group_a_ct_kc")) {
+        for (const auto &entry : *ck) {
+          if (const auto v = entry.second.getAsNumber())
+            cv2.groupACtKc[entry.first.str()] = *v;
         }
       }
       if (const auto *lb = v2->getObject("loop_b")) {
@@ -3384,10 +3392,18 @@ if (const auto *sp = v2->getObject("s_penalty")) {
           contiguous_v2::ContiguousV2Group g;
           g.first = reader.number(*o, "first", "cv2.group_a");
           g.marginal = reader.number(*o, "marginal", "cv2.group_a");
-          g.cTransfer = reader.number(*o, "c_transfer", "cv2.group_a");
+          // 2026-11-17 group_a compression: Q/c_transfer may be absent -
+          // they are structural now (groupAQueues / groupACTransfer).
+          g.cTransfer = reader.optionalNumber(*o, "c_transfer", 0.0);
           g.Q = static_cast<int64_t>(
-              reader.number(*o, "Q", "cv2.group_a"));
+              reader.optionalNumber(*o, "Q", 0.0));
           cv2.groupA[cv2StripEnginePrefix(entry.first)] = g;
+        }
+      }
+      if (const auto *ck = v2->getObject("group_a_ct_kc")) {
+        for (const auto &entry : *ck) {
+          if (const auto v = entry.second.getAsNumber())
+            cv2.groupACtKc[entry.first.str()] = *v;
         }
       }
       if (const auto *lb = v2->getObject("loop_b")) {

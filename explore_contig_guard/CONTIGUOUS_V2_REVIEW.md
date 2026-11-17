@@ -1155,6 +1155,36 @@ A_copy_f32_4k_g64（2 波、总时长仅 ~2.4µs 的短流）在终版二进制�
 
 ## 4.1 group_a：直线段分段线性价表（单位纳秒）
 
+> **2026-11-17 参数压缩（已过 gate，采纳为现行形态）**：每格只存
+> first/marginal 两个数；**Q 与 c_transfer 改为结构公式**——
+> Q：store 恒 8、load warm `clamp(65536/B,4,32)`（与全部 load warm
+> 格逐一吻合）、load cold `clamp(32768/B,4,8)`；c_transfer =
+> `kc(方向×驻留) × marginal`，kc 共 8 个标量（`group_a_ct_kc`）：
+> simd 1.231/2.768/1.003/1.021，simt 1.030/1.952/0.988/1.002。
+> 同时删除 16 个与 base 逐位重复的 simt /w16 死格。
+> **存储数 504 → 228（−55%）**；gate：100-case 86/100、guard 51/96
+> （7/24）与压缩前逐位一致。代码消费点：StageCostModels.cpp:1141
+> （Formula A）与 ContiguousLdStV2CostModel.h `evaluateContiguousV2Ns`
+> （助手 `groupAQueues` / `groupACTransfer`）；解析点
+> SimdSimtCostModel.cpp 两处（Q/cT 为可选键）。
+>
+> **dtype 合并被数据否定**：12 个多 dtype 位置逐格检测（15% 门槛）
+> 0 个可合并，离散度 9.9%~25990%——同字节下元素数不同（fp16 与
+> fp32 差 2 倍 warp 指令数），是真实硬件差异。两轮全公式拟合亦被
+> 否定（光滑公式误差最大 ±600%；dtype 分层模型 74/126 格 >30%，
+> 手算演示会把 memory_stream 从 +0.36% 推到 ~−15% FAIL）。
+> first/marginal 的逐格值就是被保留的最简形态。
+>
+> **StridedShort 式因子的启发（第三轮拟合，已记录）**：把 E（元素数）
+> 与 B（字节）分离为独立因子（[1,E,B]，dtype 效应由 E/B 自动携带）
+> 后，**simd load/warm 组可公式化**（中位 first 12.1% / marginal
+> 8.3%），但 store/cold、simt 各组仍不可拟合（simt store 的存储值
+> 含负 first / 0 first，病态）。与 StridedShort 闭式（自有 21 点
+> 受控扫描，MAPE 1.22%）的根本差异在于数据来源：group_a 格子是
+> 历次独立探针的拟合值，噪声在数据里而非因子里。**后续工作**：
+> 为 group_a 发起专门旋转循环扫描 campaign（受控点重测），可望
+> 闭式化 simd load/warm 全组（省 ~17 个数）——本轮不加特例路径。
+
 **simd 段，load 方向（20 格）**：
 
 | 字节档 | warm/cold | first | marginal | cTransfer | Q |

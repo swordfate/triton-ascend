@@ -1138,10 +1138,19 @@ static void mapContiguousV2Completion(
       }
       fitted = false;
     } else {
-      if (g.Q > 0 && n > g.Q)
-        total = g.first + (g.Q - 1) * g.marginal + (n - g.Q) * g.cTransfer;
-      else
+      // Q and cTransfer are structural (2026-11-17 group_a compression):
+      // Q from the byte count per direction/residency, cTransfer =
+      // kc * marginal.  The stored cell values are no longer read.
+      const int64_t q = contiguous_v2::groupAQueues(
+          first->store, bytes, llvm::StringRef(res) == "warm");
+      if (n > q) {
+        const double cT = contiguous_v2::groupACTransfer(
+            profile.contiguousV2, first->store,
+            llvm::StringRef(res) == "warm", g.marginal);
+        total = g.first + (q - 1) * g.marginal + (n - q) * cT;
+      } else {
         total = g.first + (n - 1) * g.marginal;
+      }
     }
     if (!(total > 0.0))
       continue;
