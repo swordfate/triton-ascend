@@ -842,7 +842,7 @@ Tier 3。
 4KB store，公式价）：
 
 ```
-Tier 2（E17 稳态包络）: 79.6 + 0.18×76.3 = 93.3ns/迭代
+Tier 2（E17f 稳态包络）: 106.8 + 0.1×90.0 = 115.8ns/迭代
 Tier 3（逐访问，不摊销）:
   load  = 105.31 + 4096/167.56 = 129.7ns（load 桶）
   store =  90.95 + 4096/213.13 = 110.2ns（store 桶）
@@ -950,11 +950,16 @@ TL/TS 曲线与 Tier 3 的 167.56 是**各自 regime 的局部拟合斜率**
 随数据量变化。E17 双向扫描（load-only L∈{4,8,16,32}KB、store-only
 S 同、混合 7 点、in-place 对照；K=16/32 斜率，grid=56）得到：
 
-- **单方向时间曲线（凹形，速率随事务增大 53.7→97.9 B/ns）**：
-  TL = {4KB:76.3, 8KB:96.4, 16KB:167.9, 32KB:334.7} ns，
-  TS = {4KB:79.6, 8KB:93.9, 16KB:157.4, 32KB:276.1} ns（K=32 稳态）；
-- **混合体 = max(TL,TS) + κ×min(TL,TS)，κ=0.18**：7 个混合点全部
-  ±8% 内；
+- **单方向时间曲线（E17f 2026-11-17 重标定，dyn/hot 口径）**：
+  TL = {4KB:90.0, 8KB:113.7, 16KB:196.8, 32KB:392.0} ns，
+  TS = {4KB:106.8, 8KB:123.5, 16KB:214.8, 32KB:377.5} ns
+  （速率随事务增大 45.5→83.6 B/ns，凹形不变。E17 首轮扫描的
+  76.3/96.4/167.9/334.7 与 79.6/93.9/157.4/276.1 已替换：该代探针
+  系统性偏快 18~35%，与 E16 复制探针（mix 1L+1S 4KB：108.4 vs
+  E17f 106.9 ✓）和真实 kernel 锚点不符，详见下文 E17f 块）；
+- **混合体 = max(TL,TS) + κ×min(TL,TS)，κ=0.1**：混合点实测 κ 在
+  0~0.2 之间（store 相对 load 越平衡越大，单方向占优时趋 0），
+  取均值 0.1；
 - **别名（in-place 读改写）= 275.3 ns/迭代**（8KB/8KB），超过纯串行
   和 190.3——loop-carried 依赖强制全串行，与非别名 119.6 截然不同
   （代价模型暂无别名检测，记录为限制）。
@@ -972,6 +977,20 @@ ts_ns 3×4 + kappa，共 13 个数）。`iterationCount≥16` 门是这条曲线
 不适用于 trip=1 体；hint=grid 采纳后 trip=37 入域，muls_add
 −4.2%（见下）。
 
+**E17f 流数×事务×驻留扫描（2026-11-17，memory_stream_l4 回归的
+修复战役）**：`probes/e17f_stream_sweep.py`（数据
+`probes/e17f_results.json`），ld/st/mix 三族 × 流数{1,2,4,8} ×
+每流事务{4,8,16,32}KB × {L2 热, DRAM 冷}，SYS_CNT 斜率法
+（K=16/32，grid=56，热=固定缓冲/冷=轮换池），dyn（运行时 trip，
+同真实 grid-stride kernel）与 cexpr（constexpr，同首轮 E17 口径）
+双口径。三个结论：(1) **流数本身无惩罚**——总量 16KB 的
+1×16KB=200.7 / 2×8KB=197.5 / 4×4KB=196.8 ns/迭代（±2%），
+"流数×每流事务"维度不进模型，总字节维度已足够；(2) **原 E17
+常数偏差是探针代际问题而非流数问题**——dyn/hot 重标定值已换入
+profile（见上），κ 0.18→0.1；(3) **DRAM 冷是 2~6× 量级**（冷/热
+比随总足迹增大；st 1x4 冷 95.9 甚至低于热 106.8 的个别点说明
+冷口径噪声大），驻留轴数据已存档、暂不接线（N2 类）。
+
 **表示层实验（E17c + hint 对照，回应"trip 应该是 37"）**：muls_add
 实际 launch grid=56（`grid=min(n_blocks,56)`），grid-stride 循环
 真实 trip≈37；route.json 的 trip=1 是分析器按
@@ -979,8 +998,10 @@ ts_ns 3×4 + kappa，共 13 个数）。`iterationCount≥16` 门是这条曲线
 （2048 逻辑程序 × 1 trip，slot 深度 37）。两种表示描述同一执行但
 选中不同公式：trip=1 视图 → 不入 E17 标定域（K<16）→ Tier 3 逐
 op 解析 → +6.14%；**trip=37 视图（hint 改传 56）→ trip=37、slot=1、
-iterationCount=37 ≥16 → E17 混合包络 → 预测 6.345µs vs 实测
-6.625µs（−4.2%）**，更准且方向相反。E17c 直接对账：同 body 的
+iterationCount=37 ≥16 → 预测 6.345µs vs 实测 6.625µs（−4.2%）**，
+更准且方向相反（该 case 的循环段走与 `loop_envelope_mix` 无关的
+流水循环兜底路径——E17f 常数替换后其预测逐位不变，见 E17f 块）。
+E17c 直接对账：同 body 的
 grid-stride 寻址 103.7 ns/trip vs 连续寻址 101.2（散布惩罚仅
 +2.5%），E17 公式 110.7（+6.7%）✓、Tier 3 259.5（+150%）✗。
 **采纳**：grid-stride launch-bound 循环向模型传物理 grid 作为
@@ -1019,18 +1040,23 @@ max_dim1、cumprod、grid_stride_dot_p112）；cumsum×2 在基线同口径
 排除）。histogram×4 与 atomic_add×1 无实测、不可评（旧 score100
 口径曾把无实测 case 误计、报 83/100）。guard 部分按指示未跑。
 
-**memory_stream l4 −12.2% 根因分析（已定位）**：实测每 trip
-271ns（10.032µs/37），E17 混合包络给 182.2——缺口 89ns。分解：
-(a) **grid-stride 散布**：每 trip 每流跳 56×16KB=896KB，4 条 load
-流 + 写流交错，L2 局部性差（E17c 在 8KB/4KB 小体上散布惩罚仅
-+2.5%，大足迹下放大）；(b) **4 流粒度**：E17 TL 曲线是单流 16KB
-连续 load 标定（97.6 B/ns），而 4 条独立 4KB 流的合成速率只有
-75.6 B/ns（E16b indep4 同为 85.8，为单流 16KB 的 43~88% 区间）；
-(c) 分解验证：E16b 4 流 load-only 191.0 + E17 store 79.6 = 270.6
-≈ 实测 271 ✓✓——**load 束与 store 无重叠（4 条 load 流已饱和
-内存通路，store 串行排后）**。修复需要"流数 × 每流事务大小 ×
-驻留"三维扫描战役（E17f 规格已定义），单点补丁不可靠。
-探针：`probes/e17_mix_matrix.py`（双向扫描）、
+**memory_stream l4 −12.2% 根因分析与修复（E17f，2026-11-17 终版）**：
+实测每 trip 271ns（10.032µs/37）中，**循环窗价只有 ~195ns**
+（E17f mix4×4KB dyn/hot 探针 195.2；整核与循环窗之差 ~76ns/trip
+是边界/排空，不在循环窗内）。旧 E17 混合包络给 182.2ns 的偏差
+**不是"多流粒度"**（E17f 证明流数无惩罚、总字节已足够），而是
+**TL/TS 曲线的探针代际偏差**（原 E17 扫描偏快 18~35%，与 E16
+复制探针、真实 kernel 锚点矛盾——最初"4 流合成速率 75.6 B/ns
+低于单流 97.6"的对比是两代探针的错比；"E16b 分解 191.0+79.6=
+270.6≈271"是巧合性吻合，循环窗内 store 实际被完全隐藏：
+mix4×4 = ld4×4 = 195~197ns）。修复 = 用 E17f dyn/hot 重标定
+TL/TS + κ 0.18→0.1（模型形状不变，profile `loop_envelope_mix`
+13 个数）；单 case 验证 ms_l4 预测 8.813→9.747µs（**−2.84%，
+PASS**），muls_add/ms_l2/cumsum 预测逐位不变（它们的循环段走
+另一条不消费这组常数的路径——ms_l4 是套件中唯一实际消费
+loop_envelope_mix 的 case）。
+探针：`probes/e17f_stream_sweep.py`（流数×事务×驻留扫描）、
+`probes/e17_mix_matrix.py`（首轮双向扫描）、
 `probes/e17c_grid_stride.py`（grid-stride 对照）、
 `probes/e17b_k_sweep.py`（K 轴扫描）、`probes/e17e_small_k.py`
 （小 K 信噪比研究），数据
