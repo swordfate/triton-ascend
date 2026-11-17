@@ -1045,7 +1045,24 @@ DRAM 冷读 + 写回墙（212→342）。E17b 上一轮的"非单调"是把 (a)(
 `probes/e17d_k_reliability.py`（数据 `e17d_card2.json`/
 `e17d_card3.json`）。
 
-**三问澄清（Tier 2 / Tier 3 的关系、K、引擎限制）**：
+**E17e 小 K 精确测量尝试（结论：现有噪声水平下不可分辨，已记录
+限制）**：空 kernel 减法（null 参照 = 同 launch 形状、循环体只有
+标量累加）+ profiler 整核。null 参照本身含 ~4µs 调度/脚手架且随
+K 增长（{1:4038, 2:4163, 4:4250, 8:4220, 16:4591, 32:5015, 64:5598}），
+整核噪声 ±200-400ns；而 K<16 的 body 时间只有 ~100-300ns——
+**信噪比不足**，profiler 整核与 SYS_CNT 窗口两法都无法在 K<16
+干净分离 body 时间（SYS_CNT 窗口在 K=1 只测到发射 20ns）。
+混合体稳态斜率（K=16→64 段）~107 ns/迭代与 E17 一致。
+**结论**：K<16 时"每迭代时间"被启动/排空主导、量本身不收敛，
+混合包络保持 `iterationCount≥16` 门；K<16 继续由旧包络（内含
+每程序启动价）覆盖。逐 K 曲线的可靠标定需要海量采样 + 多 session
+中位（成本高、收益低），记录为限制。探针：
+`probes/e17e_small_k.py`。
+
+**muls_add 的 hint 采纳**：基于 E17c/E17 实验数据（−4.2% 优于
++6.14%），`bench_muls_add_costmodel.py` 的
+`logical_program_count_hint` 正式改为 `grid`（trip=37、slot=1，
+混合包络生效）；`bench_muls_add_hint56.py` 保留为对照。
 
 1. **为什么有了 Tier 2 还要 Tier 3？** 三个理由：(a) **Tier 2 是
    simd 专用的**（代码 `if (simd && independentLoadGroupBytesPerCycle
