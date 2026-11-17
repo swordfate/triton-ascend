@@ -1,0 +1,69 @@
+{
+ "meta": {
+  "grid": 56,
+  "launches": 30,
+  "ks": [
+   16,
+   32
+  ],
+  "method": "clock64 slope K16/K32, simt_only; hot=fixed block (DCache-resident), l2=streaming pool<128MB, dram=rotating pool>128MB"
+ },
+ "cells": {
+  "fp32_16384B_hot": {
+   "whole16": 2953.2,
+   "whole32": 4184.3,
+   "slope": 76.9,
+   "per_warp_instr": 0.601,
+   "per_128b_line": 0.601
+  },
+  "fp32_16384B_l2": {
+   "whole16": 13175.3,
+   "whole32": 25472.5,
+   "slope": 768.6,
+   "per_warp_instr": 6.005,
+   "per_128b_line": 6.005
+  },
+  "fp32_16384B_dram": {
+   "whole16": 19264.8,
+   "whole32": 40566.2,
+   "slope": 1331.3,
+   "per_warp_instr": 10.401,
+   "per_128b_line": 10.401
+  },
+  "fp32_4096B_hot": {
+   "whole16": 1095.1,
+   "whole32": 1654.6,
+   "slope": 35.0,
+   "per_warp_instr": 1.093,
+   "per_128b_line": 1.093
+  },
+  "fp16_16384B_hot": {
+   "whole16": 5828.0,
+   "whole32": 9318.2,
+   "slope": 218.1,
+   "per_warp_instr": 0.852,
+   "per_128b_line": 1.704
+  },
+  "fp16_16384B_l2": {
+   "whole16": 31453.8,
+   "whole32": 62214.0,
+   "slope": 1922.5,
+   "per_warp_instr": 7.51,
+   "per_128b_line": 15.02
+  },
+  "fp16_16384B_dram": {
+   "whole16": 60683.9,
+   "whole32": 125612.8,
+   "slope": 4058.1,
+   "per_warp_instr": 15.852,
+   "per_128b_line": 31.704
+  },
+  "fp16_4096B_hot": {
+   "whole16": 1234.1,
+   "whole32": 1986.9,
+   "slope": 47.1,
+   "per_warp_instr": 0.735,
+   "per_128b_line": 1.47
+  }
+ }
+}

@@ -1007,6 +1007,21 @@ static void mapContiguousV2Completion(
       claimAll();
       return;
     }
+    // Unified set phase 3: simt store-only bodies take the E17g store
+    // envelope (~21 B/ns, clock64-measured).  Load-only and mixed simt
+    // bodies stay on the tier-3 warp-instruction analytical: the simt
+    // load side is not a bytes-function (residency + issue-slot
+    // effects, probes/e17g6_results.json) - merge it after E17h.
+    if (!simd && profile.contiguousV2.simtStoreEnvelopeEnabled &&
+        loadBytes == 0.0 && storeBytes > 0.0 &&
+        stage.iterationCount >= 1) {
+      const double perIter =
+          contiguous_v2::simtStoreEnvelopePerIter(profile.contiguousV2,
+                                                  storeBytes);
+      resources.store += perIter * kCyclesPerNano;
+      claimAll();
+      return;
+    }
     // (The former byte-sum aggregate envelope was removed: it was a
     // regime-local fit for trip-1 slot-pipelined bodies.  K>=16 bodies -
     // mixed or single-direction - take the per-direction envelope above;

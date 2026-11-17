@@ -68,6 +68,12 @@ struct ContiguousV2Params {
   double mixTL[4] = {76.3, 96.4, 167.9, 334.7};
   double mixTS[4] = {79.6, 93.9, 157.4, 276.1};
   double mixKappa = 0.18;
+  // E17g (2026-11-18): simt store-only envelope (clock64 sweep;
+  // ~21 B/ns linear across 4/16/32KB).  Load-only / mixed simt bodies
+  // stay on tier 3 until the E17h residency-controlled sweep.
+  bool simtStoreEnvelopeEnabled = false;
+  double simtStoreBytes[4] = {4096.0, 8192.0, 16384.0, 32768.0};
+  double simtStoreTS[4] = {196.0, 388.0, 788.0, 1557.0};
   // 2026-11-17 group_a compression: per-direction/residency cTransfer
   // ratio (cTransfer = kc * marginal; Q is structural, groupAQueues
   // below).  keys: "load/warm", "load/cold", "store/warm", "store/cold".
@@ -163,23 +169,38 @@ inline double pAxisFactor(const ContiguousV2Params &params,
 /// direction follows its measured concave curve (rate ramps with
 /// transaction size); the two streams overlap, so the body pays the
 /// larger stream plus a fitted share of the smaller (DRAM contention).
+/// Shared log2-byte curve interpolation over a 4-point table
+/// (endpoints clamped).
+inline double envelopeCurve(const double *sizes, const double *points,
+                            double bytes) {
+  double b = bytes < sizes[0] ? sizes[0] : bytes;
+  double v = points[3];
+  for (int i = 3; i >= 0; --i) {
+    if (b >= sizes[i]) {
+      if (i == 3)
+        return points[3];
+      const double w = (std::log2(b) - std::log2(sizes[i])) /
+                       (std::log2(sizes[i + 1]) - std::log2(sizes[i]));
+      return points[i] + w * (points[i + 1] - points[i]);
+    }
+    v = points[i];
+  }
+  return v;
+}
+
+/// E17g simt store-only envelope: per-iteration ns of a loop body
+/// moving storeBytes through the simt LSU path (measured ~21 B/ns,
+/// linear across 4/16/32KB; probe probes/e17g_simt_sweep.py u0_s*).
+inline double simtStoreEnvelopePerIter(const ContiguousV2Params &params,
+                                       double storeBytes) {
+  return envelopeCurve(params.simtStoreBytes, params.simtStoreTS,
+                       storeBytes);
+}
+
 inline double mixEnvelopePerIter(const ContiguousV2Params &params,
                                  double loadBytes, double storeBytes) {
   auto curve = [&](const double *points, double bytes) {
-    double b = bytes < params.mixBytes[0] ? params.mixBytes[0] : bytes;
-    double v = points[3];
-    for (int i = 3; i >= 0; --i) {
-      if (b >= params.mixBytes[i]) {
-        if (i == 3)
-          return points[3];
-        const double w = (std::log2(b) - std::log2(params.mixBytes[i])) /
-                         (std::log2(params.mixBytes[i + 1]) -
-                          std::log2(params.mixBytes[i]));
-        return points[i] + w * (points[i + 1] - points[i]);
-      }
-      v = points[i];
-    }
-    return v;
+    return envelopeCurve(params.mixBytes, points, bytes);
   };
   // Unified set: single-direction bodies take the pure direction curve
   // (TL/TS were measured with load-only / store-only probes; the mix

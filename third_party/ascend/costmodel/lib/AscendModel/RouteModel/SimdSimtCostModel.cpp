@@ -2917,6 +2917,17 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
           cv2.mixKappa = *v;
         cv2.mixEnvelopeEnabled = true;
       }
+      if (const auto *se = v2->getObject("loop_envelope_store_simt")) {
+        if (auto arr = se->getArray("bytes"))
+          for (int i = 0; i < 4 && i < static_cast<int>(arr->size()); ++i)
+            if (const auto v = (*arr)[i].getAsNumber())
+              cv2.simtStoreBytes[i] = *v;
+        if (auto arr = se->getArray("ts_ns"))
+          for (int i = 0; i < 4 && i < static_cast<int>(arr->size()); ++i)
+            if (const auto v = (*arr)[i].getAsNumber())
+              cv2.simtStoreTS[i] = *v;
+        cv2.simtStoreEnvelopeEnabled = true;
+      }
       if (const auto *ck = v2->getObject("group_a_ct_kc")) {
         for (const auto &entry : *ck) {
           if (const auto v = entry.second.getAsNumber())
@@ -3416,6 +3427,17 @@ if (const auto *sp = v2->getObject("s_penalty")) {
               reader.optionalNumber(*o, "Q", 0.0));
           cv2.groupA[cv2StripEnginePrefix(entry.first)] = g;
         }
+      }
+      if (const auto *se = v2->getObject("loop_envelope_store_simt")) {
+        if (auto arr = se->getArray("bytes"))
+          for (int i = 0; i < 4 && i < static_cast<int>(arr->size()); ++i)
+            if (const auto v = (*arr)[i].getAsNumber())
+              cv2.simtStoreBytes[i] = *v;
+        if (auto arr = se->getArray("ts_ns"))
+          for (int i = 0; i < 4 && i < static_cast<int>(arr->size()); ++i)
+            if (const auto v = (*arr)[i].getAsNumber())
+              cv2.simtStoreTS[i] = *v;
+        cv2.simtStoreEnvelopeEnabled = true;
       }
       if (const auto *ck = v2->getObject("group_a_ct_kc")) {
         for (const auto &entry : *ck) {
