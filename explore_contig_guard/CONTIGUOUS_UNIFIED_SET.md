@@ -125,12 +125,46 @@ simt: 待阶段 3 标定（形状 = max(load服务, store服务) + f(U,S) 串行
 | 阶段 | 内容 | 改动 | gate 判据 |
 |---|---|---|---|
 | **0** | 1a 并入 1：tiny_direct 表并入 directTable，excess 进 Tier 1 拟合；同机同构、行为等价 | StageCostModels.cpp 循环体瀑布 | 95 例 PASS 不降；reduce_sum_epilogue 保持 PASS |
-| **1** | **单方向入包络**：混合包络退化式（store=0→TL、load=0→TS），方向感知入账 | header `mixEnvelopePerIter` + cpp 分支条件 | 95 例 PASS 不降（对照 e17f 轮 82/95） |
-| **2** | K<16 两段拼接：m←包络、A←边界残差表(P)，双计费检查 | cpp 瀑布 + 候选层衔接 | 95 例 PASS 不降；小核 case（cummax/cummin 类）误差不放大 |
-| **3** | simt 包络战役：clock64 扫描 {U 条 load × S 条依赖 store × 字节 × K}，拟合 max+f(U,S)；接线 + 门重标定 | 新探针 + profile 新键 + cpp simt 分支 | simt loop case（cumsum×2 除外——op 模型问题已裁定排除）不回归 |
-| **4** | simd 翘头 excess(S, store字节)：SYS_CNT 扫 S∈{0,1,2,4}，翘头幅度拟合进包络 | 探针 + profile + cpp | reduce_sum_epilogue 保持/改善；行表审计前的独立验证 |
+| **1** | **单方向入包络**：✅ 已完成（ec17f16afa）——退化式 + 方向感知入账；gate 惰性（套件无 case 走该路径，曲线由 E17f 硬件锚点背书） | header `mixEnvelopePerIter` + cpp 分支条件 | 95 例 PASS 不降（82/95 持平 ✓） |
+| **2** | K<16 两段拼接：✅ 已完成（bda9c5fef1）——包络从 K=1 生效（m=K16/32 稳态斜率，A 归候选层边界残差）；gate 惰性 | cpp 门 16→1 | 82/95 持平 ✓ |
+| **3** | simt 包络战役：**部分合并**（见下方阶段 3 说明） | clock64 探针（e17g 系列）+ profile + cpp | simt store-only 包络接线过 gate；load 侧留 Tier 3 并记录理由 |
+| **4** | simd 翘头 excess(S, store字节)：**进行中**——E18 v2（`probes/e18_excess_sweep.py`）已测出**双 regime 结构**：S≤2 时 excess 饱和（一次性 ~200/450ns，A 侧项，流水吸收）；S=4 时持续 ~194ns/迭代（掩码 store 照付指令槽，发射受限）。需补扫 S∈{1,2,3,4} × loadBytes{2,4,16}KB 定 E_sat 几何依赖后再接线；1a 行表在公式落地前保留 | 探针 + profile + cpp | reduce_sum_epilogue 保持/改善 |
 | **5** | 行表审计与退役：环境开关强制绕过行表 → 每家族"有表 vs 强制包络"误差对比 → 边际价值 ≈0 的家族逐个删除 | DENY 开关 + 逐家族删除 | 每次删除后 95 例 PASS 不降 |
 | **6** | 附加轴接线：驻留（数据已有，按足迹 > L2 阈值启用冷档）→ 别名检测预研（静态同基指针可行性）→ 聚合压力战役（N2，挂起待真实 case） | 探针复用 + profile + cpp | 按轴分别过 gate |
+
+**阶段 3 的部分合并裁定（2026-11-18，按 §0 原则执行）**：
+
+clock64 探针战役（`probes/e17g_simt_sweep.py`、`probes/e17g6_ld_chain.py`、
+`probes/e17h_simt_physics.py`，数据 `e17g_results.json`/
+`e17g6_results.json`/`e17h_results.json`）的结论：
+
+1. **store-only 侧干净、已并入**（a78dfa7772）：TS_simt(B) = B /
+   21 B/ns，4/16/32KB 全尺寸线性一致（196/788/1557 ns），S=4 流并发
+   微升至 25 B/ns——`loop_envelope_store_simt` 已接线；
+2. **load 侧：物理因子已找到（E17h），建模方案已定，待接线**。
+   按 950 架构手册（SIMT 通路 = GM → SIMT DCache(128B 行，每 AIV
+   32~128KB) → 线程寄存器；fp32 每 warp 指令 = 128B = 1 行）设计
+   判别实验：**cost = f(warp 指令数 × 指令宽度 × 驻留档)**——
+
+   | 格子（16KB load，K 斜率） | /warp 指令 | /128B 行 |
+   |---|---|---|
+   | fp32 DCache-hot（定块重读） | 0.60 | 0.60 |
+   | fp32 L2 流 | 6.00 | 6.00 |
+   | fp32 DRAM 流 | 10.40 | 10.40 |
+   | fp16 L2 流（64B 指令） | 7.51 | **15.02** |
+   | fp16 DRAM 流 | 15.85 | **31.70** |
+
+   fp32 两因子简并（1 指令=1 行）；fp16 64B 指令只填半条 128B 行 →
+   等效行代价 ×2.5；DCache 命中比 L2 便宜 10×、比 DRAM 便宜 17×。
+   **接线方案**：`perIter = (bytes/128B) × perLineCost(elementBits,
+   residency)`，residency 按足迹 = bytes_per_iter×K×56 对比 L2 128MB
+   分档（stream 两档；重访热档需 reuse 检测，记录为限制）；
+   int64（256B/指令）一档按 fp32 行代价复用（推断，标注）；
+3. **探针方法论沉淀**：块累加链在 U≥4×16KB 寄存器溢出（SIMT 寄存器
+   128KB/AIV、128 线程 → 127 寄存器/线程，U4×BLOCK4096 = 128 累加
+   寄存器/线程）——按寄存器预算裁剪格子（U×BLOCK ≤ 8192）；s=0 体
+   必须加窗口内消费者；掩码 store 的指针必须是块指针（标量指针 +
+   块值编译报错）。
 
 ---
 
