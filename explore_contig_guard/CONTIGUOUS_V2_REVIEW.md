@@ -991,7 +991,7 @@ Tier 2（B_add/B_copy/B_store 走 Tier 1 行表命中），升级对既有集合
 hint（保留 trip 推导），使稳态混合包络可用；现行 harness 传
 n_blocks 的约定按指示保持不变，已记录。
 
-**hint=grid 一刀切实验（否决，逐 kernel 契约）**：把 5 个
+**hint=grid 一刀切实验与最终裁定（2026-11-17 终版采纳）**：把 5 个
 hint=n_blocks/rows 的 bench 统一改为 hint=grid 后实测对账：
 
 | case | hint=grid 预测 | 实测 | 误差 | 原 hint 误差 |
@@ -1007,14 +1007,33 @@ trip/slot 全部正确流出（37/19/32、slot=1），但预测精度分裂：�
 muls_add（乘加体、无串行依赖、计算轻）受益；memory_stream 的逐
 trip 实测 271ns 远高于连续探针稳态（106~210，grid-stride 散布 +
 每 trip 开销）；cumsum 是**串行扫描**（行间依赖、计算受限），
-trip=37 视图 + 稳态包络完全错配。**结论**：hint 表示是逐 kernel
-的建模契约——无串行依赖且计算轻的 grid-stride 体适用 trip=37 +
-稳态包络；slot 流水体（trip=1）和计算受限体必须保留原表示。一刀
-切改动被数据否决，5 个 bench 已全部回滚
-（`bench_muls_add_hint56.py` 保留为实验记录）。E17 系探针：
-`probes/e17_mix_matrix.py`（双向扫描）、`probes/e17c_grid_stride.py`
-（grid-stride 对照）、`probes/e17b_k_sweep.py`（K 轴扫描，数据
-`e17_results.json`/`e17b_results.json`/`e17b_k_sweep_output.txt`）。
+trip=37 视图 + 稳态包络完全错配。
+
+**最终采纳形态（评审确认）**：三个 grid-stride kernel 的 hint 一律
+= grid（trip 37/19/32 正确流入 iterationCount），**旧字节求和包络
+正式删除**（代码 StageCostModels.cpp 中 Tier 2b 块移除，E17 混合
+包络无 K 门保留），采纳后的全量 gate：**100-case 83/100**——
+净变化 = muls_add×2 改善（仍 PASS）+ memory_stream l4 −12.2%
+FAIL（已知根因，见下）+ cumsum×2 −79.9/−86.1% FAIL（用户裁定：
+cumsum op 模型本身不准，排除在范围外，不计入）。guard 部分按指示
+未跑。
+
+**memory_stream l4 −12.2% 根因分析（已定位）**：实测每 trip
+271ns（10.032µs/37），E17 混合包络给 182.2——缺口 89ns。分解：
+(a) **grid-stride 散布**：每 trip 每流跳 56×16KB=896KB，4 条 load
+流 + 写流交错，L2 局部性差（E17c 在 8KB/4KB 小体上散布惩罚仅
++2.5%，大足迹下放大）；(b) **4 流粒度**：E17 TL 曲线是单流 16KB
+连续 load 标定（97.6 B/ns），而 4 条独立 4KB 流的合成速率只有
+75.6 B/ns（E16b indep4 同为 85.8，为单流 16KB 的 43~88% 区间）；
+(c) 分解验证：E16b 4 流 load-only 191.0 + E17 store 79.6 = 270.6
+≈ 实测 271 ✓✓——**load 束与 store 无重叠（4 条 load 流已饱和
+内存通路，store 串行排后）**。修复需要"流数 × 每流事务大小 ×
+驻留"三维扫描战役（E17f 规格已定义），单点补丁不可靠。
+探针：`probes/e17_mix_matrix.py`（双向扫描）、
+`probes/e17c_grid_stride.py`（grid-stride 对照）、
+`probes/e17b_k_sweep.py`（K 轴扫描）、`probes/e17e_small_k.py`
+（小 K 信噪比研究），数据
+`e17_results.json`/`e17b_results.json`/`e17b_k_sweep_output.txt`。
 
 **E17d 可靠性研究（回应"E17b 的 K 轴数据噪声大、要测准"）**：
 方法 × 卡 × dst 轮换的受控对照（混合体 4KB/访问，30 次×56 程序
