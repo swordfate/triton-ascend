@@ -973,21 +973,27 @@ static void mapContiguousV2Completion(
     // measured 115.7 ns/iter vs envelope 160.4); max+kappa*min tracks
     // the sweep within +/-8%.  Simt keeps tier 3 (no aggregate
     // calibration for the LSU/DCache path).
-    // The iterationCount >= 16 gate is the calibration domain of the E17
-    // curves: they were measured on steady loops with 16+ iterations per
-    // program.  Below the gate the curves are unvalidated (low-trip
-    // bodies are launch/startup-dominated), so those bodies fall through
-    // to the per-op analytical in tier 3, like single-direction bodies
-    // do since the byte-sum aggregate envelope was removed.
+    // The curves are the K=16/32 steady-state slope (E17f); they apply
+    // from K=1 (phase 2 splice) with the launch/drain A carried by the
+    // candidate-layer boundary residuals, so no per-K factor table is
+    // needed (E17b/E17e: per-K tables proved unreliable/unmeasurable).
     // Unified set (2026-11-17): single-direction bodies enter the
     // envelope too - TL/TS are measured with load-only / store-only
     // probes, so the mix formula degenerates to the pure direction when
     // the other stream is absent.  Direction-aware charging mirrors the
     // strided-group tier (a store-only body competes with the store
     // stream, not the load stream).
+    // K<16 splice (phase 2): the curves were calibrated as the K=16/32
+    // steady-state slope m (E17f), and E17d showed the slope is K-flat -
+    // the low-K deviation is A/K amortization of launch/drain, which is
+    // carried by the candidate-layer boundary residuals (P-axis), not by
+    // the per-iteration loop price.  So the envelope applies from K=1:
+    // T(K) = A(P) + K*m with m from here.  If a low-K geometry still
+    // deviates, probe it (SYS_CNT) and fix the boundary/layer split -
+    // do not reintroduce a per-K factor table (E17b/E17e: unreliable).
     if (simd && profile.contiguousV2.mixEnvelopeEnabled &&
         (loadBytes > 0.0 || storeBytes > 0.0) &&
-        stage.iterationCount >= 16) {
+        stage.iterationCount >= 1) {
       const double perIter =
           contiguous_v2::mixEnvelopePerIter(profile.contiguousV2, loadBytes,
                                             storeBytes) * v2WaveDecay;
