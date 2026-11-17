@@ -128,8 +128,8 @@ simt: 待阶段 3 标定（形状 = max(load服务, store服务) + f(U,S) 串行
 | **1** | **单方向入包络**：✅ 已完成（ec17f16afa）——退化式 + 方向感知入账；gate 惰性（套件无 case 走该路径，曲线由 E17f 硬件锚点背书） | header `mixEnvelopePerIter` + cpp 分支条件 | 95 例 PASS 不降（82/95 持平 ✓） |
 | **2** | K<16 两段拼接：✅ 已完成（bda9c5fef1）——包络从 K=1 生效（m=K16/32 稳态斜率，A 归候选层边界残差）；gate 惰性 | cpp 门 16→1 | 82/95 持平 ✓ |
 | **3** | simt 包络战役：**部分合并**（见下方阶段 3 说明） | clock64 探针（e17g 系列）+ profile + cpp | simt store-only 包络接线过 gate；load 侧留 Tier 3 并记录理由 |
-| **4** | simd 翘头 excess(S, store字节)：**进行中**——E18 v2（`probes/e18_excess_sweep.py`）已测出**双 regime 结构**：S≤2 时 excess 饱和（一次性 ~200/450ns，A 侧项，流水吸收）；S=4 时持续 ~194ns/迭代（掩码 store 照付指令槽，发射受限）。需补扫 S∈{1,2,3,4} × loadBytes{2,4,16}KB 定 E_sat 几何依赖后再接线；1a 行表在公式落地前保留 | 探针 + profile + cpp | reduce_sum_epilogue 保持/改善 |
-| **5** | 行表审计与退役：环境开关强制绕过行表 → 每家族"有表 vs 强制包络"误差对比 → 边际价值 ≈0 的家族逐个删除 | DENY 开关 + 逐家族删除 | 每次删除后 95 例 PASS 不降 |
+| **4** | simd 翘头 excess：**已接线**（d288f7d3cb）——E18b 矩阵（S{0..4}×loadBytes{2,4,16}KB）定公式：**流水隐藏容量 C（16KB 大 load → C=2，≤4KB → C=1），超出部分每个小 store ~97ns/迭代**（依赖 store 往返延迟，几何无关）；E18 v2 的"双 regime"读法是框架错误（16KB+s2 饱和是因为 C=2）。接线于 simd 包络混合全小 store 体：`excess = max(0, nStores − C(domBytes)) × 97ns`；1a 行表家族保持优先。gate 惰性（82/95 持平，套件小 store 体被 1a 行表接住） | profile `tiny_store_excess` + cpp | 82/95 持平 ✓ |
+| **5** | 行表审计与退役：**审计已完成（f51878d9ec）**——`ASCEND_V2_SKIP_ROWS=1` 旁路 1a+1 行表跑全量 gate：**89/100 无行表仍 PASS 或预测不变；10 例有真实行价值（7~36pp），五簇**：①2x4096x8 元素级×4（+9.5pp 系统性）②小 store 链 rowred/reduce_sum（−31/−26pp——阶段 4 excess 的 C=1 未覆盖其幅度）③permute 双层壳实例结构（−36pp）④散射组合行（−20pp）⑤grid_stride_dot_p112/fused_softmax（−14/−7pp）；另 1 例负价值行（grid_stride_dot_p336 无行表反而改善 −10.1→−8.8）。**裁定：退役条件未满足，行表保留**；退役路线图 = 逐簇改进包络（reduce_sum 形状的 excess 幅度、壳结构实例、散射组合） | SKIP_ROWS 开关 + 对照 gate | 审计完成 |
 | **6** | 附加轴接线：驻留（数据已有，按足迹 > L2 阈值启用冷档）→ 别名检测预研（静态同基指针可行性）→ 聚合压力战役（N2，挂起待真实 case） | 探针复用 + profile + cpp | 按轴分别过 gate |
 
 **阶段 3 的部分合并裁定（2026-11-18，按 §0 原则执行）**：
