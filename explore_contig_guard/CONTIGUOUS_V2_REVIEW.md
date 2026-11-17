@@ -581,8 +581,8 @@ softmax_original +12.73% → −4.15%。
                       在标定表里有实测 → 直接用实测（本节）
 第 1a 优先（Tier 1a）  小存储延迟链：表里没有、但形状是"大块 load +
                       小 store"的延迟链 → 用 tiny_direct 表（§3.4）
-第 2 优先（Tier 2）   聚合带宽解析式：前两级都没命中 → 迭代启动 +
-                      总字节/聚合带宽（§3.5）
+第 2 优先（Tier 2）   逐方向混合包络（E17）：load、store 都有时 →
+                      max(load曲线, store曲线) + κ×min（§3.5）
 第 3 优先（Tier 3）   逐 op 解析式：基线同款兜底（§3.5）
 ```
 
@@ -714,7 +714,7 @@ perIter = (A × 0.05 + K × useM × chunkScale) / K × 波衰减
 不精确匹配的情况。
 
 **适用范围**：`程序数 ≤ 224`（行只测到 4 波；更大的 launch 落到 §3.5
-的聚合带宽层）。家族按 (load 条数, store 条数) 严格匹配是有意取舍：
+的兜底层）。家族按 (load 条数, store 条数) 严格匹配是有意取舍：
 不同条数的循环体硬件行为差异大（G4 的失配由"补家族"解决而不是放宽
 匹配——本轮为 scatter/compaction/permute 补了 n1_s0、n0_s1、n3_s0
 家族，见 §3.7）。
@@ -771,7 +771,7 @@ perIter = (A×0.05 + K×m + excess×0.636) / K × 波衰减
 **效果**：reduce_sum_epilogue −24.75% → **+0.00%**（2.772µs vs 2.772µs）。
 tiny_direct 全部 20 行数值见 §4.3。
 
-## 3.5 机制四：第 2、3 优先兜底（聚合带宽层、解析层）
+## 3.5 机制四：第 2、3 优先兜底（逐方向包络层、解析层）
 
 **这一节可以独立阅读，也可以先读**。它回答的问题：当第 1/1a 优先
 （行表）没有覆盖某个循环体几何时，预测从哪里来。与机制二/三的
@@ -785,14 +785,13 @@ tiny_direct 全部 20 行数值见 §4.3。
 
 ```python
 # bench_muls_add_costmodel.py：n=2097152 个 fp32 的乘加
-# 物理发射 grid = 56；逻辑程序数（hint）= 2048；
+# 物理发射 grid = 56；hint = grid（=56，多维取乘积）；
 # kernel 是 grid-stride 循环：每个程序处理 block 序列 pid, pid+56, ...
-# → 每程序循环 37 次（route.json: runtime_loop_iteration_count=37）
+# → 每程序循环 37 次（route.json: runtime_loop_iteration_count=37），
+#   trip 真实流入 iterationCount，稳态混合包络（E17）得以生效
 # 注意：route.json 里 workload_trip_count=1 是 IR 分析器的占位值
 # （grid-stride 的 trip 依赖 tt.get_num_programs，静态不可解析、
-# supported=False），不是真实循环次数；"每 slot 排队 37 个逻辑
-# 程序"（logical_programs_per_scheduling_slot=37）是同一事实的
-# 另一种编码。
+# supported=False），不是真实循环次数。
 ```
 
 机制二的行表只测到 4 波（grid ≤224）：muls_add 的 2048 程序远超
@@ -801,31 +800,30 @@ tiny_direct 全部 20 行数值见 §4.3。
 动机（门在 StageCostModels.cpp:782，`if (programCountHint <= 224)`）。
 其它会落到机制四的情形：load/store 条数组合没有标定家族（如
 3 load + 1 store 在 calM 补测之前）、字节档与所有标定桶对数距离
->1。机制四通过后 muls_add 终版 **+6.14%**（预测 7.032µs vs 实测
-6.625µs）。
+>1。机制四（E17 包络 + hint=grid）通过后 muls_add 终版 **−4.2%**
+（预测 6.345µs vs 实测 6.625µs）。
 
-**公式与真实参数（只有 2 个数，且是基线既有标定，v2 零新增）**：
+**公式与真实参数（E17 双向扫描标定，13 个数）**：
 
 ```cpp
-// Tier 2（simd）—— StageCostModels.cpp:963
-perIter = (IterationStartup + (loadBytes+storeBytes)/AggregateRate)
+// Tier 2（simd，混合体）—— StageCostModels.cpp:967 起
+perIter = max(TL(loadBytes), TS(storeBytes)) + κ × min(TL, TS)
           × 波衰减
-// IterationStartup = 12.79 cycle，AggregateRate = 83.26 B/cycle
-// 来源：profile 键 independent_loop_load_group（基线路径二 §2.2
-// 的同一组标定；证据 bench_simd_memory_groups.py：1~4 条 load 流
-// × 循环 19/37 次的受控扫描——"每迭代一次启动 + 聚合带宽"的
-// 两参数线性模型，恰是这里的形状）
+// TL = {4KB:76.3, 8KB:96.4, 16KB:167.9, 32KB:334.7} ns（load 曲线）
+// TS = {4KB:79.6, 8KB:93.9, 16KB:157.4, 32KB:276.1} ns（store 曲线）
+// κ = 0.18；曲线按 log2 字节插值、端点钳制
+// 来源：E17 双向扫描（load-only / store-only × {4,8,16,32}KB、
+// 混合 7 点、K=16/32 斜率、grid=56，见下文 E17 块）
 ```
 
-人话：一次迭代把它的全部字节（load+store 一起）按"该混合比例的
-实测合成吞吐"搬走，每迭代只付一次流水启动价。**物理含义的准确
-表述（E16 实验修正，此前的"共享 DRAM"说法不准确）**：读和写确实
-走不同通道、大比例并行——E16 实测合成速率 75.6 B/ns 高于任一
-单流（load 49.1 / store 38.0），达到理想双通道的 87%；83.26
-B/cycle 这个常数**本身就是标定扫描里 1:1 混合体的实测合成吞吐**，
-不是某个方向的带宽。字节求和形式对接近 1:1 的混合体成立；混合
-比例偏斜时（2L+1S）合成速率向载速率移动，Tier 2 开始高估
-（+39%，见下）。
+人话：一次迭代里 load 束与 store 束分属两条服务通道，各自按本
+方向的曲线计价；瓶颈方向（max）决定下限，另一方向按 κ=0.18 的
+残余干涉叠加——E16 实测读写大比例并行（合成速率达理想双通道的
+87%，见下），但不完全，κ 就是那不完全的部分。**门
+`iterationCount≥16` 是这条曲线的标定域**：曲线在每迭代 16 次以上
+的稳态循环里测得；低 trip 体是启动主导、不在域内，落 Tier 3。
+simt 无这层标定（LSU/DCache 路径、以 warp 指令计价），也走
+Tier 3。
 
 **Tier 3（最后兜底，基线同款 4 个常数 + simt 两条速率）**：
 
@@ -836,30 +834,28 @@ B/cycle 这个常数**本身就是标定扫描里 1:1 混合体的实测合成�
   simt: warp 指令条数 / 每 cycle warp 指令数
 ```
 
-**为什么 Tier 2 是"load+store 加一起除聚合带宽"？与直接用 Tier 3
-差在哪（数值对比，真实常数）**：Tier 2 建模的是深流水稳态——会落
-到这层的循环体（大 launch、迭代多）里，每迭代的多次访问启动全部
-流水化掉，稳态只由卡级可达聚合带宽决定；该速率已含两个方向、全部
-核心分摊 DRAM 的效果，所以两个方向的字节属于同一个分母，拆开除
-各自速率会把 DRAM 给不了的并行度重复计入。数值对比（每迭代
-1 条 4KB load + 1 条 4KB store）：
+**为什么混合体取 max+κ·min？与直接用 Tier 3 差在哪（数值对比，
+真实常数）**：Tier 2 建模的是深流水稳态——会落到这层的循环体
+（大 launch、迭代多）里，每迭代的多次访问启动全部流水化掉，稳态
+由两个方向的曲线决定；取 max 是因为瓶颈方向占满服务通路，κ·min
+计入另一方向的残余干涉。数值对比（每迭代 1 条 4KB load + 1 条
+4KB store，公式价）：
 
 ```
+Tier 2（E17 稳态包络）: 79.6 + 0.18×76.3 = 93.3ns/迭代
 Tier 3（逐访问，不摊销）:
   load  = 105.31 + 4096/167.56 = 129.7ns（load 桶）
   store =  90.95 + 4096/213.13 = 110.2ns（store 桶）
   流水段取 max → 129.7ns/迭代
-Tier 2（每次迭代一次启动 + 聚合速率）:
-  12.79 + 8192/83.26 = 111.2ns/迭代
 ```
 
-访问条数越多差距越大：每迭代 4 load + 2 store（各 4KB）时
-Tier 3 = max(4×129.7, 2×110.2) = 518.8ns（6 次启动各付各的），
-Tier 2 = 12.79 + 24576/83.26 = 307.9ns——1.7 倍的差就是"逐 op
-启动没摊销"的误差。两个 Tier 各管一个 regime：Tier 2 管稳态
-带宽型（simd 大循环），Tier 3 管启动主导型和 simt。
-（Tier 2 代码 StageCostModels.cpp:971-987，加总除带宽在 977-979；
-Tier 3 在 989-994，`analyticalPerIter` lambda 定义于 ~757。）
+访问条数越多 Tier 3 偏差越大：每迭代 4 load + 2 store（各 4KB）时
+Tier 3 = max(4×129.7, 2×110.2) = 518.8ns（6 次启动各付各的），而
+稳态实测远低于此（E16b：启动常数在稳态循环里被摊销，仅 load 体
+实测 83.4ns/迭代）。两个 Tier 各管一个 regime：Tier 2 管 K≥16 的
+稳态混合体（simd），Tier 3 管启动主导型、单方向体和 simt。
+（Tier 2 代码 StageCostModels.cpp:967-989；Tier 3 在 996-1001，
+`analyticalPerIter` lambda 定义于 ~757。）
 
 **E16 判别实验：混合体的稳态时间到底跟谁走（卡 2，SYS_CNT 环内
 计时——`MOV $0, SYS_CNT` 读设备周期计数器，ns=ticks×1.00008，
@@ -900,21 +896,21 @@ def e16_mixed(src, dst, tick_ptr, iters: tl.constexpr, BLOCK: tl.constexpr):
 
 模型对账（每迭代纳秒）：
 
-| 体 | 实测 | Tier 2 | Tier 3 | 理想双通道 max(载,写) |
-|---|---|---|---|---|
-| 1L+1S | 108.4 | **111.2（−2.6%）** | 129.8（+20%） | 107.9（−0.5%） |
-| 2L+1S | 115.7 | 160.4（+39%） | 259.5（+124%） | 166.8（+44%） |
-| 仅 load | 83.4 | 49.2（除 83.26） | 129.8 | — |
-| 仅 store | 107.9 | 49.2 | 110.2（−2%） | — |
+| 体 | 实测 | Tier 3 | 理想双通道 max(载,写) |
+|---|---|---|---|
+| 1L+1S | 108.4 | 129.8（+20%） | 107.9（−0.5%） |
+| 2L+1S | 115.7 | 259.5（+124%） | 166.8（+44%） |
+| 仅 load | 83.4 | 129.8 | — |
+| 仅 store | 107.9 | 110.2（−2%） | — |
 
 四条结论：(1) **读写大比例并行**（合成速率超过任一单流、达理想
-双通道的 87%），"不同通道"的直觉成立；(2) **字节求和/83.26 对
-1:1 混合精确**（−2.6%）——83.26 就是 1:1 混合体的实测合成吞吐；
+双通道的 87%），"不同通道"的直觉成立；(2) **稳态合成速率随配比
+移动**——1:1 混合 75.6 B/ns、2L+1S 106.3 B/ns（向载速率靠拢），
+"总字节除单一速率"的解析形式表达不了这个移动，需要按方向分开的
+曲线——这正是 Tier 2 升级为逐方向包络（E17，见下）的实验动机；
 (3) **Tier 3 的 105/91 启动常数在稳态循环里被摊销**（仅 load 实测
 83.4 vs Tier 3 的 129.8），Tier 3 在稳态域是保守（偏高）兜底；
-(4) **混合配比偏斜时字节求和形式失效**（2L+1S +39%，合成速率向
-载速率移动 106.3 B/ns）——更物理的改进是"合成速率随配比"的
-一条曲线，记录为后续工作。探针：
+(4) 探针：
 `probes/e16_mixed_stream.py`（数据 `e16_results.json`）。
 
 **E16b 追问：实测速率为什么远低于 Tier 3 的 167.56 B/cycle？
@@ -935,17 +931,17 @@ load 等前一条的加法释放寄存器，打破依赖后 4KB 速率 +69%；(2
 **4KB 事务是第二个限制**——16KB 事务 + 独立链实测 197.6 B/ns，
 **超过 167.56 常数本身**：该常数在其标定 regime（≥16KB、独立、
 L2 热）是可达的，不是虚标；(3) **驻留强影响**——DRAM 冷使同几何
-速率减半（50.9→24.8），Tier 2/3 的常数默认 L2 热口径；(4) **共驻
+速率减半（50.9→24.8），E17/Tier 3 的常数默认 L2 热口径；(4) **共驻
 竞争**——单发 64KB 的实测 48.6 B/ns 是 56 程序同时竞争下的值，
 Tier 3 公式对它给 496ns、实测 1347ns（常数不含共驻竞争，这正是
 候选层 P 轴/边界项要补的维度）。
 
 **给评审的结论**：不存在单一的"load 带宽"或"store 带宽"——实测
-速率 = f(事务大小, 依赖结构, L2/DRAM 驻留, 共驻程序数)。Tier 2 的
-83.26 与 Tier 3 的 167.56 是**各自 regime 的局部拟合斜率**（前者：
-满波 1:1 混合稳态；后者：短事务逐 op 分析），不是器件物理峰值；
-E16/E16b 的探针方法可直接用于未来把这两层升级为"按 (事务大小 ×
-驻留) 插值"的速率模型。探针：`probes/e16b_rate_limit.py`
+速率 = f(事务大小, 依赖结构, L2/DRAM 驻留, 共驻程序数)。E17 的
+TL/TS 曲线与 Tier 3 的 167.56 是**各自 regime 的局部拟合斜率**
+（前者：满波稳态混合体；后者：短事务逐 op 分析），不是器件物理
+峰值；E16/E16b 的探针方法可直接用于未来把这两层升级为"按 (事务
+大小 × 驻留) 插值"的速率模型。探针：`probes/e16b_rate_limit.py`
 （数据 `e16b_results.json`）。
 
 **混合体 Tier 2 升级：max+κ·min 逐方向模型（E17/E17c，2026-11-17，
@@ -958,38 +954,37 @@ S 同、混合 7 点、in-place 对照；K=16/32 斜率，grid=56）得到：
   TL = {4KB:76.3, 8KB:96.4, 16KB:167.9, 32KB:334.7} ns，
   TS = {4KB:79.6, 8KB:93.9, 16KB:157.4, 32KB:276.1} ns（K=32 稳态）；
 - **混合体 = max(TL,TS) + κ×min(TL,TS)，κ=0.18**：7 个混合点全部
-  ±8% 内（现字节求和包络同点 +21%~+76%——偏斜混合 2L+1S 最差）；
+  ±8% 内；
 - **别名（in-place 读改写）= 275.3 ns/迭代**（8KB/8KB），超过纯串行
   和 190.3——loop-carried 依赖强制全串行，与非别名 119.6 截然不同
   （代价模型暂无别名检测，记录为限制）。
 
 **实现与 gate**：混合体（load、store 均非零）且 `iterationCount≥16`
-（E17 标定的 K 范围）时，Tier 2 改用上述 max+κ·min 曲线（log2-B
-插值、端点钳制）；单方向体保留旧字节求和包络（memory_stream 靠它
-过 gate，不动）；simt 仍走 Tier 3。JSON 新键
+时，Tier 2 用上述 max+κ·min 曲线（log2-B 插值、端点钳制）；
+**单方向体与 K<16 的低 trip 体落 Tier 3 逐 op 解析**；simt 仍走
+Tier 3。JSON 新键
 `simd.memory.contiguous_ldst_v2.loop_envelope_mix`（bytes/tl_ns/
-ts_ns 3×4 + kappa，共 13 个数）。gate：**100-case 86/100、guard
-51/96（7/24）与替换前逐位一致**——现套件没有 K≥16 的混合体落到
-Tier 2（B_add/B_copy/B_store 走 Tier 1 行表命中），升级对既有集合
-零风险、对未来几何修复偏斜混合的 +39%~+76% 高估。
-第一轮实现曾把 muls_add 打到 −17%——它虽名义有循环，但每逻辑程序
-只 trip 1 次（2048 逻辑程序 ÷ 56 物理流水 37 深），稳态模型不适用，
-`iterationCount≥16` 门由此而来。
+ts_ns 3×4 + kappa，共 13 个数）。`iterationCount≥16` 门是这条曲线
+的**标定域**：曲线在稳态循环（每迭代 16 次以上）里测得（E17d：
+门内基本 K 平坦），低 trip 体是启动主导、不在域内——门引入的
+历史：muls_add 在 hint=n_blocks 表示下每逻辑程序只 trip 1 次
+（2048 逻辑程序 ÷ 56 物理流水 37 深），曾被打到 −17%，稳态曲线
+不适用于 trip=1 体；hint=grid 采纳后 trip=37 入域，muls_add
+−4.2%（见下）。
 
 **表示层实验（E17c + hint 对照，回应"trip 应该是 37"）**：muls_add
 实际 launch grid=56（`grid=min(n_blocks,56)`），grid-stride 循环
 真实 trip≈37；route.json 的 trip=1 是分析器按
 `logical_program_count_hint=n_blocks(2048)` 规范化的视图
 （2048 逻辑程序 × 1 trip，slot 深度 37）。两种表示描述同一执行但
-选中不同公式：trip=1 视图 → 旧包络（含每程序启动）→ +6.14%；
-**trip=37 视图（hint 改传 56）→ trip=37、slot=1、iterationCount=37
-≥16 → E17 混合包络 → 预测 6.345µs vs 实测 6.625µs（−4.2%）**，
-比旧视图更准且方向相反。E17c 直接对账：同 body 的 grid-stride 寻址
-103.7 ns/trip vs 连续寻址 101.2（散布惩罚仅 +2.5%），Tier 2 公式
-110.7（+6.7%）✓、字节求和 160.4（+55%）✗、Tier 3 259.5（+150%）✗。
-**建议**：grid-stride launch-bound 循环建议向模型传物理 grid 作为
-hint（保留 trip 推导），使稳态混合包络可用；现行 harness 传
-n_blocks 的约定按指示保持不变，已记录。
+选中不同公式：trip=1 视图 → 不入 E17 标定域（K<16）→ Tier 3 逐
+op 解析 → +6.14%；**trip=37 视图（hint 改传 56）→ trip=37、slot=1、
+iterationCount=37 ≥16 → E17 混合包络 → 预测 6.345µs vs 实测
+6.625µs（−4.2%）**，更准且方向相反。E17c 直接对账：同 body 的
+grid-stride 寻址 103.7 ns/trip vs 连续寻址 101.2（散布惩罚仅
++2.5%），E17 公式 110.7（+6.7%）✓、Tier 3 259.5（+150%）✗。
+**采纳**：grid-stride launch-bound 循环向模型传物理 grid 作为
+hint（trip 真实流入 iterationCount），使稳态混合包络可用。
 
 **hint=grid 一刀切实验与最终裁定（2026-11-17 终版采纳）**：把 5 个
 hint=n_blocks/rows 的 bench 统一改为 hint=grid 后实测对账：
@@ -1009,14 +1004,15 @@ trip 实测 271ns 远高于连续探针稳态（106~210，grid-stride 散布 +
 每 trip 开销）；cumsum 是**串行扫描**（行间依赖、计算受限），
 trip=37 视图 + 稳态包络完全错配。
 
-**最终采纳形态（评审确认）**：三个 grid-stride kernel 的 hint 一律
-= grid（trip 37/19/32 正确流入 iterationCount），**旧字节求和包络
-正式删除**（代码 StageCostModels.cpp 中 Tier 2b 块移除，E17 混合
-包络无 K 门保留），采纳后的全量 gate：**100-case 83/100**——
-净变化 = muls_add×2 改善（仍 PASS）+ memory_stream l4 −12.2%
-FAIL（已知根因，见下）+ cumsum×2 −79.9/−86.1% FAIL（用户裁定：
-cumsum op 模型本身不准，排除在范围外，不计入）。guard 部分按指示
-未跑。
+**最终采纳形态（评审确认）**：8 个 kernel bench（muls_add、
+memory_stream、cumsum、op、rem、gather_dot、grid_stride_dot、
+grid_stride_gather）的 hint 一律 = grid（多维 grid 取乘积，trip
+37/19/32 等正确流入 iterationCount），混合体在标定域内由 E17 逐
+方向包络计价（单方向体/低 trip 体落 Tier 3 逐 op 解析），采纳后
+全量 gate：**100-case 83/100**——净变化 = muls_add×2 改善（仍
+PASS）+ memory_stream l4 −12.2% FAIL（已知根因，见下）+ cumsum×2
+−79.9/−86.1% FAIL（用户裁定：cumsum op 模型本身不准，排除在范围
+外，不计入）。guard 部分按指示未跑。
 
 **memory_stream l4 −12.2% 根因分析（已定位）**：实测每 trip
 271ns（10.032µs/37），E17 混合包络给 182.2——缺口 89ns。分解：
@@ -1040,7 +1036,7 @@ gather_dot/grid_stride_gather/grid_stride_dot 三 bench（launch
 grid=min(p,56)，hint=logical_programs）——p≥112 的 case hint≠grid。
 hint=grid 后 8 case 对账（pred µs，套件实测参考）：
 
-| case | 实测 | hint=logical（86 态） | hint=grid |
+| case | 实测 | hint=logical（改动前） | hint=grid |
 |---|---|---|---|
 | gather_dot k16 (p224) | 12.186 | 7.895（−35.2% FAIL） | **3.723（−69.5% ✗✗）** |
 | gather_dot p112 | 6.061 | 5.114（−15.6% FAIL） | **3.723（−38.6% ✗）** |
@@ -1053,14 +1049,17 @@ hint=grid 后 8 case 对账（pred µs，套件实测参考）：
 
 **否决**：gather 族的模型（间接 load/gather-dot 标定）按
 logical_programs 契约标定，hint=grid 使 p224/p112 大幅恶化；仅
-p336/p448 两个 dot 点小幅改善。该族保持 hint=logical_programs。
+p336/p448 两个 dot 点小幅改善（该族随后按评审指示也统一
+hint=grid，见下方最终采纳形态；预测差异以 16-case 对账为准）。
 
-**最终采纳形态的全量 gate（2026-11-17）**：三 kernel hint=grid +
-旧 Tier 2 删除 + E17 包络无 K 门：**100-case 83/100**（对比
-共存放态 86/100）：muls_add×2 改善（−4.2%/−8.6% 双 PASS）、
+**最终采纳形态的全量 gate（2026-11-17，wheel gitc8ad94e9，本节实验
+的终态总结）**：8 个 kernel bench hint=grid + 混合体 E17 包络
+（K≥16 标定域门）+ 单方向体/低 trip 体落 Tier 3：**100-case
+83/100**：muls_add×2 改善（−4.2%/−8.6% 双 PASS）、
 memory_stream_l4 −12.2% FAIL（根因已定位，见上）、cumsum×2
-−79.9/−86.1% FAIL（用户裁定排除：cumsum op 模型本身不准）、
-其余 97 case 与 86 态逐位一致。guard 按指示未跑。
+−79.9/−86.1% FAIL（用户裁定排除：cumsum op 模型本身不准）。
+guard 按指示未跑。基线（git2e9efcac）与终版（git9e6dd2a7）的同
+口径 100-case 全表对比见 `_100case_baseline_vs_commit_gridhint.md`。
 
 **E17d 可靠性研究（回应"E17b 的 K 轴数据噪声大、要测准"）**：
 方法 × 卡 × dst 轮换的受控对照（混合体 4KB/访问，30 次×56 程序
@@ -1082,12 +1081,9 @@ DRAM 冷读 + 写回墙（212→342）。E17b 上一轮的"非单调"是把 (a)(
 
 **对模型的最终裁定**：混合包络（max+κ·min，K=32 稳态标定）在
 `iterationCount≥16` 门内基本 K 平坦（L2 热 +10%@K=64）——**已实现
-的结构即正确形态，无需再加 g(K) 因子表**；K<16 由旧包络（内含
-每程序启动价）负责，K≥32 的写回墙是足迹/驻留问题（N2 类，后续）。
-**旧 Tier 2（字节求和包络）不能删**：trip=1 的 slot 流水体
-（muls_add 类，每次迭代必须付整程序启动 ~160ns，删掉落 Tier 3 会
-+45% FAIL）和 load-only 体（memory_stream 类）都依赖它——新旧
-包络是两个 regime 的共存而非替代。探针：
+的结构即正确形态，无需再加 g(K) 因子表**；K<16 不在标定域内，由
+Tier 3 逐 op 解析负责（含每条访问启动价），K≥32 的写回墙是足迹/
+驻留问题（N2 类，后续）。探针：
 `probes/e17d_k_reliability.py`（数据 `e17d_card2.json`/
 `e17d_card3.json`）。
 
@@ -1100,9 +1096,9 @@ K 增长（{1:4038, 2:4163, 4:4250, 8:4220, 16:4591, 32:5015, 64:5598}），
 干净分离 body 时间（SYS_CNT 窗口在 K=1 只测到发射 20ns）。
 混合体稳态斜率（K=16→64 段）~107 ns/迭代与 E17 一致。
 **结论**：K<16 时"每迭代时间"被启动/排空主导、量本身不收敛，
-混合包络保持 `iterationCount≥16` 门；K<16 继续由旧包络（内含
-每程序启动价）覆盖。逐 K 曲线的可靠标定需要海量采样 + 多 session
-中位（成本高、收益低），记录为限制。探针：
+混合包络保持 `iterationCount≥16` 门；K<16 继续由 Tier 3 逐 op
+解析覆盖（含每条访问启动价）。逐 K 曲线的可靠标定需要海量采样 +
+多 session 中位（成本高、收益低），记录为限制。探针：
 `probes/e17e_small_k.py`。
 
 **muls_add 的 hint 采纳**：基于 E17c/E17 实验数据（−4.2% 优于
@@ -1110,50 +1106,48 @@ K 增长（{1:4038, 2:4163, 4:4250, 8:4220, 16:4591, 32:5015, 64:5598}），
 `logical_program_count_hint` 正式改为 `grid`（trip=37、slot=1，
 混合包络生效）；`bench_muls_add_hint56.py` 保留为对照。
 
-1. **为什么有了 Tier 2 还要 Tier 3？** 三个理由：(a) **Tier 2 是
-   simd 专用的**（代码 `if (simd && independentLoadGroupBytesPerCycle
-   > 0)`，StageCostModels.cpp:972）——聚合带宽 83.26 B/cycle 是在
-   simd 的 MTE 流上测的，simt 走 LSU/DCache、吞吐以 warp 指令计，
-   没有这层标定，simt 循环体直接落 Tier 3；(b) Tier 2 把整个循环
-   体当成"一条流"，表达不了 load/store 分开计价——Tier 3 的
-   load/store 分桶保留这个细节；(c) 兜底链必须以"任何输入都有
-   答案"的一层终结。**血统**：Tier 2 复用的是基线路径二的标定
-   常数（`independent_loop_load_group` 扫描），但"把它用作循环体
-   兜底"是 v2 的安排（基线的同款公式只管直线段的 load 前缀）；
-   **Tier 3 就是基线兜底公式本身**（simd 分支逐 op 启动+字节/带宽、
-   simt 分支 warp 指令/速率），v2 原样保留。
+1. **为什么有了 Tier 2 还要 Tier 3？** 三个理由：(a) **Tier 2 只管
+   simd 的稳态混合体**（E17 曲线在 simd 的 MTE 流上标定；simt 走
+   LSU/DCache、吞吐以 warp 指令计，没有这层标定，simt 循环体直接
+   落 Tier 3）；(b) **单方向体（只 load 或只 store）与 K<16 的低
+   trip 体不在 E17 标定域内**，由 Tier 3 接管；(c) 兜底链必须以
+   "任何输入都有答案"的一层终结。**血统**：Tier 2（E17 包络）是
+   v2 新增的标定；**Tier 3 就是基线兜底公式本身**（simd 分支逐 op
+   启动+字节/带宽、simt 分支 warp 指令/速率），v2 原样保留。
 
 2. **为什么 Tier 2 不体现"K 影响每迭代时间"？** 刻意的设计取舍。
    实测里 K 强依赖的场景（小 K 的延迟链、小 store 翘头）已被
    升级到实测层处理——第 1 优先的 A+K×m 拟合、第 1a 优先的
-   翘头项 excess×0.636。会落到 Tier 2 的几何（>224 程序的大
-   launch、无标定家族），流水深、带宽主导，每迭代时间已收敛到
-   与 K 无关的平坦区——muls_add（37 波）用常数包络 +6.14% 即是
-   验证。**诚实边界**：若某几何同时"落 Tier 2 且 K 强依赖"（小
-   launch 不会——它有行表；无标定家族的小 K 循环会），Tier 2
-   会失真，这是已知残留，靠 gate 抽查把守。
+   翘头项 excess×0.636。会落到 Tier 2 的几何（K≥16 的稳态混合体），
+   流水深、带宽主导，每迭代时间在标定域内已收敛到与 K 基本无关
+   的平坦区（E17d：门内 K 平坦，L2 热 K=64 也只 +10%）——
+   muls_add（trip 37）用 E17 包络 −4.2% 即是验证。**诚实边界**：
+   K<16 且无行表覆盖的低 trip 混合体落 Tier 3（逐 op 启动价体现
+   K）；E17e 证明 K<16 的每迭代时间量本身被启动/排空主导、在现有
+   噪声下不可标定，这是已知限制。
 
-3. **Tier 2 确实是 load+store 加在一起除以聚合带宽，且仅限 simd**
-   （你的观察正确，原文漏写了引擎限制，已补）。除以"字节带宽"
-   的做法在两层里的适用范围：Tier 2 仅 simd（simt 无此标定）；
-   Tier 3 是**分方向**的——load 字节/load 带宽、store 字节/store
-   带宽分桶计价，simd 用字节速率、simt 用 warp 指令速率。基线
-   本身并没有"load+store 加一起"的循环体包络（它的同款公式只管
-   直线段 load 前缀），这个用法是 v2 的延伸。
+3. **Tier 2（E17）按方向分开计价，且仅限 simd**：TL/TS 各自查
+   曲线、max 取瓶颈方向、κ×min 计另一方向的残余干涉。"除以字节
+   带宽"的做法只出现在 Tier 3，且是**分方向**的——load 字节/load
+   带宽、store 字节/store 带宽分桶计价，simd 用字节速率、simt 用
+   warp 指令速率。
 
 **掩码与依赖在这层怎么处理**：不在这层处理——**资格判定在进
 瀑布之前统一做**（§3.3 的准入清单：地址依赖加载下标、非仿射
 地址、部分掩码 store 等不进认领集合，走各自的责任曲线）。进入
-瀑布的访问带不带掩码对机制四透明：Tier 2 只看字节总量，Tier 3
+瀑布的访问带不带掩码对机制四透明：Tier 2 按方向的字节总量查曲线，
+Tier 3
 按访问的字节/指令数算（掩码访问的字节在 workload 统计里已按
 活跃比例折算，§3.1）。
 
-**准确度定位（为什么有了机制四还要机制二/三）**：机制四只有
-"总字节 + 一次启动"两个自由度，表达不了首批延迟、小迭代数的
-延迟链、逐家族的 DMA 行为差异——那些正是机制二/三实测行修正
-的。量级对比：muls_add 用机制四 +6.14% 足够选路；rms_norm 若用
-机制四会错 ~30%，机制二把它修到 +7.46%。**参数合计：2 + 6，
-全部继承自基线标定，v2 在这两层零新增参数**。
+**准确度定位（为什么有了机制四还要机制二/三）**：机制四是解析层，
+自由度有限（E17：2 方向 × 4 字节档曲线 + κ；Tier 3：每方向启动 +
+带宽各一组常数），表达不了首批延迟、小迭代数的延迟链、逐家族的
+DMA 行为差异——那些正是机制二/三实测行修正的。量级对比：muls_add
+用机制四（E17 + hint=grid）−4.2% 足够选路；rms_norm 若用机制四会
+错 ~30%，机制二把它修到 +7.46%。**参数合计：E17 包络 13 个数
+（loop_envelope_mix）+ Tier 3 的 6 个基线常数；E17 为 v2 唯一
+新增，Tier 3 全部继承自基线标定**。
 
 ## 3.6 机制五：认领记账按实例数（G6）
 
@@ -1871,7 +1865,7 @@ masked_sm_r80（−3.10%）、softmax_original（−3.79%）这 7 个 case 在
 | direct 网格轴 | log2-grid 括号几何插值（hd18：精确命中且 K 点≥2 才单格），覆盖 g1~g224 连续区间 |
 | direct K 轴 | 全 K 点中位成对斜率拟合，K 在测量区间内连续插值 |
 | tiny_direct 不外推门 | K > 家族最大K×1.5+1 即回退，防止编造 |
-| P>224 / 字节超档 | 硬门落 Tier 2（聚合带宽解析式，参数只有 2 个） |
+| P>224 / 字节超档 | 硬门落 Tier 2/3（E17 逐方向包络 / 逐 op 解析） |
 | 掩码活跃字节、实例记账、方向入账 | 输入修正类，对任意形状成立 |
 | pAxisFactor | P≤56 恒 1（E14 证据），P>56 表插值 + 表尾钳制 |
 
