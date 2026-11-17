@@ -104,22 +104,113 @@ SIMD 4 档 + SIMT 5 段，拟合出"这种跨步模式每次迭代多少 cycle"�
 
 ## 2.2 路径二：独立 load 组包络（SIMD 流水专用）
 
-**准入**：SIMD、该段开头是一串连续的 rank-1 load（遇到 store 停）、
-各 load 的元素数有非 1 公约数（能切成整数"组"）。
+**场景**：SIMD 流水段的访存流开头是一串平坦连续的 rank-1 fp32 load
+（从段首遇到第一条 store 为止，之前的 load 全算）。
 
-**计价**：`组启动价 + 字节/聚合带宽`。只管 load，不管 store。
+**"公约数"条件的目的一句话版**：把"N 条 load、每条重复 count 次"切成
+"groupOccurrences 组、每组内容固定"的两层结构，好套用
+"每组一次启动价 + 每组字节/聚合带宽"的实测公式——能整除切开才切，
+切不出整数组就不准入。
+
+代码（StageCostModels.cpp:1726，基线提交）：
+
+```cpp
+// ① 每条 load 带一个 count（实例数：外层循环壳展开了几份）
+const int64_t count = llround(access->count);
+exactCounts &= count > 0 && |access->count - count| <= 1e-9;   // 必须是精确整数
+groupOccurrences = (groupOccurrences == 0) ? count
+                  : std::gcd(groupOccurrences, count);         // ② 所有 count 的最大公约数
+// ③ 每组内容 = 每条 load 出现 count/gcd 次
+occurrencesPerGroup = count / groupOccurrences;
+operationsPerGroup += occurrencesPerGroup;
+bytesPerGroup      += occurrencesPerGroup * 该load字节数;
+```
+
+例：段里有 x、y、z 三条 load，循环壳让每条出现 4 次（count=4）→
+gcd=4 → 切成 4 组，每组 = x+y+z 各 1 次（operationsPerGroup=3，
+bytesPerGroup = 三个 load 的字节和）。
+
+**计价**（切组成功且每组操作数落在标定窗口内才走）：
+
+```cpp
+resources.setup += KernelStartupCycles;                    // 一次性组启动
+resources.continuousLoadGroup +=
+    groupOccurrences * (IterationStartupCycles            // 每组一次启动
+                        + bytesPerGroup / BytesPerCycle); // 每组字节按聚合带宽
+```
+
+即：总价 = 组启动 + 组数 ×（每组启动 + 每组字节/带宽）。准入窗口
+`operationsPerGroup ∈ [MinimumOperations, MaximumOperations]`——
+标定只测过每组几条到几十条的范围，范围外失配；只管 load，不管 store。
+（注：本节原文写"各 load 的元素数有非 1 公约数"，准确说法是上文的
+"实例数 count 的最大公约数"；gcd=1 时组=全部出现次数，能不能准入由
+窗口检查决定，不是被公约数条件挡掉。）
 
 ## 2.3 路径三：跨步 store 组（SIMD 流水专用）
 
-**准入**：段内所有 store 都是短行跨步、同一行距、行距字节命中表。
+**场景一句话**：段里每一笔 store 都是"写一小段、跳一步"的形式——
+比如往每行开头写 8 个 float（32 字节连续），行与行之间跳 128 字节。
 
-**计价**：`首价 + (条数−1)×增量 + 超 32 行的额外 lane 价`。
+拆开讲三个条件（StageCostModels.cpp:1800，基线提交）：
 
-## 2.4 路径四：掩码跨步拷贝（半读半写）
+```cpp
+const int64_t accessStride = access.rowStrideBytes(); // 行距 = 相邻两行的起始地址差（字节）
+const int64_t accessRows   = access.rowCount();       // 行数 = 这笔 store 覆盖多少行
+if (... access.elementBits != 32 || !access.masked ||
+    access.layoutClass() != StridedShort ||            // 布局类必须是"短行跨步"（行内连续段 ≤32B）
+    accessStride <= 0 || accessRows <= 0 ||
+    (rowStrideBytes != 0 && rowStrideBytes != accessStride) || // 所有 store 的行距必须一致
+    (rows != 0 && rows != accessRows))                 // 所有 store 的行数必须一致
+  { allStoresCovered = false; break; }
+```
 
-**准入**：fp16、掩码、有配对 load 依赖的二维跨步 store。
+1. **"都是短行跨步"**：段内每笔 store 的布局类都是 StridedShort
+   （行内连续段小、行间按固定字节距跳跃）、fp32、带掩码；
+2. **"同一行距、同一行数"**：这些 store 的行距互相等、行数互相等——
+   它们是同一"束"的重复；
+3. **"行距字节命中表"**：把这唯一的行距字节值（比如 128）当键去查
+   `pipelinedStridedStoreGroupsByRowStrideBytes` 标定表——标定时只测过
+   若干特定行距值，这个值没测过就直接失配走兜底。
 
-**计价**：按 `行字节×活跃行` 查表。
+**计价**（还要过条数/行数窗口 [minimumStores, maximumStores] ×
+[minimumRows, maximumRows]）：
+
+```cpp
+resources.continuousStoreGroup +=
+    fit.firstStoreCycles                              // 首价
+    + (store条数 - 1) * fit.incrementalStoreCycles    // 每多一笔的增量
+    + max(0, 行数 - 32) * fit.extraLaneCycles;        // 超 32 行后每行加一份 lane 价
+```
+
+## 2.4 路径四：掩码成对拷贝（一条掩码 load + 一条掩码 store）
+
+（更正：本节初稿写"fp16、二维、有配对 load 依赖的 RMW 形状"——三处
+都与代码不符，以下为按基线源码 StageCostModels.cpp:488
+`mapMaskedStridedCopyCompletion` 的准确描述。）
+
+**准入（全部同时满足）**：
+
+1. 段类型是流水循环段（IndependentPipelinedLoop），无同步、无条件分支；
+2. 段内**恰好一条 load + 一条 store**，各自实例数 count=1；
+3. 两者都是 fp32（elementBits==32）、都是 rank-1（一维）、都带掩码、
+   布局静态可证、地址干净（不依赖加载的下标/无非仿射运算/无张量控制流）；
+4. store **不是**"先读后改"形（`maskedStoreHasMatchingLoadDependency`
+   为假——代码显式排除读改写）；
+5. 布局必须**一跨步一连续**：load 是短行跨步且 store 是宽连续
+   （查 load 侧曲线），或 load 宽连续且 store 是短行跨步（查 store 侧
+   曲线）；两条都跨步或都连续则本路径不管。
+
+**计价**：以跨步方的"行距字节"为键查
+`maskedStridedLoadCopyCompletionByStrideBytes` 或
+`maskedStridedStoreCopyCompletionByStrideBytes` 曲线，取值 =
+曲线(行数, 循环次数)。语义是**该方向资源的下限**：
+
+```cpp
+if (llvm::is_contained(claimed, stridedAccess))
+  return;                       // 跨步方已被 StridedShort 闭式认领 → 本路径让路（收据机制）
+floor = curve->evaluate(rowCount, iterationCount);
+*resource = std::max(*resource, *floor);   // 是 max 不是相加
+```
 
 ## 2.5 路径五：兜底公式（其余一切连续访存）
 
@@ -129,18 +220,62 @@ simd: 价 = 操作启动开销(load 105.3 / store 90.95 ns) + 字节数 / 带宽
 simt: 价 = warp 指令条数 / 每 cycle warp 指令数
 ```
 
-纯解析式：与 grid 无关、与多少程序同时驻留无关、与循环次数无关。
-这是它的泛化优点，也是下面所有问题的来源。
+纯解析式：整个公式只有两个输入——**字节数**和**操作条数**。
+你问的"与 grid 无关"和"与共驻地无关"确实是一回事的两面，合起来
+讲清楚：
 
-## 2.6 候选层固定边界（基线就有，数值如下）
+- **grid（发射了多少程序）**：launch 的份数，比如 grid=224 就是
+  224 份；
+- **共驻地（同时驻留在 56 个物理核上的程序数）**：把 grid 按 56
+  一波切开后的"同时在跑的份数"——grid=224 时共驻地是 56（分 4 波
+  轮流上场），grid=32 时共驻地就是 32；
 
-每次 launch 在候选分上加的固定项（单位纳秒，profile 实测）：
+对基线兜底公式来说，这两个数量都**不是公式的输入**：单价
+（启动 + 字节/带宽）恒定，grid 和共驻地只出现在最后一步
+"单价 × 份数"的乘法里。问题在真实硬件上**单份价格本身随共驻地
+变化**——56 个程序同时搬 4KB 时聚合带宽远高于 8 个程序
+（E13/E14 实测：每程序平均价随 P 变化、P=1 到 56 差约 5 倍），
+而"单价 × 份数"这种乘法结构永远表达不出"份数越多单价越便宜"。
+这是它的泛化优点（任何形状都有答案），也是下面所有问题的来源。
+
+## 2.6 候选层固定边界（基线就有，数值与代码位置如下）
+
+**代码位置**：`SimdSimtCostModel.cpp:4269 routeFixedSystemCycles()`；
+它在同文件 `completeCandidateCosts()`（约 4276 行起）里被调三次，
+把返回值分别加到全 SIMD / 全 SIMT / 混合三个候选分上：
+
+```cpp
+static double routeFixedSystemCycles(const CandidateProfile &profile,
+                                     llvm::StringRef route,
+                                     const StageRoutePlan &plan,
+                                     int64_t kernelArgumentCount,
+                                     bool routeHasGlobalLoad) {
+  double cycles = profile.kernelTiming.boundarySystemCycles(
+      route, plan.routeSuperblockFactor,
+      plan.runtimePhysicalProgramCount);          // ① 发射边界残差：按物理程序数（含 superblock 因子参数）查表
+  if (routeHasGlobalLoad)
+    cycles += profile.kernelTiming.globalLoadBoundarySystemCycles(
+        route);                                   // ② 全局 load 边界：按路线查表
+  cycles += profile.kernelTiming.runtimeArgumentSetupSystemCycles(
+      route, kernelArgumentCount);                // ③ kernel 参数下发的 setup：按参数个数
+  return cycles;
+}
+```
+
+① 对应 profile 键
+`kernel_timing.boundary_residual_system_cycles_by_physical_program_count`，
+② 对应 `global_load_boundary_residual_system_cycles_by_route`。
+数值（单位纳秒，profile 实测）：
 
 | 物理程序数 | 1 | 2 | 4 | 8 | 16 | 32 | 56 |
 |---|---|---|---|---|---|---|---|
-| 边界残差 | 408.3 | 703.65 | 772.95 | 909.4 | 1041.4 | 1203.4 | 1704.95 |
+| 边界残差 ① | 408.3 | 703.65 | 772.95 | 909.4 | 1041.4 | 1203.4 | 1704.95 |
 
-全局 load 边界（按路线）：全 SIMD / 混合 = 314.2，全 SIMT = 485.8。
+全局 load 边界 ②（按路线）：全 SIMD / 混合 = 314.2，全 SIMT = 485.8。
+③ 按启动参数个数线性取值。
+
+这套加法运行在候选层（§1.4 第 3 步），在所有段价合成之后；v2 的
+calH 多流隐藏（§3.11）就是在这之后从同一候选分里减回去的。
 
 ## 2.7 基线兜底公式的不足（逐条编号，后文按编号引用）
 
