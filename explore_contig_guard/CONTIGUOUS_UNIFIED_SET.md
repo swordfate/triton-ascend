@@ -1,5 +1,17 @@
 # 连续访存统一集合场景（Unified Set）与实施计划
 
+> **★ 终版状态（2026-11-18，commit 058b55a81a）**：行表（机制二/三）
+> 已退役删除。出厂配置 = 直线域机制一 + 循环域 E17 包络（含翘头
+> excess 与归约链）+ Tier 3 兜底 + E15 掩码修正 + claimAll + A(P)
+> 边界残差。gate（hint=grid，本 build）：**75/95 可评 PASS，与基线
+> 2e9efcac 同数**——换血集合：4 例基线 FAIL 由新机制修复
+> （associative_scan/cumprod/max_dim1/vector_add），4 例 PASS→FAIL
+> 全部归因在案（muls_add_n1M = 精度极限；fused_softmax = 计算/归约
+> 域；permute = 跨步 rider + 壳；strided_scatter = 散射域，他组责任）。
+> 恢复路径：CONTIGUOUS_V2_REVIEW.md §3.3/§3.4 保留了机制说明与数据，
+> git revert 058b55a81a 可整体回退。
+
+
 > 2026-11-17 立项。目标：把连续访存标定收敛为一个集合场景——直线域
 > （机制一）+ 循环域（包络，L3 扩展后），其余机制要么是集合的输入修正、
 > 要么按数据审计退役、要么作为"指名附加轴"挂接。本文档是实施依据。
