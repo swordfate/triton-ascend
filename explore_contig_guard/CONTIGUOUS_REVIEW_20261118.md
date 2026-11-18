@@ -120,24 +120,31 @@ for sub in range(0, XBLOCK, XBLOCK_SUB):       # 运行期循环，K = XBLOCK//X
 
 *为什么要和循环域分开建模（历史拟合数据）*：三个实验把这件事钉死——
 
-- **E6**（同一访存模式分别写成动态循环与直线交错，卡 3，
-  `scripts/e6_loop_vs_burst.py`）：4KB 独立 load+store、真实流式地址
-  （step×BLOCK 推进，不用窗口复读），grid=1，配对差分（对照 = 同
-  形状的常量 store kernel）。两种写法的 kernel 核心代码：
+- **E6/E24**（同一访存模式分别写成动态循环与直线交错）：E6 原始探针
+  （`scripts/e6_loop_vs_burst.py`，卡 3，配对差分口径）给出直线每
+  实例 ~37ns / 循环每轮 ~102ns；下表为**终版 wheel 上的 SYS_CNT
+  设备内口径复测**（`probes/e24_marginal_repro.py`，卡 1，4KB fp32
+  对、流式地址、grid=1，每点 30 次发射取中位 × 3 遍）。kernel 核心
+  代码：
 
   ```python
-  # (a) 动态循环：K 轮运行期 scf.for，每轮 1 对（K∈{1..128} 运行时传入）
-  @triton.jit(do_not_specialize=['iters', 'boff'])
-  def e6_loop_ind(src, dst, iters, boff, BLOCK: tl.constexpr):
+  # (a) 动态循环：K 轮运行期 scf.for，每轮 1 对（K 运行时传入，{1..32}）
+  @triton.jit(do_not_specialize=['iters'])
+  def e24_loop_ind(src, dst, out, tick_ptr, iters, BLOCK: tl.constexpr):
       lane = tl.arange(0, BLOCK)
+      t0 = _sys_cnt()                    # SYS_CNT：1 tick = 1.00008 ns
       for step in range(iters):
-          x = tl.load(src + boff + step * BLOCK + lane)
-          tl.store(dst + boff + step * BLOCK + lane, x + 1)
+          x = tl.load(src + step * BLOCK + lane)
+          tl.store(dst + step * BLOCK + lane, x + 1)
+      t1 = _sys_cnt()                    # 窗口时长 = t1 - t0（设备内）
+      tl.store(tick_ptr + 0, t0)
+      tl.store(tick_ptr + 1, t1)
 
-  # (b) 直线交错：U 对全部展开进同一条指令流（U∈{1,2,4,8}，图为 U=4）
+  # (b) 直线交错：U 对全部展开进同一条指令流（U∈{1,2,4,8,16}，图为 U=4）
   @triton.jit
-  def e6_burst_u4(src, dst, BLOCK: tl.constexpr):
+  def e24_burst_u4(src, dst, out, tick_ptr, BLOCK: tl.constexpr):
       lane = tl.arange(0, BLOCK)
+      t0 = _sys_cnt()
       x0 = tl.load(src + 0 * BLOCK + lane)
       tl.store(dst + 0 * BLOCK + lane, x0 + 1)
       x1 = tl.load(src + 1 * BLOCK + lane)
@@ -146,17 +153,31 @@ for sub in range(0, XBLOCK, XBLOCK_SUB):       # 运行期循环，K = XBLOCK//X
       tl.store(dst + 2 * BLOCK + lane, x2 + 1)
       x3 = tl.load(src + 3 * BLOCK + lane)
       tl.store(dst + 3 * BLOCK + lane, x3 + 1)
+      t1 = _sys_cnt()
+      tl.store(tick_ptr + 0, t0)
+      tl.store(tick_ptr + 1, t1)
   ```
 
-  实测（配对差分边际）：直线型每实例 **~37ns**（U≤8 时 MTE2 队列
-  深 16 内多笔同时在飞），循环每轮 **~102ns**（每轮约一笔在飞，受
-  发射节流）——两个上下文的每实例价差 **2.7×**。终版 wheel + SYS_CNT
-  设备内口径复测（E24，`probes/e24_marginal_repro.py`）：循环
-  T(K) 斜率 **93.2 ns/轮**（K=16→32 稳态恰 **102 ns/轮**，前几轮
-  58-88 ns/轮是流水填充）；直线 T(U) 在 U∈{1..8} 拟合 **36.8 ns/条**
-  ——两个边际数字在现栈上原样复现。注意：这个 2.7×
-  只在队列深度区间（U≤8，≤~64KB）成立，不能外推到大批量——下一条
-  E7 用同一份总工作量的对照把它修正了；
+  整核（窗口）中位时长与边际（ns）：
+
+  | K / U | 1 | 2 | 4 | 8 | 16 | 32 |
+  |---|---:|---:|---:|---:|---:|---:|
+  | 循环 T(K) | 66 | 124 | 245 | 477 | 1178 | 2808 |
+  | 循环每轮边际 | — | 58 | 60 | 58 | 88 | **102** |
+  | 直线 T(U) | 331 | 378 | 435 | 593 | 851 | — |
+  | 直线每对边际 | — | 47 | 29 | 39 | 32 | — |
+
+  边际结论：循环的每轮边际随流水填满爬升（58→88→102），稳态
+  **102 ns/轮**（K∈{4..32} 拟合 93.2）；直线形在 U≤16 内每对边际
+  平稳于 **29-47 ns**（U∈{1..8} 拟合 **36.8**）——MTE2 队列深 16 内
+  多笔同时在飞，循环每轮约一笔在飞、受发射节流，稳态比值 **~2.8×**。
+  直线形的一次性脚手架成本更高（U=1 全窗 331 vs 循环 K=1 的 66，
+  地址/发射脚手架一次性入窗）。
+
+  边界提示：~2.8× 是**每条边际**之比，只在队列深度区间（U≤16）
+  成立——超出后直线边际涨到 ~125 ns/条（E7 的 U=32 实测），与循环
+  稳态收敛到同一传输受限价；同总工作量的**整核**对照见下一条 E7
+  （直线形的脚手架固定成本抵掉边际优势，整核差 ≤15%）。
 - **E7**（同一份工作 N∈{8,32}，只变代码形状 A/B/C/D/E）：N=32 时
   loop ≡ burst ≡ static_range（<5%）——直线型的并发优势**被队列
   深度封顶**（只影响前 ~8-16 笔），超过后两域收敛到同一个传输受限
