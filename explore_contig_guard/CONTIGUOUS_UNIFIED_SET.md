@@ -132,6 +132,20 @@ simt: 待阶段 3 标定（形状 = max(load服务, store服务) + f(U,S) 串行
 | **5** | 行表审计与退役：**审计已完成（f51878d9ec）**——`ASCEND_V2_SKIP_ROWS=1` 旁路 1a+1 行表跑全量 gate：**89/100 无行表仍 PASS 或预测不变；10 例有真实行价值（7~36pp），五簇**：①2x4096x8 元素级×4（+9.5pp 系统性）②小 store 链 rowred/reduce_sum（−31/−26pp——阶段 4 excess 的 C=1 未覆盖其幅度）③permute 双层壳实例结构（−36pp）④散射组合行（−20pp）⑤grid_stride_dot_p112/fused_softmax（−14/−7pp）；另 1 例负价值行（grid_stride_dot_p336）。**裁定：退役条件未满足，行表保留**。**逐簇归因（7092f4493）**：①2x4096x8 族 = κ 偏差（已修，κ=0 后无行表 +16→+8%）②rowred/reduce_sum = **归约-stage 域**（stage_6_rowwise_reduction 走 calibrated_tail_reduction_window 专用机器，非 contiguous 瀑布；E19 实测 链底 = TL(domLoad)+97×S = 行表价精确复现，已作为 floor 接线到包络备用，退役该簇行表需归约域模型配合——理由充分在案）③permute 双层壳 = stage_4 循环 2× 结构未编码（−2.35µs）④散射组合/p112/fused_softmax 待逐簇。阶段 5b gate：82/95 零回归。**阶段 5b 后续深挖（2026-11-18）**：链底在包络层被路由求值屏蔽——stage_6 的 all_simd 候选 work 快照天生无归约标记（geo=0，调试证实：同一 stage 两次求值，geo=1 只出现在另一候选），任何包络层判别都会被最终求值覆盖；且实测 in-kernel 链代价 = 374ns/迭代（行表口径）vs 独立探针 187（E19）——store 排空与下迭代 load 在 L2 相撞（反依赖），真实 kernel 里链代价 ×2。**正确的通用机制在 estimator 组合层**：当 stage 的归约输出是 tiny store 的数据依赖时（IR 数据流），禁止流水 max 组合、按串行求和（load+reduction+store 排空）。列为簇②的精确剩余项（需要 IR 数据流信息，是 estimator 层干预）。 | SKIP_ROWS 开关 + 对照 gate | 审计完成 |
 | **6** | 附加轴接线：驻留（数据已有，按足迹 > L2 阈值启用冷档）→ 别名检测预研（静态同基指针可行性）→ 聚合压力战役（N2，挂起待真实 case） | 探针复用 + profile + cpp | 按轴分别过 gate |
 
+**E20 四例归属裁定（2026-11-18，谁不准分析清楚）**：
+
+| case | 循环窗实测（SYS_CNT/clock64） | 判定 |
+|---|---|---|
+| muls_add_n1048576 | 92.9ns/迭代（K=19）——**低于**包络 113.7 | **内存体不慢、包络没低估**；缺口 = 固定成本 A：真实 2.4-2.7µs vs 边界残差表 1.7µs（P=56，包络计价 case 系统性差 0.7-0.9µs——行表时代的 A 表与包络 stage 价不配套）。修法 = A(P) 表按包络时代重标（Δ(P) 校准战役 E20b），集合本体内 |
+| fused_softmax | 1.395µs（348.7/row）vs stage 293/row | **exp/max/sum 计算欠价**（计算/归约域，非连续访存） |
+| permute | 3.914µs vs stage 2.414µs | 跨步 32B load/store（rider）欠价 1.5µs + 壳结构 → **跨步域为主** |
+| strided_scatter | all_simt + stride-16 散射 store | **散射/跨步域**（他组责任） |
+
+**A(P) 重标的关键约束**：A 表不能全局上移（71 个行价小核 case 会爆）；
+正确形态 = **计价源感知的双表**——v2 包络认领的循环体（稳态价不含
+启动）加 Δ(P) ≈ +0.8µs@P56，行价体维持现表（其 A 已含启动）。
+Δ(P) 多点校准（P∈{8,14,28,56} × 真实 kernel 整核实测）为 E20b 战役。
+
 **阶段 3 的部分合并裁定（2026-11-18，按 §0 原则执行）**：
 
 clock64 探针战役（`probes/e17g_simt_sweep.py`、`probes/e17g6_ld_chain.py`、
