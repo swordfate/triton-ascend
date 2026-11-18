@@ -1,10 +1,17 @@
 # 连续访存标定终版评审（CONTIGUOUS_REVIEW_20261118）
 
 > 基线：`2e9efcacb8`（#3050）→ 新基线：`4902ae4a`（= 基线 + #3126
-> StridedWide direct load/store costmodel；本地以 git-am 内容等价提交
-> `0868cdaece` 落地）。终版：新基线 + 本 PR 的连续访存标定（分支
-> `calib/unified-set-final`，HEAD 合并 `929cd70fa` 全部工作）。
+> StridedWide direct load/store costmodel，上游提交；本分支树上同一补丁
+> 以 git-am 内容等价提交 `0868cdaece` 承载，二者树逐位相同）。
+> 终版：新基线 + 本 PR 的连续访存标定（分支 `calib/unified-set-final`，
+> HEAD `73a131d283`，包含 `929cd70fa` 及其之前全部工作）。
 > 所有 gate 均在 hint=grid harness、卡 1/2、8 分片、v140 同口径下测得。
+>
+> 代码位置：`third_party/ascend/costmodel/lib/AscendModel/RouteModel/`
+> `StageCostModels.cpp` 的 `mapContiguousV2Completion`（直线域机制一 +
+> 循环域包络 + Tier 3）、`estimateStageBase`（组合层）；
+> `include/.../ContiguousLdStV2CostModel.h`（公式助手与参数结构）；
+> `profiles/simd_simt/ascend_950pr_simd_simt_v1.json`（参数表）。
 
 ---
 
@@ -14,25 +21,29 @@
 
 | # | 路线 | 覆盖 | 公式形状 |
 |---|---|---|---|
-| 1 | 直线公式族（simd/simt × dtype × 方向 × 掩码 × W × lines 分桶） | 无循环的单发与流水直线组 | 串行 `T=a₀+a₁·by+a₂·blk_part+a₃·burst`；流水 `max(a₀+a₁/unroll, b·by)` |
-| 2 | 独立 load 组聚合包络（independentLoopLoadGroup） | 流水多 load 组（组内共享 LSU） | 一次性启动 + 字节/83 B/cycle 聚合带宽 |
-| 3 | 循环体：无独立模型 | 所有带 for 的循环体 | 沿用路线 1 的逐 op 公式按 K 线性外推（每 op 启动 + 字节/带宽） |
+| 1 | 逐访问解析式（+ simt 按 W 分档吞吐表） | 每条连续 load/store（直线体与循环体同式） | simd：`启动 + 字节/带宽`，load 105.31 cycle + 167.56 B/cycle、store 90.95 + 213.13（microbench 联合拟合常数，全部形状共用）；simt：`warp 指令数 / 吞吐`，吞吐按启动 warp 数 W∈{1..32} 逐档实测 |
+| 2 | 独立 load 组聚合包络（independent_loop_load_group） | 流水段开头 1–4 条连续 load 流 | 内核启动 546.1 + 迭代启动 12.8 + 字节/83.26 B/cycle 聚合带宽 |
+| 3 | 循环体：无独立模型 | 所有带 for 的循环体 | 沿用路线 1 的逐 op 公式按 K 线性外推（每 op 启动 + 字节/带宽）×K |
 
 **是否特化：是。** 三个层面：
 
-1. **桶级特化**：路线 1 的标定方法论是"逐桶曲线拟合"——每个
-   (引擎, dtype, 掩码, W, lines) 桶一条独立手拟合公式（如 simt store
-   按 (掩码 × dtype × W) 再分 6 桶）。泛化性只由桶内自变量（字节数、
-   W）承载，桶与桶之间没有共享的参数结构——每遇到一个新桶就要一次
-   新标定。实测的桶间行为差异确实存在（simt 流水 load 26.9% MAPE），
-   但桶间没有可迁移的物理参数。
-2. **循环体缺位**：路线 3 不是模型——循环体只是把直线逐 op 公式按
-   K 线性外推。G3 实验证明循环体的真实行为是"流水线填满后进入
-   稳态边际"（K=4 与 K=16 实测几乎一样长的翘头 + 之后线性区），
-   逐 op 公式既给不出翘头也说不清稳态，误差随场景大幅波动。
-3. **组效应特例**：路线 2 只为"同形多 load 组"一个场景打了补丁
-   （聚合带宽 83 B/cycle），且只管 load 侧——它是特例补丁而非
-   通用机制。
+1. **单访问口径、无组结构**：路线 1 对每条访问独立计价，多条访问只能
+   逐条相加——同形状多条访问在 MTE 队列里的并发摊薄（第 1 条付全价、
+   后面打折）没有参数结构，多波聚合带宽摊薄也没有（只有路线 2 一个
+   83 B/cycle 特例）。典型证据：vector_add（每程序 2 load + 1 store、
+   97 程序 2 波）被高估 **+29.86%**（G1）。
+2. **循环体缺位**：路线 3 不是模型——直线逐 op 公式按 K 线性外推。
+   E6/E7 证明循环体是不同的执行上下文（受每轮发射节流，稳态斜率是
+   上下文常数，见 §2.1 动机说明）；G3 的 K 扫描给出直接反例：整核
+   时长 T(4)=4211ns ≈ T(16)=3881ns（几乎一样长），到 K=64 才线性涨到
+   8905ns。这里的"**翘头**"指 T(K) 曲线在小 K 端高于线性趋势的头部
+   段：流水线填满/延迟链排空之前，时长几乎不随 K 增长（近似平台）；
+   把大 K 的线性趋势外推回小 K，实测点悬在趋势线上方，形如翘起的头。
+   逐 op×K 线性式既给不出这个头（K=4 处偏差约 4 倍），也说不清稳态
+   斜率，误差随场景大幅波动。
+3. **组效应特例**：路线 2 只为"流水段开头 1–4 条 FP32 连续 load"一个
+   场景打了补丁（83.26 B/cycle 聚合带宽），且只管 load 侧——它是
+   特例补丁而非通用机制。
 
 **特化的理由**：基线的标定方法论决定了它必然特化——所有非线性
 效应（流水线饱和、启动摊销、读写重叠、延迟链）都没有参数化结构，
@@ -51,13 +62,16 @@
   非仿射地址、部分掩码 store 排除（走 RMW 路径）
 输入修正：E15 掩码活跃字节折算 + claimAll 实例记账（static-for 展开）
 
-第一刀：hasLoop？
-├─ 否 → 直线域【机制一】：逐访问公式
-│    ├─ 串行 schedule：各访问公式价逐条相加
-│    └─ 流水 schedule：estimator 取 max(load, store, vector)
-│        子线组摊销 / 链尾 store 排空为本域修正
+第一刀：hasLoop？（判据：stage 里是否还是运行期 scf.for/while；
+  static_range/constexpr 展开的循环 IR 里已消失，归直线域）
+├─ 否 → 直线域【机制一】：同形分组价 + 解析式（§2.1）
+│    ├─ 同 stage 的同形多访问组（n≥2）：
+│    │    first+(min(n,Q)−1)·marginal+max(0,n−Q)·kc·marginal，×pAxis(P)
+│    ├─ 单发 / 未命中格 / 掩码组：启动+字节/带宽解析式（与基线同源；
+│    │    simd load 侧 × 波衰减 waves^−0.32）
+│    └─ 组合层按 straight_line schedule 串行相加；基线继承残差：
+│        simt 直线小访存（1 load+1 store ≤128 元素）−113 cycle
 └─ 是 → 循环域【E17 包络】，K = iterationCount ≥ 1
-     ├─ (散射/compaction 组合行层：跨步域借道，非连续域)
      ├─ perIter = max(TL(loadBytes), TS(storeBytes))
      │            + tiny-store excess（S>C 时 (S−C)×97）
      │            + 归约链（有归约标记时 additive：TL(dom)+97×nStores）
@@ -65,28 +79,170 @@
      └─ 未被包络覆盖 → Tier 3 逐 op 兜底（simd 启动+字节/带宽、
         simt warp 指令速率）
 
-第二刀（estimator 组合层，两条机制共用）：
-  串行 schedule → 相加；流水 schedule → max(load, store, vector)
+第二刀（estimator 组合层，按 schedule 分支）：
+  straight_line schedule（直线域全部）→ 相加；
+  independent_pipelined schedule（循环域）→ max(load, store, vector)
   例外（5c）：stage 有归约时（归约输出被 store 消费）→ 串行链
 
 第三刀（候选层）：
   A(P) 边界残差（起步价）+ 波衰减（P>56 摊薄）
 ```
 
-### 2.1 直线域：机制一（逐访问公式）
+### 2.1 直线域：机制一（同形分组价 + 解析式）
 
-**(a) 动机实验**：基线直线公式本身即本机制的动机与起点——单发/
-流水的逐访问行为稳定可拟合（v8 标定 8 族 simd/simt 串行 + 4 族
-流水，MAPE 见 2.9 表 F1-F12），本 PR 保留其全部标定数据与拟合，
-仅把"逐场景特化"的边界收敛到直线域（循环体迁出至包络）。
+**(a) 动机说明**
 
-**(d) 公式与物理解释**：串行直线体内各访问背靠背发射、互不重叠，
-故逐访问相加；流水直线组内 load/store/向量三类服务并行竞争，
-故取瓶颈 max。串行公式 `a₀ + a₁·by + a₂·blk_part + a₃·burst`
-的物理含义：a₀ 发射启动、a₁ 字节速率项、a₂ 块部分项、a₃ 突发项。
+*直线域 / 循环域是什么*：costmodel 把 kernel 拆成若干 stage，一个
+访存 stage 的访问有没有被**运行期循环**包住，决定它属于哪个域——
 
-**(e) 参数分组**：按 (引擎 × dtype × 方向 × 掩码 × W × lines)
-分桶，每桶 4 参数（串行）/ 2-3 参数（流水），全部继承基线标定。
+```python
+# 直线域：没有 scf.for 包住，每条访问每个 program 只执行一次
+@triton.jit
+def add_kernel(x_ptr, y_ptr, out_ptr, n, BLOCK: tl.constexpr):
+    pid  = tl.program_id(0)
+    offs = pid * BLOCK + tl.arange(0, BLOCK)
+    mask = offs < n
+    x = tl.load(x_ptr + offs, mask=mask)       # 访问 1（与 2 相互独立）
+    y = tl.load(y_ptr + offs, mask=mask)       # 访问 2
+    tl.store(out_ptr + offs, x + y, mask=mask)
+
+# 循环域：真 scf.for 包住，每条访问执行 K 次
+for sub in range(0, XBLOCK, XBLOCK_SUB):       # 运行期循环，K = XBLOCK//XBLOCK_SUB
+    idx = base + sub + tl.arange(0, XBLOCK_SUB)
+    v = tl.load(inp + idx)
+    tl.store(out + idx, v * a + b)
+```
+
+判定标准是 IR 里是否还是真 `scf.for`：`static_range`/constexpr 在
+编译期展开后与直线代码完全同价，所以展开的循环归直线域。这不是
+假设——E7 用同一份工作（N 对 4KB load+store）只变代码形状做了
+对照：**static_range 展开 ≡ 直线型**（simd/simt 全部一致，<5%）。
+
+*为什么要和循环域分开建模（历史拟合数据）*：三个实验把这件事钉死——
+
+- **E6**（同一访存模式分别写成动态循环与直线交错，卡 3）：4KB 独立
+  load+store，直线型每实例 **~37ns**（U≤8 时 MTE2 队列深 16 内多笔
+  同时在飞），循环每轮 **~102ns**（每轮约一笔在飞，受发射节流）——
+  两个上下文的每实例价差 **2.7×**；
+- **E7**（同一份工作 N∈{8,32}，只变代码形状 A/B/C/D/E）：N=32 时
+  loop ≡ burst ≡ static_range（<5%）——直线型的并发优势**被队列
+  深度封顶**（只影响前 ~8-16 笔），超过后两域收敛到同一个传输受限
+  价。结论：直线域独有的是"**前 Q 笔的组内摊销结构**"，循环域独有
+  的是"**每轮节流的稳态斜率 + 固定启动头**"；
+- **G3**（循环体 K 扫描，reduce_sum 形状，calF2 探针）：T(4)=4211ns
+  ≈ T(16)=3881ns，K=64 才线性涨到 8905ns——循环体时长 = 固定启动头
+  A(P) + K×稳态斜率；用"直线逐 op 公式×K"外推，K=4 处给 **4 倍
+  偏差**。
+
+所以两个域各需要一个机制：直线域用**组价表**（first/marginal/Q，
+下文），循环域用**包络**（§2.2）。组价表的标定数据来自 E3/E12 组
+并发扫描（grid=1，同形条数 1..32 × 字节档 {32..16384} × dtype ×
+warm/cold，每组 12-16 次发射取中位）。
+
+**(b) 公式与物理解释**
+
+先说两个组合语境（由 stage 的 schedule 决定；代码判据在分区器
+`scheduleForSemanticRoot`：不含运行期循环的 stage 得
+`straight_line`，含 `scf.for/while` 的得 `independent_pipelined`）：
+
+- **串行直线体**（schedule=straight_line）：访问之间背靠背发射，
+  estimator 把各服务的价**逐条相加**：
+  `T_stage = setup + Σ(每条访问的服务价)`（issue 与 Σ 取 max 防双计）。
+
+  ```python
+  x = tl.load(p + offs)
+  y = tl.load(q + offs) + x      # 依赖第一条 load → 链
+  tl.store(o + offs, y)
+  ```
+
+- **流水直线组**（同一直线体内**相互独立**的多条访问）：硬件会把
+  它们同时压进 MTE 队列（E6：队列深 16 内多笔在飞）。这个组内并发
+  **不在组合层建模**，而是由下面的组价公式（marginal<Q 摊薄）承载：
+
+  ```python
+  a = tl.load(pa + offs)         # 与 b 独立 → 队列内在飞
+  b = tl.load(pb + offs)
+  tl.store(po + offs, a + b)
+  ```
+
+  （estimator 的 `max(load, store, vector)` 流水组合只出现在循环域
+  stage 上，见 §2.7。）
+
+每条访问的服务价，按序查两道：
+
+1. **同 stage 的同形多访问组**（n≥2；组键 = 方向 × dtype × 字节档 ×
+   warm/cold）：
+
+   ```
+   n ≤ Q：  T_group = first + (n−1) × marginal
+   n > Q：  T_group = first + (Q−1) × marginal + (n−Q) × kc × marginal
+   整组 × pAxisFactor(P)     （P≤56 恒 1.0；P>56 查 E13 多波摊薄曲线）
+   ```
+
+   物理：第 1 条付全价（含 DRAM 延迟）；第 2..Q 条每条只付边际价
+   （队列深度把延迟摊薄）；超过 Q 条进入传输受限区，每条付换档价
+   kc×marginal。Q 是结构公式：store 恒 8；load warm
+   `clamp(64KB/字节, 4, 32)`、cold `clamp(32KB/字节, 4, 8)`——正是
+   E7 测到的"队列深度封顶"。
+
+2. **单发（n=1）/ 未命中格 / 掩码组**：走与基线同源的解析式。这就是
+   "直线串行 simd load 的公式"：
+
+   ```
+   simd load：  T = 105.31 + 字节/167.56     （ns；1 cycle = 1 ns）
+   simd store： T = 90.95 + 字节/213.13
+   simt：       T = warp 指令数 / 吞吐速率   （GM/UB 按 W 分档速率表）
+   ```
+
+   simd load 侧另乘波衰减 `waves^−0.32`（waves = P/56，guard WDA
+   拟合），store 侧不衰减。编译期探针复核（route 报告逐位一致）：
+   4KB fp32 load = 105.31+4096/167.56 = **129.75**；4KB store =
+   90.95+4096/213.13 = **110.17**。
+
+   *整核校验*（campaign 期，§V2 评审 3.2）：vector_add 每程序
+   2×4KB load + 4KB store：load 组 n=2 → 160.1+36.6 = 196.7ns
+   （fp32/4096/warm 格），store n=1 → 110.17ns；整核对账 2140.3 vs
+   实测 2141.0（−0.03%）。
+
+**(c) 参数分组**
+
+机制一的参数分两层——**每格标定参数**与**结构/共享参数**：
+
+*每格参数（查表命中时用）*：每格只存 `{first, marginal}` 2 个数。
+格 = 引擎 × 方向 × dtype × 字节档 × 驻留 的组合：
+
+| 维度 | 取值 | 说明 |
+|---|---|---|
+| 引擎（2） | simd / simt | 本 profile 两条路线 |
+| 方向（2） | load / store | |
+| dtype（4） | int8 / fp16 / fp32 / int64 | bf16 按 2 字节别名进 fp16 档 |
+| 字节档（8） | 32/64/128/256/512/1024/4096/16384 B | 每条访问字节按 log2 最近邻落档 |
+| 驻留（2） | warm / cold | 本次 launch 总足迹 ≤ / > 128MB（L2） |
+
+理论 2×2×4×8×2 = 128 格/引擎；实际只标定有探针数据的格子：
+**simd 48 格、simt 62 格**（simt 含按激活 warp 数的 `/w1` 等变体格；
+simt 组先查基础键，未命中按激活 warp 数重查一次 `/w<W>`）。
+
+*结构参数（不占格，全组共享）*：
+
+- **Q（队列深度）**：store 恒 8；load warm `clamp(65536/字节,4,32)`、
+  cold `clamp(32768/字节,4,8)`——2 条公式替代每格一个 Q；
+- **cTransfer 换档比 kc**：4 个标量/引擎（simd load warm 1.231 /
+  load cold 2.768 / store warm 1.003 / store cold 1.021；simt
+  1.030/1.952/0.988/1.002），cTransfer = kc × marginal；
+- **pAxisFactor**：8 条曲线（种类 loadsum/storeonly × 引擎 × 驻留）；
+  P≤56 恒 1 是**消除双算**的决定（单波内的每块调度增长归候选层
+  A(P) 边界残差，E14 分解），P>56 按实测点插值（多波聚合带宽摊薄，
+  E13）。
+
+*解析式参数（未命中/单发/掩码时用）*：simd 每方向 2 个（启动 +
+带宽，与基线同源常数）；simt 按 W 分档吞吐表（基线继承）。
+
+*为什么每格只存 2 个数*：2026-11-17 参数压缩把每格 4 数
+（first/marginal/cTransfer/Q）压成 2 数 + 结构公式，gate 与压缩前
+逐位一致（100-case、guard 同分同 flip）；反过来，把格子拟合成光滑
+公式的两轮尝试被数据否定（误差最大 ±600%，dtype 合并检测 0/12 格
+可并），逐格值就是当前数据支持的最简形态。
 
 ### 2.2 循环域：E17 包络（simd）
 
@@ -203,10 +359,15 @@ fp16 半行浪费与 4KB 发射惩罚（11.3）、32KB 反跳（11.7，队列深
 字节/带宽(167.56/213.13 B/cycle)` 分方向取 max；simt 按 warp
 指令数/速率。兜底域 = simt 全部循环体、包络标定域外的直线形状。
 
-### 2.7 estimator 组合层（两机制共用）
+### 2.7 estimator 组合层
 
-串行 schedule 相加；流水 schedule `max(load, store, vector)`；
-例外（5c）：`r.reduction > 0` 的循环体按串行链组合（见 2.4）。
+组合按 stage 的 schedule 选择（判据：stage 里是否还有运行期
+scf.for/while）：直线域 stage 全部是 straight_line schedule →
+**串行相加** `setup + Σ(各服务价)`（issue 与 Σ 取 max 防双计）；
+循环域 stage 是 independent_pipelined schedule →
+**`max(load, store, vector)`**；例外（5c）：`r.reduction > 0` 的
+循环体按串行链组合（见 2.4）。LoopCarriedSerial（带递推的循环）
+同样走串行。
 
 ### 2.8 候选层
 
@@ -219,19 +380,9 @@ A 是 `T(K) = A(P) + K × perIter` 的 A——E20b 实测真实起步价
 
 | 编号 | 场景 | 公式 | 拟合点数 | MAPE |
 |---|---|---|---|---|
-| F1 | 直线串行 simd load | a₀+a₁·by+a₂·blk_part+a₃·burst | 133 | 6.7% |
-| F2 | 直线串行 simt load（lines<1） | c₀..c₅ 六参数 | 133 | 6.9% |
-| F3 | 直线串行 simt load（1≤lines≤32） | 同 F2 形状 | 154+89 | 7.5% / 9.4%（两段） |
-| F4 | 直线串行 simt load（lines>32 掩码） | nospill/spill 两段 | 75 | 16.4% |
-| F5 | 直线串行 simd store | 同 F1 形状 | 135 | 5.7% |
-| F6 | 直线串行 simt store（lines<1） | 同 F2 形状 | 133 | 8.1% |
-| F7 | 直线串行 simt store（te<1） | 同 F2 形状 | 181 | 6.5% |
-| F8 | 直线串行 simt store（te≥1） | 6 桶 | 15（拟合集 167） | 14.0% |
-| F9 | 直线流水 simd load | max(a₀+a₁/unroll, b·by) | 175 | 8.6% |
-| F10 | 直线流水 simt load | 按 W 分桶加权 | 150 | 26.9% |
-| F11 | 直线流水 simd store | 同 F9 形状 | 171 | 7.1% |
-| F12 | 直线流水 simt store | 同 F10 形状 | 119 | 26.9% |
-| F13 | 子线组摊销（同形多 load） | 52+(u−1)×26 ns | first 9-12/族、marginal 45-60 | first 2.3-4.9% / marginal 7.3-36.1% |
+| A1 | 直线域同形组价（组命中，n≥2） | first+(min(n,Q)−1)·marginal+max(0,n−Q)·kc·marginal，×pAxis(P) | 110 格（simd 48 / simt 62；E3/E12 组扫描，grid=1 条数 1..32） | 整核锚点：vector_add +29.86%→−0.03%、softmax +12.73%→−4.15%（压缩 gate 与压缩前逐位一致） |
+| A2 | 直线域解析式（单发/未命中/掩码） | simd load 105.31+B/167.56、store 90.95+B/213.13（load×waves^−0.32）；simt warp 指令/速率 | 基线继承（编译期探针复核：4KB load 129.75 / store 110.17 与 route 一致） | 基线口径 |
+| A3 | estimator 组合 | 直线 schedule：setup+Σ；流水 schedule（循环域）：max(load,store,vector)；5c 归约链 | 结构（无拟合） | — |
 | E1 | 循环包络 simd load 曲线 TL | log2 字节插值 4 节点 {90, 113.7, 196.8, 392} | 4 节点（E17f 域内 10 格验证） | 域内 0-2.3% |
 | E2 | 循环包络 simd store 曲线 TS | {106.8, 123.5, 214.8, 377.5} | 4 节点（域内 6 格验证） | 0-0.3% |
 | E3 | 循环包络混合组合 | max(TL, TS)（κ=0） | E17k + E20 混合点 | 1:1 −0.2% / 2:1 +1.7% |
@@ -246,6 +397,15 @@ A 是 `T(K) = A(P) + K × perIter` 的 A——E20b 实测真实起步价
 > MAPE 为 0；泛化误差由 §三 的整核 gate 承载。包络全 34 格含多
 > store 流（>1 流/方向）与域外 clamp 形状时 MAPE 8.4%，单流域内
 > 22 格 6.8%——多 store 流为已知限制（每流串行效应未建模）。
+>
+> 档案说明：早期 v8 逐访问多项式族（`a₀+a₁·by+a₂·blk_part+a₃·burst`
+> 等形状，旧编号 F1-F13，simd 串行/流水 MAPE 5.7-8.6%、simt 6.5-26.9%）
+> 标定于 `contiguous_1d/forms`（forms_spec.json）与 v1 C++
+> （`Models/ContiguousLdStCostModel`）；**终版代码中该 C++ 没有任何
+> 调用点**——直线域由 A1/A2 计价，这批拟合仅作标定档案保留在树中。
+> 基线路线 2 的独立 load 组包络（546.1+12.8+字节/83.26，1-4 条流）
+> 代码保留，但 v2 对连续访存全量认领后，其前缀截断在第一条已认领
+> load 上，常规路径不再触发（仅 A/B 环境变量场景可达）。
 
 ---
 
@@ -274,6 +434,11 @@ A 是 `T(K) = A(P) + K × perIter` 的 A——E20b 实测真实起步价
 | `pytest_permute_reshape_fused_f32` | -0.62% | -38.34% | 跨步 32B rider 欠价 1.5µs + 双层壳结构 | 跨步域为主 + 壳结构 |
 | `pytest_fused_softmax_f32_128x257` | -4.81% | -13.33% | exp/max/sum 计算欠价 | 计算/归约域 |
 | `pytest_strided_scatter_f32_s16` | -7.51% | -13.37% | stride-16 散射 store 欠价 | 散射域（他组责任） |
+
+> 注：上两表"修复来源/归因"列写于 campaign 进行中，其中提到的
+> calN2/calF2 行表已随行表退役（终版 §2.0 的机制清单不含行表）。
+> 这些 case 在终版代码里由直线域解析式/组价 + 波衰减 + 循环域包络
+> 组合计价；表中的误差数字均为终版 wheel 实测。
 
 #### 全表（100 case）
 
