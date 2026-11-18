@@ -1031,6 +1031,25 @@ static void mapContiguousV2Completion(
               std::max(0.0, double(nStores - cap)) *
               profile.contiguousV2.tinyStoreExcessNs;
         }
+        // Phase 5b (E19): reduction-fed tiny stores - the store consumes
+        // the reduction output, so load-return -> reduction -> store
+        // serializes and the body is latency-bound.  Measured on the
+        // exact reduce_sum body (2KB load + 32B bias + tl.sum + 32B
+        // store): steady 216-222 ns/iter = memory chain TL(domLoad) +
+        // 97 x S (187 for this shape = the row tier's per-iter price
+        // 1.497us/8) + reduction compute charged by the compute path.
+        // Bodies without a reduction (masked element-0 stores, E18b)
+        // pipeline - no floor.
+        if (maxStoreChunk > 0 && maxStoreChunk <= 128 &&
+            (work.reductionOperations > 0.0 ||
+             work.shuffleLaneSteps > 0.0)) {
+          const double chain =
+              contiguous_v2::envelopeCurve(
+                  profile.contiguousV2.mixBytes,
+                  profile.contiguousV2.mixTL, double(domBytes)) +
+              profile.contiguousV2.tinyStoreExcessNs * double(nStores);
+          perIterEff = std::max(perIterEff, chain);
+        }
       }
       const bool allStoresEnv =
           std::all_of(eligible.begin(), eligible.end(),
