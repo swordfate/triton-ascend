@@ -120,10 +120,39 @@ for sub in range(0, XBLOCK, XBLOCK_SUB):       # 运行期循环，K = XBLOCK//X
 
 *为什么要和循环域分开建模（历史拟合数据）*：三个实验把这件事钉死——
 
-- **E6**（同一访存模式分别写成动态循环与直线交错，卡 3）：4KB 独立
-  load+store，直线型每实例 **~37ns**（U≤8 时 MTE2 队列深 16 内多笔
-  同时在飞），循环每轮 **~102ns**（每轮约一笔在飞，受发射节流）——
-  两个上下文的每实例价差 **2.7×**；
+- **E6**（同一访存模式分别写成动态循环与直线交错，卡 3，
+  `scripts/e6_loop_vs_burst.py`）：4KB 独立 load+store、真实流式地址
+  （step×BLOCK 推进，不用窗口复读），grid=1，配对差分（对照 = 同
+  形状的常量 store kernel）。两种写法的 kernel 核心代码：
+
+  ```python
+  # (a) 动态循环：K 轮运行期 scf.for，每轮 1 对（K∈{1..128} 运行时传入）
+  @triton.jit(do_not_specialize=['iters', 'boff'])
+  def e6_loop_ind(src, dst, iters, boff, BLOCK: tl.constexpr):
+      lane = tl.arange(0, BLOCK)
+      for step in range(iters):
+          x = tl.load(src + boff + step * BLOCK + lane)
+          tl.store(dst + boff + step * BLOCK + lane, x + 1)
+
+  # (b) 直线交错：U 对全部展开进同一条指令流（U∈{1,2,4,8}，图为 U=4）
+  @triton.jit
+  def e6_burst_u4(src, dst, BLOCK: tl.constexpr):
+      lane = tl.arange(0, BLOCK)
+      x0 = tl.load(src + 0 * BLOCK + lane)
+      tl.store(dst + 0 * BLOCK + lane, x0 + 1)
+      x1 = tl.load(src + 1 * BLOCK + lane)
+      tl.store(dst + 1 * BLOCK + lane, x1 + 1)
+      x2 = tl.load(src + 2 * BLOCK + lane)
+      tl.store(dst + 2 * BLOCK + lane, x2 + 1)
+      x3 = tl.load(src + 3 * BLOCK + lane)
+      tl.store(dst + 3 * BLOCK + lane, x3 + 1)
+  ```
+
+  实测（配对差分边际）：直线型每实例 **~37ns**（U≤8 时 MTE2 队列
+  深 16 内多笔同时在飞），循环每轮 **~102ns**（每轮约一笔在飞，受
+  发射节流）——两个上下文的每实例价差 **2.7×**。注意：这个 2.7×
+  只在队列深度区间（U≤8，≤~64KB）成立，不能外推到大批量——下一条
+  E7 用同一份总工作量的对照把它修正了；
 - **E7**（同一份工作 N∈{8,32}，只变代码形状 A/B/C/D/E）：N=32 时
   loop ≡ burst ≡ static_range（<5%）——直线型的并发优势**被队列
   深度封顶**（只影响前 ~8-16 笔），超过后两域收敛到同一个传输受限
