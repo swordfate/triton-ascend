@@ -1043,12 +1043,17 @@ static void mapContiguousV2Completion(
         if (maxStoreChunk > 0 && maxStoreChunk <= 128 &&
             (work.reductionOperations > 0.0 ||
              work.shuffleLaneSteps > 0.0)) {
+          // Additive, not a max floor: the tiny dependent store's
+          // drain serializes AFTER the envelope's max'd services, so
+          // the chain rides on top (row-tier bucket for the reduce_sum
+          // family = envelope 106.8 + chain 189.75 = 296.55 ns/iter,
+          // measured-validated through the composition).
           const double chain =
               contiguous_v2::envelopeCurve(
                   profile.contiguousV2.mixBytes,
                   profile.contiguousV2.mixTL, double(domBytes)) +
               profile.contiguousV2.tinyStoreExcessNs * double(nStores);
-          perIterEff = std::max(perIterEff, chain);
+          perIterEff += chain;
         }
       }
       const bool allStoresEnv =
@@ -3887,6 +3892,22 @@ static double estimateStageBase(const LogicalStage &stage,
           r.load + r.continuousLoadGroup + r.indirectLoadGroup + r.sharedLayout;
       const double storeService = r.store + r.continuousStoreGroup;
       // Model one source iteration as competing engine resources.
+      // Phase 5c (E19/E20): when the stage computes a reduction, its
+      // output is what the body's stores consume - load -> reduction ->
+      // store is a serial latency chain, so the reduction rides the
+      // chain instead of the parallel vector service (reduce_sum
+      // in-kernel 374 ns/iter vs max-composition 187).
+      if (r.reduction > 0.0) {
+        const double chain =
+            loadService + storeService + r.reduction + r.compute +
+            r.shuffle;
+        return r.setup +
+               count * std::max({chain, loadService, storeService,
+                                 vectorService,
+                                 vectorService + r.irregularTailMaterialization,
+                                 r.irregularMaskedTileFloor, r.atomic,
+                                 r.scalar + r.predicate});
+      }
       return r.setup +
              count * std::max({loadService, storeService, vectorService,
                                vectorService + r.irregularTailMaterialization,
