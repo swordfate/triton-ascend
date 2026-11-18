@@ -2406,7 +2406,6 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
     // Runs before the load-group curve below, and before the masked-copy curve
     // further down, so both can see which accesses this pass already priced.
     mapStridedShortMemoryCompletion(stage, work, profile, resources, simd,
-    mapStridedShortMemoryCompletion(stage, work, profile, resources, simd,
                                     layout, stridedAlreadyClaimed);
     // v2 epoch-calibrated contiguous pricing claims before the legacy
     // curves, and before the StridedWide direct completion below so the
@@ -2437,9 +2436,9 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
           continue;
         }
         reachedFirstLoad = true;
-        if (std::find(stridedShortAlreadyClaimed.begin(),
-                      stridedShortAlreadyClaimed.end(), &access) !=
-            stridedShortAlreadyClaimed.end())
+        if (std::find(stridedAlreadyClaimed.begin(),
+                      stridedAlreadyClaimed.end(), &access) !=
+            stridedAlreadyClaimed.end())
           // v2 already owns this stream; the flat-group envelope describes
           // one uninterrupted sequence, so the prefix ends here.
           break;
