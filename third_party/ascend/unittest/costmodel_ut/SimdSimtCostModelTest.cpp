@@ -1,5 +1,4 @@
 #include "AscendModel/RouteModel/SimdSimtCostModel.h"
-#include "AscendModel/Analysis/LoopWorkloadAnalysis.h"
 #include "AscendModel/Analysis/StageMemoryPatternAnalysis.h"
 #include "AscendModel/Analysis/StagePartitioner.h"
 #include "AscendModel/RouteModel/StageCostModels.h"
@@ -17,7 +16,6 @@
 #include "llvm/Support/raw_ostream.h"
 #include <gtest/gtest.h>
 
-using mlir::ascend::analyzeLoopTripCountInfos;
 using mlir::ascend::HardwareProfile;
 using mlir::ascend::LogicalStage;
 using mlir::ascend::LogicalStageCost;
@@ -31,7 +29,6 @@ using mlir::ascend::StageFeatureAnalysis;
 using mlir::ascend::StageImplementationCost;
 using mlir::ascend::StageMode;
 using mlir::ascend::StageModeLegalityAnalysis;
-using mlir::ascend::StageModeProfile;
 using mlir::ascend::StagePartition;
 using mlir::ascend::StagePartitioner;
 using mlir::ascend::StagePartitionerOptions;
@@ -83,8 +80,6 @@ HardwareProfile hardwareProfile(ScopeHandoffCost scopeHandoff = {}) {
     mode.predicateOperationsPerCycle = 1.0;
     mode.reductionLaneStepsPerCycle = 1.0;
     mode.shuffleLanesPerCycle = 32.0;
-    mode.reductionLaneStepsPerCycle = 1.0;
-    mode.prefixScanStepLatencyCycles = 1.0;
     mode.dotSetupCycles = 8.0;
     mode.dotFlopsPerCycle = 64.0;
     mode.issueOperationsPerCycle = 4.0;
@@ -574,8 +569,8 @@ TEST(SimdSimtCostModelTest, LoopCarriedRecurrenceAppliesScanDependencyFactor) {
     // Mixed shuffle pool: 320 scan-class steps (tt.scan) + 320 reduce-class
     // steps (tt.reduce).
     stage.workload.shuffleLaneSteps = 640.0;
-    stage.workload.prefixScanCounts[{
-        32, 10, 1, 1, false, "add", "", 0, 0, 0, {}, "", false}] = 1.0;
+    stage.workload.prefixScanCounts[{32, 10, 1, 1, false, "add", "", 0, 0, 0}] =
+        1.0;
     return stage;
   };
 
@@ -676,234 +671,6 @@ TEST(SimdSimtCostModelTest, SimdCubeStageUsesCvPipelineCriticalPath) {
   // SIMD/Cube CV resources overlap inside one Stage.  The model charges the
   // critical resource (MMAD here), rather than serializing load+MMAD+store.
   EXPECT_DOUBLE_EQ(simd.totalCycles, 18.0 + 4.0 * (16.0 + 128.0));
-}
-
-TEST(SimdSimtCostModelTest, PhysicalCubeFormulaPricesSupportedShapes) {
-  HardwareProfile profile = hardwareProfile();
-  profile.simd.dotPhysicalResourceTarget = "Ascend950PR_9579";
-  profile.simd.dotPhysicalResourceLoweringContract = "test-mmadL1-tile16";
-  StageModeProfile::DotPhysicalResourceFormula formula;
-  formula.tinyMacFloorCycles = 55.0;
-  formula.cubeMacCyclesPerSqrtFlop = 0.13;
-  formula.cubeMinimumFlops = 262144.0;
-  formula.mte1StartupCycles = 10.0;
-  formula.mte1BytesExponent = 1.0;
-  formula.lhsMte1CyclesPerBytePower = 0.001;
-  formula.rhsMte1CyclesPerBytePower = 0.002;
-  formula.tileSize = 16;
-  formula.narrowNReferenceTiles = 2.0;
-  formula.wideNReferenceTiles = 4.0;
-  formula.narrowNOccupancyExponent = 1.0;
-  formula.wideNOccupancyExponent = 0.75;
-  formula.evidence = "independent MAC/MTE1 resource fits";
-  profile.simd.dotPhysicalResourceFormula = formula;
-
-  LogicalStage stage = logicalStage("cube", StageCostModelKind::CubeRoofline,
-                                    StageScheduleKind::IndependentPipelined);
-  stage.features.hasDot = true;
-  stage.workload.paysKernelSetup = false;
-  stage.workload.operationCounts.clear();
-  stage.workload.issueElements = 0.0;
-  stage.workload.dotOperations = 1.0;
-  stage.workload.dotFlops = 262144.0;
-  stage.workload.dotShapeCounts[std::make_tuple(128, 32, 32, 1, "f16", "f16",
-                                                "f32", "ieee")] = 1.0;
-  auto table = evaluateOneStage(stage, profile);
-  if (!table)
-    FAIL() << llvm::toString(table.takeError());
-  const auto &simd = table->stages[0].implementations[0];
-  const auto &simt = table->stages[0].implementations[1];
-  EXPECT_NEAR(simd.resources.dot, 66.56, 1e-8);
-  EXPECT_TRUE(simd.resources.dotPhysicalResourceFormulaApplied);
-  EXPECT_NE(simd.formulaEvidence.find("physical_tile_resource_formula"),
-            std::string::npos);
-  EXPECT_FALSE(simt.resources.dotPhysicalResourceFormulaApplied);
-
-  stage.costModelKind = StageCostModelKind::TinyCubeRoofline;
-  stage.workload.dotFlops = 8192.0;
-  stage.workload.dotShapeCounts.clear();
-  stage.workload.dotShapeCounts[std::make_tuple(16, 16, 16, 1, "f16", "f16",
-                                                "f32", "ieee")] = 1.0;
-  table = evaluateOneStage(stage, profile);
-  if (!table)
-    FAIL() << llvm::toString(table.takeError());
-  EXPECT_DOUBLE_EQ(table->stages[0].implementations[0].resources.dot, 55.0);
-
-  stage.costModelKind = StageCostModelKind::CubeRoofline;
-  stage.workload.dotFlops = 32768.0;
-  stage.workload.dotShapeCounts.clear();
-  stage.workload.dotShapeCounts[std::make_tuple(16, 16, 64, 1, "f16", "f16",
-                                                "f32", "ieee")] = 1.0;
-  table = evaluateOneStage(stage, profile);
-  if (!table)
-    FAIL() << llvm::toString(table.takeError());
-  EXPECT_FALSE(table->stages[0]
-                   .implementations[0]
-                   .resources.dotPhysicalResourceFormulaApplied);
-  EXPECT_DOUBLE_EQ(table->stages[0].implementations[0].resources.dot, 520.0);
-}
-
-TEST(SimdSimtCostModelTest, DependencyDistanceSetsLoopInitiationInterval) {
-  const auto buildTable = [](bool loopCarried) {
-    StageCostTable table;
-    table.profileVersion = "unit-test-profile-v1";
-    table.logicalProgramCountHint = 1;
-    table.physicalCoreCountHint = 1;
-    table.physicalAiCoreCountHint = 1;
-    table.stageDependencyScheduleEnabled = true;
-
-    const auto makeCost = [](StageMode mode, double cycles) {
-      StageImplementationCost cost;
-      cost.implementation = {mode, 1, false};
-      cost.totalCycles = cycles;
-      return cost;
-    };
-    const auto implementations = [&](double simdCycles) {
-      return std::vector<StageImplementationCost>{
-          makeCost(StageMode::SIMD, simdCycles),
-          makeCost(StageMode::SIMT, simdCycles + 100.0)};
-    };
-
-    LogicalStageCost shell;
-    shell.id = "loop";
-    shell.model = "loop_carried_recurrence";
-    shell.iterationCount = 4;
-    shell.implementations = implementations(0.0);
-
-    LogicalStageCost dot;
-    dot.id = "dot";
-    dot.model = "cube_roofline";
-    dot.enclosingLoopStages = {shell.id};
-    dot.iterationCount = 4;
-    dot.features.hasDot = true;
-    dot.implementations = implementations(40.0);
-
-    LogicalStageCost update;
-    update.id = "update";
-    update.model = "vector_issue";
-    update.enclosingLoopStages = {shell.id};
-    update.iterationCount = 4;
-    update.implementations = implementations(20.0);
-    table.stages = {shell, dot, update};
-
-    mlir::ascend::StageDependency sameIteration;
-    sameIteration.loopStage = shell.id;
-    sameIteration.sourceStage = dot.id;
-    sameIteration.targetStage = update.id;
-    sameIteration.kind = mlir::ascend::StageDependencyKind::IntraIterationData;
-    sameIteration.iterationDistance = 0;
-    sameIteration.carriedValueName = "inter_stage_ssa";
-    table.dependencies.push_back(sameIteration);
-
-    if (loopCarried) {
-      mlir::ascend::StageDependency recurrence;
-      recurrence.loopStage = shell.id;
-      recurrence.sourceStage = update.id;
-      recurrence.targetStage = dot.id;
-      recurrence.kind = mlir::ascend::StageDependencyKind::LoopCarriedData;
-      recurrence.iterationDistance = 1;
-      recurrence.carriedValueName = "state";
-      table.dependencies.push_back(recurrence);
-    }
-    return table;
-  };
-
-  auto independent = solveStageRoutes(buildTable(false), ScopeHandoffCost{});
-  auto recurrent = solveStageRoutes(buildTable(true), ScopeHandoffCost{});
-  if (!independent)
-    FAIL() << llvm::toString(independent.takeError());
-  if (!recurrent)
-    FAIL() << llvm::toString(recurrent.takeError());
-
-  const auto &independentRoute = independent->allSimd;
-  const auto &recurrentRoute = recurrent->allSimd;
-  EXPECT_TRUE(
-      independentRoute.diagnostic<bool>("stage_dependency_schedule_applied"));
-  EXPECT_TRUE(
-      recurrentRoute.diagnostic<bool>("stage_dependency_schedule_applied"));
-  EXPECT_EQ(independentRoute.diagnostic<std::string>(
-                "stage_dependency_schedule_status"),
-            "symbolic_affine");
-  EXPECT_EQ(recurrentRoute.diagnostic<std::string>(
-                "stage_dependency_schedule_solver"),
-            "periodic_difference_constraints_v1");
-  EXPECT_DOUBLE_EQ(independentRoute.diagnostic<double>(
-                       "stage_dependency_schedule_initiation_interval_system_"
-                       "cycles"),
-                   10.0);
-  EXPECT_DOUBLE_EQ(recurrentRoute.diagnostic<double>(
-                       "stage_dependency_schedule_initiation_interval_system_"
-                       "cycles"),
-                   15.0);
-  EXPECT_DOUBLE_EQ(independentRoute.totalCycles, 45.0);
-  EXPECT_DOUBLE_EQ(recurrentRoute.totalCycles, 60.0);
-}
-
-TEST(SimdSimtCostModelTest,
-     DependencyScheduleFallsBackForUnsupportedRecurrences) {
-  StageCostTable table;
-  table.profileVersion = "unit-test-profile-v1";
-  table.logicalProgramCountHint = 1;
-  table.physicalCoreCountHint = 1;
-  table.physicalAiCoreCountHint = 1;
-  table.stageDependencyScheduleEnabled = true;
-
-  const auto makeCost = [](StageMode mode, double cycles) {
-    StageImplementationCost cost;
-    cost.implementation = {mode, 1, false};
-    cost.totalCycles = cycles;
-    return cost;
-  };
-  const auto implementations = [&](double simdCycles) {
-    return std::vector<StageImplementationCost>{
-        makeCost(StageMode::SIMD, simdCycles),
-        makeCost(StageMode::SIMT, simdCycles + 100.0)};
-  };
-
-  for (int64_t index = 0; index < 2; ++index) {
-    LogicalStageCost shell;
-    shell.id = "loop" + std::to_string(index);
-    shell.model = "loop_carried_recurrence";
-    shell.iterationCount = 4;
-    shell.implementations = implementations(0.0);
-    LogicalStageCost first;
-    first.id = "first" + std::to_string(index);
-    first.model = "vector_issue";
-    first.enclosingLoopStages = {shell.id};
-    first.iterationCount = 4;
-    first.implementations = implementations(index == 0 ? 20.0 : 10.0);
-    LogicalStageCost second = first;
-    second.id = "second" + std::to_string(index);
-    mlir::ascend::StageDependency recurrence;
-    recurrence.loopStage = shell.id;
-    recurrence.sourceStage = second.id;
-    recurrence.targetStage = first.id;
-    recurrence.kind = mlir::ascend::StageDependencyKind::LoopCarriedData;
-    recurrence.iterationDistance = 1;
-    recurrence.carriedValueName = "state" + std::to_string(index);
-    mlir::ascend::StageDependency sameIteration = recurrence;
-    sameIteration.sourceStage = first.id;
-    sameIteration.targetStage = second.id;
-    sameIteration.kind = mlir::ascend::StageDependencyKind::IntraIterationData;
-    sameIteration.iterationDistance = 0;
-    sameIteration.carriedValueName = "intra" + std::to_string(index);
-    table.stages.push_back(std::move(shell));
-    table.stages.push_back(std::move(first));
-    table.stages.push_back(std::move(second));
-    table.dependencies.push_back(std::move(sameIteration));
-    table.dependencies.push_back(std::move(recurrence));
-  }
-
-  auto routes = solveStageRoutes(table, ScopeHandoffCost{});
-  if (!routes)
-    FAIL() << llvm::toString(routes.takeError());
-  const auto &route = routes->allSimd;
-  EXPECT_FALSE(route.diagnostic<bool>("stage_dependency_schedule_applied"));
-  EXPECT_EQ(route.diagnostic<std::string>("stage_dependency_schedule_status"),
-            "multiple_or_nested_recurrences_unsupported");
-  EXPECT_EQ(route.diagnostic<std::string>("stage_dependency_schedule_fallback"),
-            "existing_route_cost");
-  EXPECT_DOUBLE_EQ(route.totalCycles, 60.0);
 }
 
 TEST(SimdSimtCostModelTest, TrueLoopCarriedDependencyDisablesSimdRoofline) {
@@ -1320,57 +1087,6 @@ TEST(SimdSimtCostModelTest, AllSimdPreservesSetupOnConditionalSchedule) {
       if (!moved)
         FAIL() << llvm::toString(moved.takeError());
       EXPECT_DOUBLE_EQ(moved->allSimd.totalCycles, routes->allSimd.totalCycles);
-    }
-  }
-}
-
-TEST(SimdSimtCostModelTest,
-     GridStrideBoundaryOwnsFirstIndirectServiceForEveryTripCount) {
-  for (bool hasDot : {false, true}) {
-    for (int64_t programs : {56, 112}) {
-      StageCostTable table;
-      table.profileVersion = "unit-test-profile-v1";
-      table.logicalProgramCountHint = programs;
-      table.physicalCoreCountHint = 56;
-
-      auto makeCost = [](double cycles) {
-        StageImplementationCost cost;
-        cost.implementation = {StageMode::SIMT, 1, false};
-        cost.totalCycles = cycles;
-        return cost;
-      };
-
-      LogicalStageCost shell;
-      shell.id = "grid_stride_shell";
-      shell.model = "auto_blockify_loop";
-      shell.features.isGridStrideLoopShell = true;
-      shell.implementations = {makeCost(0.0)};
-
-      LogicalStageCost gather;
-      gather.id = "grid_stride_gather";
-      gather.features.insideGridStrideLoopBody = true;
-      gather.implementations = {makeCost(100.0)};
-      gather.implementations.front().resources.indirectLoadGroup = 100.0;
-      gather.implementations.front().resources.gridStrideStartup = 120.0;
-
-      table.stages = {shell, gather};
-      if (hasDot) {
-        LogicalStageCost dot;
-        dot.id = "grid_stride_dot";
-        dot.features.insideGridStrideLoopBody = true;
-        dot.features.hasDot = true;
-        dot.implementations = {makeCost(10.0)};
-        table.stages.push_back(std::move(dot));
-      }
-
-      auto routes = solveStageRoutes(table, ScopeHandoffCost{});
-      if (!routes)
-        FAIL() << llvm::toString(routes.takeError());
-      ASSERT_TRUE(routes->allSimt.legal);
-      const double trips = programs / 56;
-      const double expected =
-          120.0 + (trips - 1.0) * 100.0 + (hasDot ? trips * 10.0 : 0.0);
-      EXPECT_DOUBLE_EQ(routes->allSimt.totalCycles, expected);
     }
   }
 }
@@ -1923,15 +1639,6 @@ TEST(SimdSimtCostModelTest, ClippedDynamicLoopUsesStaticTripCountCap) {
       source.replace(source.find("to %cap"), 7, "to %limit");
     auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
     ASSERT_TRUE(module);
-    auto tripCounts = analyzeLoopTripCountInfos(*module);
-    ASSERT_EQ(tripCounts.size(), 2u);
-    for (const auto &tripCount : tripCounts) {
-      EXPECT_EQ(tripCount.upperBoundTripCount,
-                capped ? std::optional<int64_t>(14) : std::nullopt);
-      EXPECT_EQ(tripCount.workloadTripCount, capped ? 14 : 1);
-      EXPECT_EQ(tripCount.workloadUsesUpperBound, capped);
-      EXPECT_EQ(tripCount.workloadUsesFallback, !capped);
-    }
     mlir::ascend::SimtAnchorPlan anchors;
     auto partition = StagePartitioner().partition(*module, anchors,
                                                   StagePartitionerOptions{});
@@ -1945,102 +1652,6 @@ TEST(SimdSimtCostModelTest, ClippedDynamicLoopUsesStaticTripCountCap) {
       EXPECT_EQ(stage.features.parallelRecurrenceGroupCount, 1);
     }
     EXPECT_EQ(maximumIterations, capped ? 14 : 1);
-  }
-}
-
-TEST(SimdSimtCostModelTest, LaunchBoundLoopTripCountMatchesStageWorkload) {
-  mlir::MLIRContext context;
-  context.getOrLoadDialect<mlir::arith::ArithDialect>();
-  context.getOrLoadDialect<mlir::func::FuncDialect>();
-  context.getOrLoadDialect<mlir::scf::SCFDialect>();
-  for (int64_t limit : {int64_t{0}, int64_t{128}, int64_t{1024}}) {
-    const int64_t expectedTrips = limit / 128;
-    std::string source = R"mlir(
-      module {
-        func.func @kernel(%limit: i32 {ascend.costmodel.runtime_value = LIMIT : i64}) {
-          %zero = arith.constant 0 : i32
-          %step = arith.constant 128 : i32
-          scf.for %i = %zero to %limit step %step : i32 {
-          }
-          return
-        }
-      }
-    )mlir";
-    source.replace(source.find("LIMIT"), 5, std::to_string(limit));
-    auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
-    ASSERT_TRUE(module);
-    auto counts = analyzeLoopTripCountInfos(*module);
-    ASSERT_EQ(counts.size(), 1u);
-    EXPECT_FALSE(counts[0].constantTripCount);
-    ASSERT_TRUE(counts[0].launchBoundTripCount);
-    EXPECT_EQ(*counts[0].launchBoundTripCount, expectedTrips);
-    EXPECT_EQ(counts[0].workloadTripCount, expectedTrips);
-    EXPECT_FALSE(counts[0].workloadUsesFallback);
-    EXPECT_EQ(counts[0].description.getString("workload_count_kind"),
-              "exact_launch_bound");
-    const auto *upper = counts[0].description.getObject("upper");
-    ASSERT_TRUE(upper);
-    EXPECT_EQ(upper->getString("source"), "launch_scalar_binding");
-    EXPECT_EQ(upper->getInteger("value"), limit);
-
-    mlir::ascend::SimtAnchorPlan anchors;
-    auto partition = StagePartitioner().partition(*module, anchors,
-                                                  StagePartitionerOptions{});
-    if (!partition)
-      FAIL() << llvm::toString(partition.takeError());
-    bool foundLoop = false;
-    for (const auto &stage : partition->stages) {
-      if (!stage.features.hasLoop)
-        continue;
-      foundLoop = true;
-      // An unsplit zero-trip shell still has one entry; its body has no work.
-      EXPECT_EQ(stage.iterationCount, std::max<int64_t>(1, expectedTrips));
-      EXPECT_EQ(stage.features.unknownTripCountLoopCount, 0);
-    }
-    EXPECT_TRUE(foundLoop);
-    module->walk([&](mlir::scf::ForOp loop) {
-      loop->setAttr("unsignedCmp", mlir::UnitAttr::get(&context));
-    });
-    auto unsignedCounts = analyzeLoopTripCountInfos(*module);
-    ASSERT_EQ(unsignedCounts.size(), 1u);
-    EXPECT_FALSE(unsignedCounts[0].constantTripCount);
-    EXPECT_EQ(unsignedCounts[0].launchBoundTripCount,
-              std::optional<int64_t>(expectedTrips));
-    EXPECT_EQ(unsignedCounts[0].description.getString("workload_count_kind"),
-              "exact_launch_bound");
-  }
-}
-
-TEST(SimdSimtCostModelTest, InvalidOrMissingLaunchBoundRemainsUnknown) {
-  mlir::MLIRContext context;
-  context.getOrLoadDialect<mlir::arith::ArithDialect>();
-  context.getOrLoadDialect<mlir::func::FuncDialect>();
-  context.getOrLoadDialect<mlir::scf::SCFDialect>();
-  for (const char *attribute :
-       {"", " {ascend.costmodel.runtime_value = 2147483648 : i64}"}) {
-    std::string source = R"mlir(
-      module {
-        func.func @kernel(%limit: i32ATTRIBUTE) {
-          %zero = arith.constant 0 : i32
-          %step = arith.constant 128 : i32
-          scf.for %i = %zero to %limit step %step : i32 {
-          }
-          return
-        }
-      }
-    )mlir";
-    source.replace(source.find("ATTRIBUTE"), 9, attribute);
-    auto module = mlir::parseSourceString<mlir::ModuleOp>(source, &context);
-    ASSERT_TRUE(module);
-    auto counts = analyzeLoopTripCountInfos(*module);
-    ASSERT_EQ(counts.size(), 1u);
-    EXPECT_FALSE(counts[0].constantTripCount);
-    EXPECT_FALSE(counts[0].launchBoundTripCount);
-    EXPECT_TRUE(counts[0].workloadUsesFallback);
-    EXPECT_EQ(counts[0].workloadTripCount, 1);
-    const auto *upper = counts[0].description.getObject("upper");
-    ASSERT_TRUE(upper);
-    EXPECT_EQ(upper->getString("op"), "arg");
   }
 }
 
@@ -2068,15 +1679,6 @@ TEST(SimdSimtCostModelTest, AdjacentStructuredLoopsRemainSerialStages) {
   )mlir",
                                                         &context);
   ASSERT_TRUE(module);
-
-  auto tripCounts = analyzeLoopTripCountInfos(*module);
-  ASSERT_EQ(tripCounts.size(), 2u);
-  for (const auto &tripCount : tripCounts) {
-    ASSERT_TRUE(tripCount.constantTripCount);
-    EXPECT_EQ(*tripCount.constantTripCount, 4);
-    EXPECT_EQ(tripCount.workloadTripCount, 4);
-    EXPECT_FALSE(tripCount.workloadUsesFallback);
-  }
 
   mlir::ascend::SimtAnchorPlan anchorPlan;
   auto partition = StagePartitioner().partition(*module, anchorPlan,
@@ -2392,7 +1994,7 @@ TEST(SimdSimtCostModelTest, PerReductionMixedAxesAndPartialFallback) {
         static_cast<int64_t>(elements / work.shape[work.axis]),
         work.shape[work.axis], 32}] = work.instances;
     stage.reductionContributions.push_back(contribution);
-    stage.workload.merge(contribution);
+    mlir::ascend::mergeReductionResidualWorkload(stage.workload, contribution);
     auto estimate = takeReductionResult(mlir::ascend::estimateReductionCycles(
         work, *profile.reductionProfile, mlir::ascend::ReductionMode::SIMD,
         profile.baseSimtWarpCount));

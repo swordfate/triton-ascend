@@ -4284,6 +4284,7 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
       plan.logicalStageCycles.push_back(stageCycles);
       plan.totalCycles += stageCycles;
     }
+
     if (kind == StageKernelRouteKind::Mixed) {
       {
         // A Mixed route currently materializes exactly one local SIMT scope.
@@ -4423,6 +4424,8 @@ mlir::ascend::solveStageRoutes(const StageCostTable &costTable,
       return invalid;
     }
     analyzeStageDependencySchedules(plan, costTable);
+
+
     plan.legal = true;
     return plan;
   };
