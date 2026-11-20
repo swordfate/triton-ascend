@@ -2111,6 +2111,26 @@
         },
         "strided_short_completion": {
           "$ref": "#/definitions/strided_short_completion"
+        },
+        "contiguous_ldst": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Legacy contiguous load/store direct-row tiers (superseded by contiguous_ldst_v2; retained for provenance)."
+        },
+        "contiguous_ldst_v2": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Contiguous (stride==1) v2 pricing: straight-line group_a cells, loop_envelope_fit per-dtype curves, p_axis decay tables."
+        },
+        "strided_wide_completion": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Unmasked strided-wide direct completion closed form."
+        },
+        "load_strided_store_coexistence": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Measured co-existence discount when a strided load stream shares the engine with a contiguous store stream."
         }
       },
       "additionalProperties": false
@@ -2425,6 +2445,26 @@
         },
         "strided_short_completion": {
           "$ref": "#/definitions/strided_short_completion"
+        },
+        "contiguous_ldst": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Legacy contiguous load/store direct-row tiers (superseded by contiguous_ldst_v2; retained for provenance)."
+        },
+        "contiguous_ldst_v2": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Contiguous (stride==1) v2 pricing: straight-line group_a cells, loop_envelope_fit per-dtype curves, p_axis decay tables."
+        },
+        "strided_wide_completion": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Unmasked strided-wide direct completion closed form."
+        },
+        "load_strided_store_coexistence": {
+          "type": "object",
+          "additionalProperties": true,
+          "description": "Measured co-existence discount when a strided load stream shares the engine with a contiguous store stream."
         }
       },
       "additionalProperties": false

@@ -80,8 +80,10 @@ resolveModeProfile(const HardwareProfile &hardware,
                    bool dependentDotRecurrence) {
   StageModeProfile resolved =
       implementation.mode == StageMode::SIMD ? hardware.simd : hardware.simt;
-  if (implementation.mode == StageMode::SIMD)
+  if (implementation.mode == StageMode::SIMD) {
     return resolved;
+  }
+
   resolved.prefixScanWarpCount =
       std::max<int64_t>(1, hardware.baseSimtWarpCount);
 
@@ -396,6 +398,614 @@ describeStridedShortAddresses(const StageMemoryAccess &access,
 ///
 /// A straight-line Stage is admissible too: the fits are per-iteration slopes,
 /// which stay defined without a loop to amortise them over.
+//===- v2 contiguous dispatch hook (epoch-calibrated) ---------------------===//
+// Prices contiguous (stride==1) load/store streams with the v2 fitted
+// formulas (profiles .../contiguous_ldst_v2).  Context:
+//   straight-line stages -> Formula A per same-shape group (N=group size)
+//   loop stages          -> Formula B once per body (chain/indpt/store),
+//                           per-iteration contribution = P/K + m
+// Residency: footprint = N*bytes (per program) vs l2_cache_bytes.
+// Cells outside the fitted table keep the pre-existing fallbacks.
+//===----------------------------------------------------------------------===//
+
+static int64_t v2ElementCount(const StageMemoryAccess *a) {
+  int64_t count = 1;
+  for (int64_t extent : a->shape)
+    count *= extent;
+  return count;
+}
+
+static void mapContiguousV2Completion(
+    const LogicalStage &stage, const StageWorkload &work,
+    const StageModeProfile &profile, StageResourceCycles &resources,
+    bool simd, LayoutCoverage &layout,
+    std::vector<const StageMemoryAccess *> &claimed,
+    int64_t programCountHint) {
+  const auto &v2 = profile.contiguousV2;
+  if (!v2.enabled || v2.groupA.empty() && v2.loopB.empty() &&
+      v2.directTable.empty())
+    return;
+  // Measured per-program decay of contiguous prices as the launch spans
+  // more waves (DMA pipelines across wave boundaries): guard campaign fit,
+  // waves = ceil(programs / 56).  Exponents are per mechanism: loop-body
+  // rows decay as waves^-0.05 (B_add_g224 fit), straight-line load-side
+  // prices as waves^-0.32 (guard WDA fit); both are 1.0 within one wave.
+  // Direct rows are one-wave co-residency prices via the clamped lookup, so
+  // the decay applies whenever hint exceeds one wave.
+  const double v2Waves =
+      std::max(1.0, double(std::max<int64_t>(1, programCountHint)) / 56.0);
+  // Formula B loop rows were calibrated with the mild decay; the
+  // straight-line analytical tier measured a steeper load-side decay
+  // (guard WDA fit: copies/adds decay as waves^-0.32, store-side grows
+  // slightly and keeps none).
+  // Loop bodies: joint fit from B_add_g224 (-5.9% at -0.05) and
+  // muls_add (36.6-wave launches nearly flat).
+  const double v2WaveDecay = std::pow(v2Waves, -0.05);
+  const double v2WaveDecayLoad = std::pow(v2Waves, -0.32);
+  constexpr double kCyclesPerNano = 1.0; // SYS_CNT at 1 GHz
+  const bool hasLoop = stage.features.hasLoop;
+  // Admission defaults encode the 100-case evidence (RUNV4..V9): loop-body
+  // cells need a loop-context P-axis / W-axis recalibration and the simt
+  // straight-line cells overprice small simt kernels, so the shipped
+  // behavior claims only simd straight-line groups at >=16 programs.
+  // The recalibration campaign opens domains through the environment:
+  //   ASCEND_V2_ALLOW_LOOP=1    admit Formula B (loop body) claims
+  //   ASCEND_V2_ALLOW_SIMT=1    admit simt claims
+  //   ASCEND_V2_MIN_PROGRAMS=N  minimum programCountHint (default 16)
+  // Full coverage: all contiguous accesses go through the v2 path.
+  // The admission env vars remain for A/B testing but default to open.
+  { const char *e = ::getenv("ASCEND_V2_DENY_LOOP");
+    if (e && *e && e[0] != '0') return; }
+  { const char *e = ::getenv("ASCEND_V2_DENY_SIMT");
+    if (e && *e && e[0] != '0' && !simd) return; }
+  const int64_t K = hasLoop ? std::max<int64_t>(1, stage.iterationCount) : 0;
+
+  // Collect eligible contiguous direct accesses.
+  std::vector<const StageMemoryAccess *> eligible;
+  bool eligibleContiguousLoads = false;
+  for (const StageMemoryAccess &access : work.memoryAccesses) {
+    if (access.count <= 0.0)
+      continue;
+    const auto layoutClass = access.layoutClass();
+    if (layoutClass != StageMemoryAccess::LayoutClass::ContiguousShort &&
+        layoutClass != StageMemoryAccess::LayoutClass::ContiguousWide) {
+      continue;
+    }
+    if (!access.hasStaticLayout() || access.elementBits / 8 <= 0)
+      continue;
+    if (access.addressDependsOnLoadedIndex ||
+        access.addressHasNonAffineTensorComputation ||
+        access.addressHasTensorControlFlowSelection)
+      continue;
+    if (access.store && access.masked &&
+        access.activeElementRatio < 1.0 - 1.0e-9)
+      continue; // partial-mask store keeps the RMW completion path
+    if (std::any_of(claimed.begin(), claimed.end(),
+                    [&access](const StageMemoryAccess *c) {
+                      return c == &access;
+                    }))
+      continue;
+    if (!access.store)
+      eligibleContiguousLoads = true;
+    eligible.push_back(&access);
+  }
+  // Mixed-stream stages: a small-row strided load shares the DMA engines
+  // with the contiguous streams (permute: the 32B / 96-element-stride c-load
+  // rides with two contiguous 2KB loads).  Admit it so a combined-body row
+  // prices the whole load side once, instead of stacking an isolated
+  // strided tail on top of the contiguous claim.
+  if (eligibleContiguousLoads) {
+    for (const StageMemoryAccess &access : work.memoryAccesses) {
+      if (access.count <= 0.0 || access.store)
+        continue;
+      if (access.layoutClass() != StageMemoryAccess::LayoutClass::StridedWide)
+        continue;
+      if (access.rowBytes() <= 0 || access.rowBytes() > 64)
+        continue;
+      if (!access.hasStaticLayout() || access.elementBits / 8 <= 0)
+        continue;
+      if (access.addressDependsOnLoadedIndex ||
+          access.addressHasNonAffineTensorComputation ||
+          access.addressHasTensorControlFlowSelection)
+        continue;
+      if (std::any_of(claimed.begin(), claimed.end(),
+                      [&access](const StageMemoryAccess *c) {
+                        return c == &access;
+                      }))
+        continue;
+      bool alreadyEligible = false;
+      for (const StageMemoryAccess *e : eligible)
+        if (e == &access)
+          alreadyEligible = true;
+      if (!alreadyEligible)
+        eligible.push_back(&access);
+    }
+  }
+  if (eligible.empty()) {
+    return;
+  }
+
+  const auto ebName = [](int64_t eb) -> const char * {
+    switch (eb) {
+    case 1: return "int8";
+    case 2: return "fp16";
+    case 4: return "fp32";
+    case 8: return "int64";
+    default: return nullptr;
+    }
+  };
+
+  if (hasLoop) {
+    // ---- Loop-domain admission (2026-11-20): the loopfit curves were
+    // calibrated on clean single-program bodies (grid=1, hot L2, no
+    // mask, linear inter-trip walk, no reduction/scan coupling -
+    // probe e27b_fit2).  Stage-level baseline-vs-v2 differencing on
+    // the 100-case suite attributes the five baseline-PASS -> FAIL
+    // regressions to extrapolating those curves onto structures
+    // outside that domain (per-iteration shortfall, fresh vs needed):
+    //   muls_add_n1048576    +28.2 ns/trip (-20%)  grid-stride shell
+    //   memory_stream_l4     +70.0 ns/trip (-31%)  grid-stride shell
+    //                        (E33d: mask +11 + inter-trip jump +38)
+    //   pytest_fused_softmax +83.8 ns/trip (-23%)  gs rows + reduction
+    //   pytest_strided_scatter -83.6 ns/trip (-26%) runtime-masked simt
+    //   pytest_permute_reshape -204  ns/trip (-50%) strided-row members
+    //                        (32B rows @ 384B stride priced contiguous)
+    // A body carrying a grid-stride shell, runtime partial masks,
+    // reduction/scan coupling, or StridedWide members is outside the
+    // calibrated domain: stay unclaimed so the legacy measured group
+    // curves / strided tiers price it exactly as the pre-v2 baseline
+    // did.  Clean unmasked non-grid-stride bodies remain admissible
+    // (E29: hot bodies grid-flat; elementwise/gs_dot track a few %).
+    {
+      const char *allowUncalibrated =
+          ::getenv("ASCEND_V2_ALLOW_UNCALIBRATED_LOOP");
+      if (!(allowUncalibrated && *allowUncalibrated &&
+            allowUncalibrated[0] != '0')) {
+        bool outsideDomain = stage.features.isGridStrideLoopShell ||
+                             stage.features.hasReduction ||
+                             stage.features.hasPrefixScan ||
+                             work.reductionOperations > 0.0 ||
+                             work.shuffleLaneSteps > 0.0;
+        for (const StageMemoryAccess *access : eligible) {
+          if (access->masked && access->activeElementRatio > 0.0 &&
+              access->activeElementRatio < 1.0)
+            outsideDomain = true; // runtime-predicated body
+          if (access->layoutClass() ==
+              StageMemoryAccess::LayoutClass::StridedWide)
+            outsideDomain = true; // strided-row rider priced as contiguous
+        }
+        if (outsideDomain)
+          return;
+      }
+    }
+    // Simt loop bodies: the simt loopfit curves are drain-forced
+    // grid=1 calibrations (E17g era).  Their only 100-case consumers
+    // under-predict 26-54% per trip (strided_scatter -26%, rowred_r16
+    // -54%) and no simt loop claim improves any case (the four v2
+    // improvements all come from straight-line it=1 stages), so the
+    // drain-forced per-trip price does not transfer to multi-program
+    // simt launches.  Keep simt loop claims closed (the RUNV4..V9
+    // admission default) until the simt loop domain gets its own
+    // multi-program recalibration.
+    if (!simd)
+      return;
+    // ---- Formula B: one evaluation for the whole loop body --------------
+    // Units: the stage estimator multiplies charged resources by
+    // stage.iterationCount, so every price added here is the cost of ONE
+    // loop iteration for one program.  Coverage is TOTAL: every contiguous
+    // access in a loop body is claimed by v2 - via the calF2 direct-row
+    // fit when the geometry was calibrated, otherwise via the generic
+    // per-op analytical - so the legacy curves never price contiguous
+    // streams.
+    bool bodyMasked = false;  // (retired with the tiny_direct tier)
+    (void)bodyMasked;
+    int64_t domBytes = 0, loadBytes = 0, storeBytes = 0;
+    int64_t nLoads = 0, nStores = 0;
+    for (const StageMemoryAccess *access : eligible) {
+      const int64_t instances = std::max<int64_t>(
+          1, static_cast<int64_t>(std::llround(access->count)));
+      const int64_t bytes = v2ElementCount(access) *
+                            (access->elementBits / 8) * instances;
+      domBytes = std::max(domBytes, bytes / instances);
+      (access->store ? storeBytes : loadBytes) += bytes;
+      ++(access->store ? nStores : nLoads);
+      if (access->masked && access->activeElementRatio > 0.0 &&
+          access->activeElementRatio < 1.0)
+        bodyMasked = true;
+    }
+
+    auto claimAll = [&]() {
+      for (const StageMemoryAccess *access : eligible) {
+        claimed.push_back(access);
+        // Nested-loop stages present one access with count>1 instances
+        // (permute: the BLOCK1/BLOCK1_SUB shell runs twice per iteration);
+        // the coverage must match the workload's instance count or the
+        // legacy tail re-prices the unclaimed remainder.
+        const int64_t instances = std::max<int64_t>(
+            1, static_cast<int64_t>(std::llround(access->count)));
+        const int64_t bytes = v2ElementCount(access) *
+                              (access->elementBits / 8);
+        if (access->store) {
+          layout.storeBytes += bytes * instances;
+          layout.storeOperations += double(instances);
+          layout.storeWarpInstructions +=
+              instances * llvm::divideCeil(v2ElementCount(access),
+                                           int64_t(32));
+          layout.storeShapes[std::make_pair(bytes,
+              v2ElementCount(access))] += double(instances);
+        } else {
+          layout.loadBytes += bytes * instances;
+          layout.loadOperations += double(instances);
+          layout.loadWarpInstructions +=
+              instances * llvm::divideCeil(v2ElementCount(access),
+                                           int64_t(32));
+          layout.loadShapes[std::make_pair(bytes,
+              v2ElementCount(access))] += double(instances);
+        }
+      }
+    };
+
+    // Generic per-op analytical per iteration (the fallback that stays
+    // even when no direct row is close): loads and stores charge their
+    // own engine service and the stage estimator models the overlap of
+    // the two streams (pipelined branches take the max service).
+    auto analyticalPerIter = [&]() {
+      double anaLoad = 0.0, anaStore = 0.0;
+      for (const StageMemoryAccess *access : eligible) {
+        const int64_t instances = std::max<int64_t>(
+            1, static_cast<int64_t>(std::llround(access->count)));
+        const int64_t b = v2ElementCount(access) *
+                          (access->elementBits / 8);
+        if (simd) {
+          const double per =
+              (access->store ? profile.storeOperationSetupCycles
+                             : profile.loadOperationSetupCycles) +
+              double(b) * (access->store
+                               ? 1.0 / profile.storeBytesPerCycle
+                               : 1.0 / profile.loadBytesPerCycle);
+          (access->store ? anaStore : anaLoad) += per * instances;
+        } else {
+          const double per =
+              double(llvm::divideCeil(v2ElementCount(access) * instances,
+                                      int64_t(32))) /
+              (access->store ? profile.storeWarpInstructionsPerCycle
+                             : profile.loadWarpInstructionsPerCycle);
+          (access->store ? anaStore : anaLoad) += per;
+        }
+      }
+      return std::make_pair(anaLoad, anaStore);
+    };
+
+    // ---- Loop-body envelope (the only loop-body tier; simd) ------------
+    // E17 (2026-11-17): pipelined-loop MIXED bodies (loads and stores
+    // both present) are priced per direction with the E17 curves:
+    // perIter = max(TL(loadBytes), TS(storeBytes)) + kappa*min(...).
+    // The former byte-sum aggregate envelope (one ~83 B/cycle stream for
+    // load+store together) over-priced skewed mixes by up to +76% (2L+1S
+    // measured 115.7 ns/iter vs envelope 160.4); max+kappa*min tracks
+    // the sweep within +/-8%.  Simt keeps tier 3 (no aggregate
+    // calibration for the LSU/DCache path).
+    // The curves are the K=16/32 steady-state slope (E17f); they apply
+    // from K=1 (phase 2 splice) with the launch/drain A carried by the
+    // candidate-layer boundary residuals, so no per-K factor table is
+    // needed (E17b/E17e: per-K tables proved unreliable/unmeasurable).
+    // Unified set (2026-11-17): single-direction bodies enter the
+    // envelope too - TL/TS are measured with load-only / store-only
+    // probes, so the mix formula degenerates to the pure direction when
+    // the other stream is absent.  Direction-aware charging mirrors the
+    // strided-group tier (a store-only body competes with the store
+    // stream, not the load stream).
+    // K<16 splice (phase 2): the curves were calibrated as the K=16/32
+    // steady-state slope m (E17f), and E17d showed the slope is K-flat -
+    // the low-K deviation is A/K amortization of launch/drain, which is
+    // carried by the candidate-layer boundary residuals (P-axis), not by
+    // the per-iteration loop price.  So the envelope applies from K=1:
+    // T(K) = A(P) + K*m with m from here.  If a low-K geometry still
+    // deviates, probe it (SYS_CNT) and fix the boundary/layer split -
+    // do not reintroduce a per-K factor table (E17b/E17e: unreliable).
+    // E27e fitted loop-body model (the only simd loop-body tier):
+    // per-nL/nS measured transfer curves + joint issue floor
+    // (stepT[nL+nS], the mixed-descriptor wall) + per-128B-line mixed tax
+    // + tiny-store excess/chain delta tables.  In-sample MAPE 6.9-12.4%
+    // (fp32 6.9%, mix 5.3%).  The E17f envelope, tiny-store excess and
+    // TL-chain formulas are retired; a dtype without a fit falls through
+    // to the Tier 3 per-op tier below.
+    if (simd && profile.contiguousV2.loopFit.enabled &&
+        (loadBytes > 0.0 || storeBytes > 0.0) &&
+        stage.iterationCount >= 1) {
+      int64_t domEB = 0;
+      for (const StageMemoryAccess *access : eligible) {
+        const int64_t b =
+            v2ElementCount(access) * (access->elementBits / 8);
+        const bool want = loadBytes > 0 ? !access->store : access->store;
+        if (want && b > domEB)
+          domEB = access->elementBits / 8;
+      }
+      const char *domDtype = ebName(domEB);
+      auto itf = domDtype
+                     ? profile.contiguousV2.loopFit.dtypes.find(domDtype)
+                     : profile.contiguousV2.loopFit.dtypes.end();
+      if (itf != profile.contiguousV2.loopFit.dtypes.end()) {
+        int64_t maxChunk = 0;
+        for (const StageMemoryAccess *access : eligible)
+          if (access->store)
+            maxChunk = std::max<int64_t>(
+                maxChunk,
+                v2ElementCount(access) * (access->elementBits / 8));
+        const bool tiny = maxChunk > 0 && maxChunk <= 128;
+        const bool redFed = work.reductionOperations > 0.0 ||
+                            work.shuffleLaneSteps > 0.0;
+        const double perIter = contiguous_v2::loopFitPerIter(
+            itf->second, nLoads, double(loadBytes), nStores,
+            double(storeBytes), double(domBytes), tiny, redFed) *
+            v2WaveDecay;
+        const bool allStoresEnv = std::all_of(
+            eligible.begin(), eligible.end(),
+            [](const StageMemoryAccess *a) { return a->store; });
+        if (allStoresEnv)
+          resources.store += perIter * kCyclesPerNano;
+        else
+          resources.load += perIter * kCyclesPerNano;
+        claimAll();
+        return;
+      }
+      // dtype without a fitted model: fall through to the Tier 3
+      // per-op tier below (the envelope path is retired).
+    }
+    // Unified set phase 3c: SIMT per-line envelope, both directions
+    // (E17h2/E17i measured tables).  Loads are width-sensitive with a
+    // 4KB issue penalty and a 32KB jump; stores are width-independent
+    // and nearly size-flat.  Residency by footprint vs L2 128MB.
+    // Mixed simt bodies take the serial sum (LSU shows no simd-style
+    // load/store overlap, E17g).
+    // E27e fitted loop-body model (simt; the only simt loop-body tier):
+    // per-nL load curves (drain-forced probe) + E17i drain-rate store
+    // curve, additive composition (E17g: no load/store overlap); tiny
+    // excess/chain tables.  A dtype without a fit falls through to the
+    // Tier 3 per-op tier below (the line-table path is retired).
+    if (!simd && profile.contiguousV2.loopFit.enabled &&
+        (loadBytes > 0.0 || storeBytes > 0.0) &&
+        stage.iterationCount >= 1) {
+      int64_t domEB = 0;
+      for (const StageMemoryAccess *access : eligible) {
+        const int64_t b =
+            v2ElementCount(access) * (access->elementBits / 8);
+        const bool want = loadBytes > 0 ? !access->store : access->store;
+        if (want && b > domEB)
+          domEB = access->elementBits / 8;
+      }
+      const char *domDtype = ebName(domEB);
+      auto itf = domDtype
+                     ? profile.contiguousV2.loopFit.dtypes.find(domDtype)
+                     : profile.contiguousV2.loopFit.dtypes.end();
+      if (itf != profile.contiguousV2.loopFit.dtypes.end()) {
+        int64_t maxChunk = 0;
+        for (const StageMemoryAccess *access : eligible)
+          if (access->store)
+            maxChunk = std::max<int64_t>(
+                maxChunk,
+                v2ElementCount(access) * (access->elementBits / 8));
+        const bool tiny = maxChunk > 0 && maxChunk <= 128;
+        const bool redFed = work.reductionOperations > 0.0 ||
+                            work.shuffleLaneSteps > 0.0;
+        const double perIter = contiguous_v2::loopFitPerIter(
+            itf->second, nLoads, double(loadBytes), nStores,
+            double(storeBytes), double(domBytes), tiny, redFed);
+        if (loadBytes == 0.0)
+          resources.store += perIter * kCyclesPerNano;
+        else
+          resources.load += perIter * kCyclesPerNano;
+        claimAll();
+        return;
+      }
+      // dtype without a fitted model: fall through to the Tier 3
+      // per-op tier below (the line-table path is retired).
+    }
+    // (The former byte-sum aggregate envelope was removed: it was a
+    // regime-local fit for trip-1 slot-pipelined bodies.  K>=16 bodies -
+    // mixed or single-direction - take the per-direction envelope above;
+    // trip-1 / low-trip bodies take the per-op analytical below until
+    // the A(P)+K*m splice lands.  See the unified-set doc and review
+    // 3.5 for the measured trade-offs.)
+    // ---- Tier 3: generic per-op analytical (the kept fallback) ----------
+    const std::pair<double, double> ana = analyticalPerIter();
+    resources.load += ana.first * kCyclesPerNano;
+    resources.store += ana.second * kCyclesPerNano;
+    claimAll();
+    return;
+  }
+
+  // ---- straight-line stages: Formula A per same-shape group ------------
+  std::map<std::tuple<bool, int64_t, int64_t, bool>,
+           std::vector<const StageMemoryAccess *>>
+      groups;
+  for (const StageMemoryAccess *access : eligible) {
+    const auto key = std::make_tuple(
+        access->store, v2ElementCount(access), access->elementBits / 8,
+        access->masked);
+    groups[key].push_back(access);
+  }
+  int64_t footprint = 0;
+  for (const StageMemoryAccess *access : eligible)
+    footprint += v2ElementCount(access) * (access->elementBits / 8);
+  const char *res = footprint <= v2.l2CacheBytes ? "warm" : "cold";
+  for (auto &groupEntry : groups) {
+    auto &members = groupEntry.second;
+    const StageMemoryAccess *first = members.front();
+    const char *dtype = ebName(first->elementBits / 8);
+    if (!dtype)
+      continue;
+    const int64_t bytes = v2ElementCount(first) * (first->elementBits / 8);
+    // Masked groups (padded tile, active lanes): the group_a cells were
+    // calibrated on unmasked bodies; price via the active-byte analytical
+    // with the bucket chosen at the active width.
+    double effBytes = double(bytes);
+    const bool maskedGroup =
+        first->masked && first->activeElementRatio > 0.0 &&
+        first->activeElementRatio < 1.0;
+    if (maskedGroup)
+      effBytes *= first->activeElementRatio;
+    int64_t bucket = 1024;
+    {
+      double eff = double(bytes);
+      if (maskedGroup)
+        eff = effBytes;
+      double bestDist = 1e30;
+      for (int64_t b :
+           {32, 64, 128, 256, 512, 1024, 4096, 16384}) {
+        const double d = std::fabs(std::log2(std::max(1.0, eff)) -
+                                   std::log2((double)b));
+        if (d < bestDist) {
+          bestDist = d;
+          bucket = b;
+        }
+      }
+    }
+
+    const char *direction = first->store ? "store" : "load";
+    const std::string key = std::string(direction) + "/" + dtype + "/" +
+                            std::to_string(bucket) + "/" + res;
+    auto it = maskedGroup ? v2.groupA.end() : v2.groupA.find(key);
+    // The simt /w<W> retry is for UNMASKED groups only: the bucket above was
+    // chosen at ACTIVE bytes for a masked group while the row formula prices
+    // full bytes - re-entering the table here would pair a row with the
+    // wrong byte count.
+    if (it == v2.groupA.end() && !simd && !maskedGroup) {
+      // simt cells are warp-count dependent; try the resolved W first.
+      it = v2.groupA.find(key + "/w" +
+                          std::to_string(profile.activeWarpCount));
+    }
+    if (it == v2.groupA.end()) {
+      // Unfitted cell: v2 still owns the group through the generic per-op
+      // analytical (startup + B/rate), so the legacy curves never price
+      // contiguous streams.
+      double ana = 0.0;
+      for (const StageMemoryAccess *access : members) {
+        double b = double(v2ElementCount(access)) *
+                   double(access->elementBits / 8);
+        if (access->masked && access->activeElementRatio > 0.0 &&
+            access->activeElementRatio < 1.0)
+          b *= access->activeElementRatio;
+        if (simd) {
+          const bool isStore = access->store;
+          const double decay = isStore ? 1.0 : v2WaveDecayLoad;
+          ana += ((access->store ? profile.storeOperationSetupCycles
+                                 : profile.loadOperationSetupCycles) +
+                  double(b) *
+                      (isStore ? 1.0 / profile.storeBytesPerCycle
+                               : 1.0 / profile.loadBytesPerCycle)) *
+                 decay;
+        } else {
+          ana += double(llvm::divideCeil(v2ElementCount(access),
+                                         int64_t(32))) /
+                 (access->store ? profile.storeWarpInstructionsPerCycle
+                                : profile.loadWarpInstructionsPerCycle);
+        }
+      }
+      if (!simd)
+        ana *= v2WaveDecay;
+      for (const StageMemoryAccess *access : members) {
+        claimed.push_back(access);
+        if (access->store) {
+          resources.store += ana / double(members.size());
+          const int64_t bmem = v2ElementCount(access) *
+                               (access->elementBits / 8);
+          layout.storeBytes += bmem;
+          layout.storeOperations += 1.0;
+          layout.storeWarpInstructions +=
+              llvm::divideCeil(v2ElementCount(access), int64_t(32));
+          layout.storeShapes[std::make_pair(
+              bmem, v2ElementCount(access))] += 1.0;
+        } else {
+          resources.load += ana / double(members.size());
+          const int64_t bmem = v2ElementCount(access) *
+                               (access->elementBits / 8);
+          layout.loadBytes += bmem;
+          layout.loadOperations += 1.0;
+          layout.loadWarpInstructions +=
+              llvm::divideCeil(v2ElementCount(access), int64_t(32));
+          layout.loadShapes[std::make_pair(
+              bmem, v2ElementCount(access))] += 1.0;
+        }
+      }
+      continue;
+    }
+    const contiguous_v2::ContiguousV2Group &g = it->second;
+    const int64_t n = static_cast<int64_t>(members.size());
+
+    double total;
+    bool fitted = true;
+    if (n == 1) {
+      // Single access: the fitted first-term carries issue overhead the
+      // legacy model bills in separate buckets, so price singles with the
+      // legacy-consistent analytical formula - the v2 path covers them at
+      // baseline-identical accuracy.
+      const int64_t elems = v2ElementCount(first);
+      if (simd) {
+        const double setup =
+            (first->store ? profile.storeOperationSetupCycles
+                          : profile.loadOperationSetupCycles) *
+            (first->store ? 1.0 : v2WaveDecayLoad);
+        const double rate =
+            bytes * (first->store
+                         ? 1.0 / profile.storeBytesPerCycle
+                         : 1.0 / profile.loadBytesPerCycle);
+        total = setup + rate * (first->store ? 1.0 : v2WaveDecayLoad);
+      } else {
+        total = static_cast<double>(llvm::divideCeil(elems, int64_t(32))) /
+                (first->store ? profile.storeWarpInstructionsPerCycle
+                              : profile.loadWarpInstructionsPerCycle);
+        total *= v2WaveDecay;
+      }
+      fitted = false;
+    } else {
+      // Q and cTransfer are structural (2026-11-17 group_a compression):
+      // Q from the byte count per direction/residency, cTransfer =
+      // kc * marginal.  The stored cell values are no longer read.
+      const int64_t q = contiguous_v2::groupAQueues(
+          first->store, bytes, llvm::StringRef(res) == "warm");
+      if (n > q) {
+        const double cT = contiguous_v2::groupACTransfer(
+            profile.contiguousV2, first->store,
+            llvm::StringRef(res) == "warm", g.marginal);
+        total = g.first + (q - 1) * g.marginal + (n - q) * cT;
+      } else {
+        total = g.first + (n - 1) * g.marginal;
+      }
+    }
+    if (!(total > 0.0))
+      continue;
+    double ns;
+    if (fitted) {
+      const double pFac = contiguous_v2::pAxisFactor(
+          profile.contiguousV2, first->store ? "storeonly" : "loadsum",
+          simd ? "simd" : "simt", res, programCountHint);
+      ns = total * pFac * kCyclesPerNano;
+    } else {
+      ns = total; // analytical: the legacy fallback has no P factor; the
+                  // contention enters through the wave arithmetic
+    }
+    for (const StageMemoryAccess *access : members) {
+      claimed.push_back(access);
+      if (access->store) {
+        resources.store += ns / members.size();
+        layout.storeBytes += bytes;
+        layout.storeOperations += 1.0;
+        layout.storeWarpInstructions +=
+            llvm::divideCeil(v2ElementCount(access), int64_t(32));
+        layout.storeShapes[std::make_pair(bytes, v2ElementCount(access))] += 1.0;
+      } else {
+        resources.load += ns / members.size();
+        layout.loadBytes += bytes;
+        layout.loadOperations += 1.0;
+        layout.loadWarpInstructions +=
+            llvm::divideCeil(v2ElementCount(access), int64_t(32));
+        layout.loadShapes[std::make_pair(bytes, v2ElementCount(access))] += 1.0;
+      }
+    }
+  }
+}
+
 static void mapStridedShortMemoryCompletion(
     const LogicalStage &stage, const StageWorkload &work,
     const StageModeProfile &profile, StageResourceCycles &resources, bool simd,
@@ -1334,7 +1944,8 @@ static std::optional<StageResourceCycles>
 mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
             StageMode mode, int64_t superblockFactor, bool wholeSimt,
             std::optional<double> calibratedReduction = std::nullopt,
-            StageMemoryCost fitted = {}) {
+            StageMemoryCost fitted = {},
+            int64_t programCountHint = 1) {
   StageResourceCycles resources;
   // Accesses priced by the closed-form strided-direct mechanism.  The masked
   // strided copy floor yields on them and stays in force for everything else.
@@ -1586,6 +2197,27 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
   }
   // Unclassified scalar operations have no execution-throughput evidence.
   // Mixed-axis classification does not replace #2528's resource pricing.
+  // Masked contiguous tiles transfer only their active bytes: the padded
+  // tail is lane-masked, never fetched (max_dim1-style padded row tiles:
+  // (64,32) padded masked to (64,8) moves 2KB, not 8KB).
+  double maskedPaddedExcessLoadBytes = 0.0;
+  double maskedPaddedExcessStoreBytes = 0.0;
+  for (const StageMemoryAccess &access : work.memoryAccesses) {
+    if (!(access.masked && access.activeElementRatio > 0.0 &&
+          access.activeElementRatio < 1.0 - 1.0e-9))
+      continue;
+    if (access.addressDependsOnLoadedIndex)
+      continue;
+    const double paddedBytes =
+        double(v2ElementCount(&access)) * (access.elementBits / 8) *
+        std::max<int64_t>(1,
+            static_cast<int64_t>(std::llround(access.count)));
+    const double excess = paddedBytes * (1.0 - access.activeElementRatio);
+    if (access.store)
+      maskedPaddedExcessStoreBytes += excess;
+    else
+      maskedPaddedExcessLoadBytes += excess;
+  }
   if (stage.features.hasIndirectMemory || fitted.load || fitted.store ||
       stage.costModelKind == StageCostModelKind::PartialContinuousTileMemory ||
       work.indirectLoadTransactions > 0.0 ||
@@ -1763,7 +2395,8 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
     // admission policy.
     constexpr double coverageTolerance = 1.0e-9;
     const double uncoveredLoadBytes =
-        std::max(0.0, work.loadBytes - curvedLoadBytes);
+        std::max(0.0,
+            work.loadBytes - curvedLoadBytes - maskedPaddedExcessLoadBytes);
     const double uncoveredLoadOperations =
         std::max(0.0, work.loadOperations - curvedLoadOperations);
     const double uncoveredLoadWarpInstructions =
@@ -1773,7 +2406,8 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
         uncoveredLoadOperations > coverageTolerance ||
         uncoveredLoadWarpInstructions > coverageTolerance;
     const double uncoveredStoreBytes =
-        std::max(0.0, work.storeBytes - curvedStoreBytes);
+        std::max(0.0,
+            work.storeBytes - curvedStoreBytes - maskedPaddedExcessStoreBytes);
     const double uncoveredStoreOperations =
         std::max(0.0, work.storeOperations - curvedStoreOperations);
     const double uncoveredStoreWarpInstructions =
@@ -1820,6 +2454,11 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
     // further down, so both can see which accesses this pass already priced.
     mapStridedShortMemoryCompletion(stage, work, profile, resources, simd,
                                     layout, stridedAlreadyClaimed);
+    // v2 epoch-calibrated contiguous pricing claims before the legacy
+    // curves, and before the StridedWide direct completion below so the
+    // shared claim receipts prevent double pricing of the small rider.
+    mapContiguousV2Completion(stage, work, profile, resources, simd, layout,
+                              stridedAlreadyClaimed, programCountHint);
     // Unmasked StridedWide accesses are claimed by their own calibrated
     // closed form, BEFORE the layout-memory curves: a profile that carries an
     // unmasked strided_wide fingerprint would otherwise price the same bytes
@@ -1844,6 +2483,12 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
           continue;
         }
         reachedFirstLoad = true;
+        if (std::find(stridedAlreadyClaimed.begin(),
+                      stridedAlreadyClaimed.end(), &access) !=
+            stridedAlreadyClaimed.end())
+          // v2 already owns this stream; the flat-group envelope describes
+          // one uninterrupted sequence, so the prefix ends here.
+          break;
         auto shape = accessShape(access);
         if (access.count <= 0.0 || !shape || access.elementBits != 32 ||
             !access.isFlatContiguous())
@@ -2135,11 +2780,13 @@ mapWorkload(const LogicalStage &stage, const StageModeProfile &profile,
         resources.store += storeSetup;
       }
       resources.load +=
-          std::max(0.0, work.loadBytes - layout.loadBytes - curvedLoad.bytes) /
+          std::max(0.0, work.loadBytes - layout.loadBytes - curvedLoad.bytes -
+                            maskedPaddedExcessLoadBytes) /
           profile.loadBytesPerCycle;
-      resources.store += std::max(0.0, work.storeBytes - layout.storeBytes -
-                                           curvedStore.bytes) /
-                         profile.storeBytesPerCycle;
+      resources.store +=
+          std::max(0.0, work.storeBytes - layout.storeBytes -
+                            curvedStore.bytes - maskedPaddedExcessStoreBytes) /
+          profile.storeBytesPerCycle;
       if (profile.computedAddressScalarizedLoadCyclesPerElement > 0.0) {
         for (const StageMemoryAccess &access : work.memoryAccesses) {
           if (access.store || access.count <= 0.0 ||
@@ -3071,6 +3718,22 @@ static double estimateStageBase(const LogicalStage &stage,
           r.load + r.continuousLoadGroup + r.indirectLoadGroup + r.sharedLayout;
       const double storeService = r.store + r.continuousStoreGroup;
       // Model one source iteration as competing engine resources.
+      // Phase 5c (E19/E20): when the stage computes a reduction, its
+      // output is what the body's stores consume - load -> reduction ->
+      // store is a serial latency chain, so the reduction rides the
+      // chain instead of the parallel vector service (reduce_sum
+      // in-kernel 374 ns/iter vs max-composition 187).
+      if (r.reduction > 0.0) {
+        const double chain =
+            loadService + storeService + r.reduction + r.compute +
+            r.shuffle;
+        return r.setup +
+               count * std::max({chain, loadService, storeService,
+                                 vectorService,
+                                 vectorService + r.irregularTailMaterialization,
+                                 r.irregularMaskedTileFloor, r.atomic,
+                                 r.scalar + r.predicate});
+      }
       return r.setup +
              count * std::max({loadService, storeService, vectorService,
                                vectorService + r.irregularTailMaterialization,
@@ -3104,9 +3767,14 @@ static double estimateStageBase(const LogicalStage &stage,
   case StageCostModelKind::RowwiseReduction:
     if (mode == StageMode::SIMT && r.multiResultReductionGroupBody > 0.0)
       return r.setup +
-             count * std::max(r.multiResultReductionGroupBody, r.issue);
+             count * std::max({r.multiResultReductionGroupBody,
+                               r.scalar + r.load + r.store + r.criticalPath,
+                               r.issue});
     if (mode == StageMode::SIMT && r.rowwiseReductionGroupBody > 0.0)
-      return r.setup + count * std::max(r.rowwiseReductionGroupBody, r.issue);
+      return r.setup +
+             count * std::max({r.rowwiseReductionGroupBody,
+                               r.scalar + r.load + r.store + r.criticalPath,
+                               r.issue});
     if (mode == StageMode::SIMD && permitsSimdOverlap(stage)) {
       // SIMD rowwise lowering exposes pointwise and reduction service as
       // competing vector-pipe bounds.
@@ -4091,7 +4759,8 @@ bool HardwareProfile::isValid() const {
 llvm::Expected<StageCostTable>
 StageCostEvaluator::evaluate(const StagePartition &partition,
                              const HardwareProfile &profile,
-                             bool collectCalibrationEstimates) const {
+                             bool collectCalibrationEstimates,
+                             int64_t programCountHint) const {
   if (partition.stages.empty())
     return llvm::createStringError(
         std::errc::invalid_argument,
@@ -4274,7 +4943,7 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
           executionStage, modeProfile, implementation.mode,
           implementation.superblockFactor,
           implementation.mode == StageMode::SIMT && !implementation.localScope,
-          std::nullopt, fitted);
+          std::nullopt, fitted, programCountHint);
       if (!resources)
         continue;
       auto mapping =
@@ -4501,7 +5170,8 @@ StageCostEvaluator::evaluate(const StagePartition &partition,
               mapWorkload(stage, modeProfile, implementation.mode,
                           implementation.superblockFactor,
                           implementation.mode == StageMode::SIMT &&
-                              !implementation.localScope);
+                              !implementation.localScope,
+                          std::nullopt, {}, programCountHint);
           if (!fullResources)
             continue;
           const double unpartitionedTotal =

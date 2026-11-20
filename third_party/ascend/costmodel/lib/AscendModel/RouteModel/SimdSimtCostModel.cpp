@@ -5,6 +5,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "AscendModel/RouteModel/SimdSimtCostModel.h"
+#include "AscendModel/RouteModel/ContiguousLdStV2CostModel.h"
 #include "AscendModel/Analysis/LoopWorkloadAnalysis.h"
 #include "AscendModel/Analysis/SimtAnchorAnalysis.h"
 #include "AscendModel/Analysis/SimtRegisterPressureAnalysis.h"
@@ -2373,6 +2374,16 @@ static void readSetupCycleCurve(ProfileJSONReader &reader,
   }
 }
 
+// Profile table keys are prefixed with the engine section name ("simd/...",
+// "simt_only/..."); the evaluator looks cells up by bare keys, so strip the
+// prefix on load.
+static std::string cv2StripEnginePrefix(llvm::StringRef key) {
+  llvm::StringRef k = key;
+  if (k.consume_front("simd/") || k.consume_front("simt_only/"))
+    return k.str();
+  return key.str();
+}
+
 static llvm::Expected<CandidateProfile>
 loadCandidateProfileUncached(llvm::StringRef pathRef,
                              std::vector<std::string> *dependencies) {
@@ -2939,6 +2950,292 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
             "vector_instruction/system_cycle", microbench, reader);
     }
     if (const auto *memory = reader.object(*simd, "memory", "simd")) {
+    if (const auto *v2 = reader.object(*memory, "contiguous_ldst_v2",
+                                       "simd.memory")) {
+      auto &cv2 = simdProfile.contiguousV2;
+      cv2.enabled = true;
+      cv2.l2CacheBytes = reader.integer(
+          *v2, "l2_cache_bytes", "simd.memory.contiguous_ldst_v2");
+      if (const auto *ga = v2->getObject("group_a")) {
+        for (const auto &entry : *ga) {
+          const auto *o = entry.second.getAsObject();
+          if (!o)
+            continue;
+          contiguous_v2::ContiguousV2Group g;
+          g.first = reader.number(*o, "first", "cv2.group_a");
+          g.marginal = reader.number(*o, "marginal", "cv2.group_a");
+          // 2026-11-17 group_a compression: Q/c_transfer may be absent -
+          // they are structural now (groupAQueues / groupACTransfer).
+          g.cTransfer = reader.optionalNumber(*o, "c_transfer", 0.0);
+          g.Q = static_cast<int64_t>(
+              reader.optionalNumber(*o, "Q", 0.0));
+          cv2.groupA[cv2StripEnginePrefix(entry.first)] = g;
+        }
+      }
+      if (const auto *me = v2->getObject("loop_envelope_mix")) {
+        if (auto arr = me->getArray("bytes"))
+          for (int i = 0; i < 4 && i < static_cast<int>(arr->size()); ++i)
+            if (const auto v = (*arr)[i].getAsNumber())
+              cv2.mixBytes[i] = *v;
+        if (auto arr = me->getArray("tl_ns"))
+          for (int i = 0; i < 4 && i < static_cast<int>(arr->size()); ++i)
+            if (const auto v = (*arr)[i].getAsNumber())
+              cv2.mixTL[i] = *v;
+        if (auto arr = me->getArray("ts_ns"))
+          for (int i = 0; i < 4 && i < static_cast<int>(arr->size()); ++i)
+            if (const auto v = (*arr)[i].getAsNumber())
+              cv2.mixTS[i] = *v;
+        if (const auto v = me->getNumber("kappa"))
+          cv2.mixKappa = *v;
+        cv2.mixEnvelopeEnabled = true;
+      }
+      if (const auto *te = v2->getObject("tiny_store_excess")) {
+        if (const auto v = te->getNumber("per_store_ns"))
+          cv2.tinyStoreExcessNs = *v;
+        if (const auto v = te->getNumber("capacity2_min_bytes"))
+          cv2.tinyStoreCapacity2Bytes = *v;
+        cv2.tinyStoreExcessEnabled = true;
+      }
+      if (const auto *se = v2->getObject("loop_envelope_line_simt")) {
+        if (const auto v = se->getNumber("l2_bytes"))
+          cv2.simtLineL2Bytes = *v;
+        const std::pair<const char *, double *> tables[] = {
+            {"load_line16_l2", cv2.simtLoadLine16L2},
+            {"load_line16_dram", cv2.simtLoadLine16Dram},
+            {"load_line32_l2", cv2.simtLoadLine32L2},
+            {"load_line32_dram", cv2.simtLoadLine32Dram},
+            {"load_line64_l2", cv2.simtLoadLine64L2},
+            {"load_line64_dram", cv2.simtLoadLine64Dram},
+            {"store_line_l2", cv2.simtStoreLineL2},
+            {"store_line_dram", cv2.simtStoreLineDram}};
+        for (const auto &kv : tables) {
+          if (auto arr = se->getArray(kv.first))
+            for (int i = 0; i < 4 && i < static_cast<int>(arr->size());
+                 ++i)
+              if (const auto v = (*arr)[i].getAsNumber())
+                kv.second[i] = *v;
+        }
+        cv2.simtLineEnvelopeEnabled = true;
+      }
+      if (const auto *lf = v2->getObject("loop_envelope_fit")) {
+        cv2.loopFit.enabled =
+            reader.optionalNumber(*lf, "enabled", 0.0) != 0.0;
+        if (const auto *dts = lf->getObject("dtypes")) {
+          for (const auto &dentry : *dts) {
+            const auto *dobj = dentry.second.getAsObject();
+            if (!dobj)
+              continue;
+            contiguous_v2::ContiguousV2LoopFitDtype fd;
+            fd.cL = reader.optionalNumber(*dobj, "c_l", 0.0);
+            fd.cS = reader.optionalNumber(*dobj, "c_s", 0.0);
+            fd.additive = reader.optionalNumber(*dobj, "additive", 0.0) != 0.0;
+            for (const auto &tab : {std::pair<const char *,
+                  std::map<int64_t, double> *>("step_l", &fd.stepL),
+                  std::pair<const char *,
+                  std::map<int64_t, double> *>("step_s", &fd.stepS),
+                  std::pair<const char *,
+                  std::map<int64_t, double> *>("step_t", &fd.stepT)}) {
+              if (const auto *so = dobj->getObject(tab.first)) {
+                for (const auto &e : *so) {
+                  int64_t k = 0;
+                  if (StringRef(e.first.str()).getAsInteger(10, k))
+                    continue;
+                  if (const auto n = e.second.getAsNumber())
+                    (*tab.second)[k] = *n;
+                }
+              }
+            }
+            for (const auto &cur : {std::pair<const char *,
+                  std::map<int64_t, contiguous_v2::ContiguousV2Curve> *>(
+                  "load_curves", &fd.loadCurves),
+                  std::pair<const char *,
+                  std::map<int64_t, contiguous_v2::ContiguousV2Curve> *>(
+                  "store_curves", &fd.storeCurves)}) {
+              if (const auto *co = dobj->getObject(cur.first)) {
+                for (const auto &e : *co) {
+                  int64_t k = 0;
+                  if (StringRef(e.first.str()).getAsInteger(10, k))
+                    continue;
+                  const auto *o = e.second.getAsObject();
+                  if (!o)
+                    continue;
+                  contiguous_v2::ContiguousV2Curve c;
+                  if (const auto *ba = o->get("b"))
+                    if (auto ja = ba->getAsArray())
+                      for (const auto &x : *ja)
+                        if (const auto v = x.getAsNumber())
+                          c.b.push_back(*v);
+                  if (const auto *va = o->get("ns"))
+                    if (auto ja = va->getAsArray())
+                      for (const auto &x : *ja)
+                        if (const auto v = x.getAsNumber())
+                          c.v.push_back(*v);
+                  if (!c.b.empty() && c.b.size() == c.v.size())
+                    (*cur.second)[k] = c;
+                }
+              }
+            }
+            for (const auto &tab : {std::pair<const char *,
+                  std::map<int64_t,
+                  std::vector<std::pair<double, double>>> *>(
+                  "excess", &fd.excess),
+                  std::pair<const char *,
+                  std::map<int64_t,
+                  std::vector<std::pair<double, double>>> *>(
+                  "chain", &fd.chain)}) {
+              if (const auto *xo = dobj->getObject(tab.first)) {
+                for (const auto &e : *xo) {
+                  int64_t k = 0;
+                  if (StringRef(e.first.str()).getAsInteger(10, k))
+                    continue;
+                  auto arr = e.second.getAsArray();
+                  if (!arr)
+                    continue;
+                  std::vector<std::pair<double, double>> pts;
+                  for (const auto &p : *arr) {
+                    auto pa = p.getAsArray();
+                    if (!pa || pa->size() < 2)
+                      continue;
+                    const auto n0 = (*pa)[0].getAsNumber();
+                    const auto n1 = (*pa)[1].getAsNumber();
+                    if (n0 && n1)
+                      pts.emplace_back(*n0, *n1);
+                  }
+                  if (!pts.empty())
+                    (*tab.second)[k] = pts;
+                }
+              }
+            }
+            cv2.loopFit.dtypes[dentry.first.str()] = fd;
+          }
+        }
+      }
+      if (const auto *ck = v2->getObject("group_a_ct_kc")) {
+        for (const auto &entry : *ck) {
+          if (const auto v = entry.second.getAsNumber())
+            cv2.groupACtKc[entry.first.str()] = *v;
+        }
+      }
+      if (const auto *lb = v2->getObject("loop_b")) {
+        for (const auto &entry : *lb) {
+          const auto *o = entry.second.getAsObject();
+          if (!o)
+            continue;
+          contiguous_v2::ContiguousV2Loop l;
+          l.P = reader.number(*o, "P", "cv2.loop_b");
+          l.m = reader.number(*o, "m", "cv2.loop_b");
+          if (const auto qk = o->getInteger("QK"))
+            l.QK = *qk;
+          l.mHi = reader.optionalNumber(*o, "m_hi", 0.0);
+          l.piecewise = l.QK > 0;
+          cv2.loopB[cv2StripEnginePrefix(entry.first)] = l;
+        }
+      }
+      if (const auto *dt = v2->getObject("direct")) {
+        for (const auto &entry : *dt) {
+          if (const auto n = entry.second.getAsNumber())
+            cv2.directTable[entry.first.str()] = *n;
+        }
+      }
+      cv2.directFixedShare = reader.optionalNumber(
+          *v2, "direct_fixed_share", 0.3);
+      if (const auto *td = v2->getObject("tiny_direct")) {
+        for (const auto &entry : *td) {
+          if (const auto n = entry.second.getAsNumber())
+            cv2.tinyDirectTable[entry.first.str()] = *n;
+        }
+      }
+      cv2.tinyStoreChainShare = reader.optionalNumber(
+          *v2, "tiny_store_chain_share", 0.636);
+      if (const auto *bh = v2->getObject("boundary_hide")) {
+        cv2.boundaryHideLoadWave1 = reader.optionalNumber(
+            *bh, "c_load_wave1", 0.47);
+        cv2.boundaryHideStoreWave1 = reader.optionalNumber(
+            *bh, "c_store_wave1", 0.28);
+        cv2.boundaryHideLoadWave23 = reader.optionalNumber(
+            *bh, "c_load_wave23", 0.23);
+        cv2.boundaryHideStoreWave23 = reader.optionalNumber(
+            *bh, "c_store_wave23", 0.20);
+        cv2.boundaryHideLoadWave4 = reader.optionalNumber(
+            *bh, "c_load_wave4", 0.20);
+        cv2.boundaryHideStoreWave4 = reader.optionalNumber(
+            *bh, "c_store_wave4", 0.0);
+      }
+      if (const auto *sd = v2->getObject("sdirect")) {
+        for (const auto &entry : *sd) {
+          if (const auto n = entry.second.getAsNumber())
+            cv2.sdirectTable[entry.first.str()] = *n;
+        }
+      }
+      cv2.sdirectFixedOffset = reader.optionalNumber(
+          *v2, "sdirect_fixed_offset", 2400.0);
+            if (const auto *pa = v2->getObject("p_axis")) {
+        for (const auto &entry : *pa) {
+          const auto *o = entry.second.getAsObject();
+          if (!o)
+            continue;
+          std::map<int64_t, double> table;
+          llvm::SmallVector<int64_t, 16> psV;
+          llvm::SmallVector<double, 16> fsV;
+          if (const auto *ps = o->get("P"))
+            if (auto arr = ps->getAsArray())
+              for (const auto &e : *arr) {
+                if (const auto i = e.getAsInteger())
+                  psV.push_back(*i);
+              }
+          if (const auto *fs = o->get("factor"))
+            if (auto arr = fs->getAsArray())
+              for (const auto &e : *arr) {
+                if (const auto n = e.getAsNumber())
+                  fsV.push_back(*n);
+              }
+          for (size_t i = 0; i < psV.size() && i < fsV.size(); ++i)
+            table[psV[i]] = fsV[i];
+          if (!table.empty())
+            cv2.pAxis[entry.first.str()] = table;
+        }
+      }
+      cv2.bwWarmBytesPerNs = reader.optionalNumber(
+          *v2, "bw_warm_bytes_per_ns", 2400.0);
+      cv2.bwColdBytesPerNs = reader.optionalNumber(
+          *v2, "bw_cold_bytes_per_ns", 900.0);
+      if (const auto *pa = v2->getObject("p_axis")) {
+        for (const auto &entry : *pa) {
+          const auto *o = entry.second.getAsObject();
+          if (!o)
+            continue;
+          std::map<int64_t, double> table;
+          llvm::SmallVector<int64_t, 16> psV;
+          llvm::SmallVector<double, 16> fsV;
+          if (const auto *ps = o->get("P"))
+            if (auto arr = ps->getAsArray())
+              for (const auto &e : *arr) {
+                if (const auto i = e.getAsInteger())
+                  psV.push_back(*i);
+              }
+          if (const auto *fs = o->get("factor"))
+            if (auto arr = fs->getAsArray())
+              for (const auto &e : *arr) {
+                if (const auto n = e.getAsNumber())
+                  fsV.push_back(*n);
+              }
+          for (size_t i = 0; i < psV.size() && i < fsV.size(); ++i)
+            table[psV[i]] = fsV[i];
+          if (!table.empty())
+            cv2.pAxis[entry.first.str()] = table;
+        }
+      }
+      cv2.bwWarmBytesPerNs = reader.optionalNumber(
+          *v2, "bw_warm_bytes_per_ns", 2400.0);
+      cv2.bwColdBytesPerNs = reader.optionalNumber(
+          *v2, "bw_cold_bytes_per_ns", 900.0);
+if (const auto *sp = v2->getObject("s_penalty")) {
+        for (const auto &entry : *sp) {
+          if (const auto v = entry.second.getAsNumber())
+            cv2.sPenalty[entry.first.str()] = *v;
+        }
+      }
+    }
       simdProfile.loadBytesPerCycle = resolveNumberOrMeasurement(
           *memory, "vector_mte2_bytes_per_system_cycle",
           "load_throughput_measurement", "byte/system_cycle", microbench,
@@ -3294,6 +3591,215 @@ loadCandidateProfileUncached(llvm::StringRef pathRef,
             simtProfile.issueWidth * rate;
     }
     if (const auto *memory = reader.object(*simt, "memory", "simt")) {
+    if (const auto *v2 = reader.object(*memory, "contiguous_ldst_v2",
+                                       "simt.memory")) {
+      auto &cv2 = simtProfile.contiguousV2;
+      cv2.enabled = true;
+      cv2.l2CacheBytes = reader.integer(
+          *v2, "l2_cache_bytes", "simd.memory.contiguous_ldst_v2");
+      if (const auto *ga = v2->getObject("group_a")) {
+        for (const auto &entry : *ga) {
+          const auto *o = entry.second.getAsObject();
+          if (!o)
+            continue;
+          contiguous_v2::ContiguousV2Group g;
+          g.first = reader.number(*o, "first", "cv2.group_a");
+          g.marginal = reader.number(*o, "marginal", "cv2.group_a");
+          // 2026-11-17 group_a compression: Q/c_transfer may be absent -
+          // they are structural now (groupAQueues / groupACTransfer).
+          g.cTransfer = reader.optionalNumber(*o, "c_transfer", 0.0);
+          g.Q = static_cast<int64_t>(
+              reader.optionalNumber(*o, "Q", 0.0));
+          cv2.groupA[cv2StripEnginePrefix(entry.first)] = g;
+        }
+      }
+      if (const auto *te = v2->getObject("tiny_store_excess")) {
+        if (const auto v = te->getNumber("per_store_ns"))
+          cv2.tinyStoreExcessNs = *v;
+        if (const auto v = te->getNumber("capacity2_min_bytes"))
+          cv2.tinyStoreCapacity2Bytes = *v;
+        cv2.tinyStoreExcessEnabled = true;
+      }
+      if (const auto *se = v2->getObject("loop_envelope_line_simt")) {
+        if (const auto v = se->getNumber("l2_bytes"))
+          cv2.simtLineL2Bytes = *v;
+        const std::pair<const char *, double *> tables[] = {
+            {"load_line16_l2", cv2.simtLoadLine16L2},
+            {"load_line16_dram", cv2.simtLoadLine16Dram},
+            {"load_line32_l2", cv2.simtLoadLine32L2},
+            {"load_line32_dram", cv2.simtLoadLine32Dram},
+            {"load_line64_l2", cv2.simtLoadLine64L2},
+            {"load_line64_dram", cv2.simtLoadLine64Dram},
+            {"store_line_l2", cv2.simtStoreLineL2},
+            {"store_line_dram", cv2.simtStoreLineDram}};
+        for (const auto &kv : tables) {
+          if (auto arr = se->getArray(kv.first))
+            for (int i = 0; i < 4 && i < static_cast<int>(arr->size());
+                 ++i)
+              if (const auto v = (*arr)[i].getAsNumber())
+                kv.second[i] = *v;
+        }
+        cv2.simtLineEnvelopeEnabled = true;
+      }
+      if (const auto *lf = v2->getObject("loop_envelope_fit")) {
+        cv2.loopFit.enabled =
+            reader.optionalNumber(*lf, "enabled", 0.0) != 0.0;
+        if (const auto *dts = lf->getObject("dtypes")) {
+          for (const auto &dentry : *dts) {
+            const auto *dobj = dentry.second.getAsObject();
+            if (!dobj)
+              continue;
+            contiguous_v2::ContiguousV2LoopFitDtype fd;
+            fd.cL = reader.optionalNumber(*dobj, "c_l", 0.0);
+            fd.cS = reader.optionalNumber(*dobj, "c_s", 0.0);
+            fd.additive = reader.optionalNumber(*dobj, "additive", 0.0) != 0.0;
+            for (const auto &tab : {std::pair<const char *,
+                  std::map<int64_t, double> *>("step_l", &fd.stepL),
+                  std::pair<const char *,
+                  std::map<int64_t, double> *>("step_s", &fd.stepS),
+                  std::pair<const char *,
+                  std::map<int64_t, double> *>("step_t", &fd.stepT)}) {
+              if (const auto *so = dobj->getObject(tab.first)) {
+                for (const auto &e : *so) {
+                  int64_t k = 0;
+                  if (StringRef(e.first.str()).getAsInteger(10, k))
+                    continue;
+                  if (const auto n = e.second.getAsNumber())
+                    (*tab.second)[k] = *n;
+                }
+              }
+            }
+            for (const auto &cur : {std::pair<const char *,
+                  std::map<int64_t, contiguous_v2::ContiguousV2Curve> *>(
+                  "load_curves", &fd.loadCurves),
+                  std::pair<const char *,
+                  std::map<int64_t, contiguous_v2::ContiguousV2Curve> *>(
+                  "store_curves", &fd.storeCurves)}) {
+              if (const auto *co = dobj->getObject(cur.first)) {
+                for (const auto &e : *co) {
+                  int64_t k = 0;
+                  if (StringRef(e.first.str()).getAsInteger(10, k))
+                    continue;
+                  const auto *o = e.second.getAsObject();
+                  if (!o)
+                    continue;
+                  contiguous_v2::ContiguousV2Curve c;
+                  if (const auto *ba = o->get("b"))
+                    if (auto ja = ba->getAsArray())
+                      for (const auto &x : *ja)
+                        if (const auto v = x.getAsNumber())
+                          c.b.push_back(*v);
+                  if (const auto *va = o->get("ns"))
+                    if (auto ja = va->getAsArray())
+                      for (const auto &x : *ja)
+                        if (const auto v = x.getAsNumber())
+                          c.v.push_back(*v);
+                  if (!c.b.empty() && c.b.size() == c.v.size())
+                    (*cur.second)[k] = c;
+                }
+              }
+            }
+            for (const auto &tab : {std::pair<const char *,
+                  std::map<int64_t,
+                  std::vector<std::pair<double, double>>> *>(
+                  "excess", &fd.excess),
+                  std::pair<const char *,
+                  std::map<int64_t,
+                  std::vector<std::pair<double, double>>> *>(
+                  "chain", &fd.chain)}) {
+              if (const auto *xo = dobj->getObject(tab.first)) {
+                for (const auto &e : *xo) {
+                  int64_t k = 0;
+                  if (StringRef(e.first.str()).getAsInteger(10, k))
+                    continue;
+                  auto arr = e.second.getAsArray();
+                  if (!arr)
+                    continue;
+                  std::vector<std::pair<double, double>> pts;
+                  for (const auto &p : *arr) {
+                    auto pa = p.getAsArray();
+                    if (!pa || pa->size() < 2)
+                      continue;
+                    const auto n0 = (*pa)[0].getAsNumber();
+                    const auto n1 = (*pa)[1].getAsNumber();
+                    if (n0 && n1)
+                      pts.emplace_back(*n0, *n1);
+                  }
+                  if (!pts.empty())
+                    (*tab.second)[k] = pts;
+                }
+              }
+            }
+            cv2.loopFit.dtypes[dentry.first.str()] = fd;
+          }
+        }
+      }
+      if (const auto *ck = v2->getObject("group_a_ct_kc")) {
+        for (const auto &entry : *ck) {
+          if (const auto v = entry.second.getAsNumber())
+            cv2.groupACtKc[entry.first.str()] = *v;
+        }
+      }
+      if (const auto *lb = v2->getObject("loop_b")) {
+        for (const auto &entry : *lb) {
+          const auto *o = entry.second.getAsObject();
+          if (!o)
+            continue;
+          contiguous_v2::ContiguousV2Loop l;
+          l.P = reader.number(*o, "P", "cv2.loop_b");
+          l.m = reader.number(*o, "m", "cv2.loop_b");
+          if (const auto qk = o->getInteger("QK"))
+            l.QK = *qk;
+          l.mHi = reader.optionalNumber(*o, "m_hi", 0.0);
+          l.piecewise = l.QK > 0;
+          cv2.loopB[cv2StripEnginePrefix(entry.first)] = l;
+        }
+      }
+      if (const auto *dt = v2->getObject("direct")) {
+        for (const auto &entry : *dt) {
+          if (const auto n = entry.second.getAsNumber())
+            cv2.directTable[entry.first.str()] = *n;
+        }
+      }
+      cv2.directFixedShare = reader.optionalNumber(
+          *v2, "direct_fixed_share", 0.3);
+      if (const auto *td = v2->getObject("tiny_direct")) {
+        for (const auto &entry : *td) {
+          if (const auto n = entry.second.getAsNumber())
+            cv2.tinyDirectTable[entry.first.str()] = *n;
+        }
+      }
+      cv2.tinyStoreChainShare = reader.optionalNumber(
+          *v2, "tiny_store_chain_share", 0.636);
+      if (const auto *bh = v2->getObject("boundary_hide")) {
+        cv2.boundaryHideLoadWave1 = reader.optionalNumber(
+            *bh, "c_load_wave1", 0.47);
+        cv2.boundaryHideStoreWave1 = reader.optionalNumber(
+            *bh, "c_store_wave1", 0.28);
+        cv2.boundaryHideLoadWave23 = reader.optionalNumber(
+            *bh, "c_load_wave23", 0.23);
+        cv2.boundaryHideStoreWave23 = reader.optionalNumber(
+            *bh, "c_store_wave23", 0.20);
+        cv2.boundaryHideLoadWave4 = reader.optionalNumber(
+            *bh, "c_load_wave4", 0.20);
+        cv2.boundaryHideStoreWave4 = reader.optionalNumber(
+            *bh, "c_store_wave4", 0.0);
+      }
+      if (const auto *sd = v2->getObject("sdirect")) {
+        for (const auto &entry : *sd) {
+          if (const auto n = entry.second.getAsNumber())
+            cv2.sdirectTable[entry.first.str()] = *n;
+        }
+      }
+      cv2.sdirectFixedOffset = reader.optionalNumber(
+          *v2, "sdirect_fixed_offset", 2400.0);
+      if (const auto *sp = v2->getObject("s_penalty")) {
+        for (const auto &entry : *sp) {
+          if (const auto v = entry.second.getAsNumber())
+            cv2.sPenalty[entry.first.str()] = *v;
+        }
+      }
+    }
       simtProfile.loadWarpInstructionsPerCycle = resolveNumberOrMeasurement(
           *memory, "load_warp_instructions_per_system_cycle",
           "load_throughput_measurement", "warp_instruction/system_cycle",
@@ -3882,8 +4388,16 @@ static llvm::Expected<StageCostModelSummary> evaluateStageModel(
           ? 2
           : 1;
   StageCostEvaluator evaluator;
+  // The v2 P-axis needs the program count the model trusts (route transform
+  // capability first, pass option as fallback); the pass option alone stays
+  // 1 in practice and would pin pAxisFactor at its P=1 no-op.
+  const int64_t v2ProgramCount =
+      options.sourceLogicalProgramCountHint > 0
+          ? options.sourceLogicalProgramCountHint
+          : logicalProgramCountHint;
   auto costTable = evaluator.evaluate(*partition, hardwareProfile,
-                                      options.collectCalibrationEstimates);
+                                      options.collectCalibrationEstimates,
+                                      v2ProgramCount);
   if (!costTable)
     return costTable.takeError();
   costTable->logicalProgramCountHint = logicalProgramCountHint;
@@ -4361,6 +4875,65 @@ static SimdSimtCandidateScores
 completeCandidateCosts(const SimdSimtCostReport &report,
                        const CandidateProfile &profile,
                        int64_t kernelArgumentCount) {
+  // calH boundary-hiding: the launch boundary overlaps the contiguous
+  // memory stream (first-load DRAM latency covers dispatch; consecutive
+  // grid program instances on one core overlap head/tail).  Subtract a
+  // regime-constant share of the additive boundary from the candidate.
+  // Regimes: wave count ceil(programs/56) in {1, 2-3, >=4}; store-only
+  // kernels hide less (no load-latency gap to cover the launch).
+  // Purely linear - no exponents.
+  auto hideShareForPlan = [&](const StageRoutePlan &plan,
+                              int64_t fallbackPrograms) -> double {
+    // CandidateProfile does not carry the contiguousV2 tables; mirror the
+    // profile keys contiguous_ldst_v2.boundary_hide here (calibrated).
+    // DISABLED pending calI clean refit: a global hide double-counts the
+    // tiny-store chainShare and share=0.05 terms that were calibrated
+    // against the additive boundary.  Re-enable only for the gated scope
+    // (straight-line streaming-store kernels) with the calI table.
+    constexpr double kHideLoadWave1 = 0.0;
+    constexpr double kHideStoreWave1 = 0.0;
+    constexpr double kHideLoadWave23 = 0.0;
+    constexpr double kHideStoreWave23 = 0.0;
+    constexpr double kHideLoadWave4 = 0.0;
+    constexpr double kHideStoreWave4 = 0.0;
+    const int64_t programs = plan.runtimePhysicalProgramCount > 0
+                                 ? plan.runtimePhysicalProgramCount
+                                 : std::max<int64_t>(1, fallbackPrograms);
+    const int64_t waves = (programs + 55) / 56;
+    bool hasContiguousLoad = false;
+    const auto &stages = report.stageModel.stages;
+    if (!plan.legal ||
+        plan.logicalStageCycles.size() != stages.size())
+      return 0.0;
+    for (size_t idx = 0; idx < stages.size(); ++idx) {
+      if (plan.logicalStageCycles[idx] <= 0.0)
+        continue;
+      const auto &w = stages[idx].workload;
+      if ((w.loadBytes <= 0.0 && w.storeBytes <= 0.0) ||
+          w.memoryAccesses.empty())
+        continue;
+      bool allContiguous = true;
+      for (const StageMemoryAccess &access : w.memoryAccesses) {
+        const auto lc = access.layoutClass();
+        if (lc != StageMemoryAccess::LayoutClass::ContiguousShort &&
+            lc != StageMemoryAccess::LayoutClass::ContiguousWide) {
+          allContiguous = false;
+          break;
+        }
+      }
+      if (!allContiguous)
+        continue;
+      if (w.loadBytes > 0.0) {
+        hasContiguousLoad = true;
+        break;
+      }
+    }
+    if (waves <= 1)
+      return hasContiguousLoad ? kHideLoadWave1 : kHideStoreWave1;
+    if (waves <= 3)
+      return hasContiguousLoad ? kHideLoadWave23 : kHideStoreWave23;
+    return hasContiguousLoad ? kHideLoadWave4 : kHideStoreWave4;
+  };
   SimdSimtCandidateScores scores = report.candidateCosts;
   const bool routeHasGlobalLoad = hasGlobalLoad(report.stageModel);
   scores.allSimd +=
@@ -4387,6 +4960,97 @@ completeCandidateCosts(const SimdSimtCostReport &report,
           "native_indirect_chain_applied"))
     scores.allSimtOnly = report.stageModel.allSimt.diagnostic<double>(
         "native_indirect_chain_elapsed_system_cycles");
+  const int64_t fallbackPrograms =
+      report.sourceLogicalProgramCountHint > 0
+          ? report.sourceLogicalProgramCountHint
+          : report.logicalProgramCountHint;
+  const double simdBoundary =
+      scores.allSimd - report.stageModel.allSimd.totalCycles;
+  // calH multi-stream boundary hiding: straight-line kernels with >=2
+  // pure-contiguous memory stages and streaming stores (>=512B chunks)
+  // overlap the launch boundary under the memory stream at 2-3-wave
+  // launches (vector_add/calH anchors).  Linear constant, no exponents.
+  {
+    const auto &stages = report.stageModel.stages;
+    const auto &plan = report.stageModel.allSimd;
+    bool straightLine = true;
+    int64_t memStages = 0;
+    bool streamsOk = true;
+    if (plan.legal && plan.logicalStageCycles.size() == stages.size()) {
+      for (size_t idx = 0; idx < stages.size(); ++idx) {
+        if (stages[idx].features.hasLoop &&
+            stages[idx].iterationCount > 1)
+          straightLine = false;
+        // A compute stage (dot/reduction/scan/atomic) disqualifies the
+        // pure-memory-stream hide: grid_stride_dot's contiguous operand
+        // tiles masked its dot.
+        const auto &feat = stages[idx].features;
+        if (feat.hasDot || feat.hasReduction || feat.hasPrefixScan ||
+            feat.hasAtomicMemory)
+          straightLine = false;
+        const auto &w = stages[idx].workload;
+        if (w.loadBytes <= 0.0 && w.storeBytes <= 0.0)
+          continue;
+        bool allContiguous = true;
+        for (const StageMemoryAccess &access : w.memoryAccesses) {
+          const auto lc = access.layoutClass();
+          if (lc != StageMemoryAccess::LayoutClass::ContiguousShort &&
+              lc != StageMemoryAccess::LayoutClass::ContiguousWide) {
+            allContiguous = false;
+            break;
+          }
+        }
+        if (!allContiguous) {
+          straightLine = false;
+          continue;
+        }
+        ++memStages;
+        for (const StageMemoryAccess &access : w.memoryAccesses) {
+          if (access.store) {
+            const int64_t sb = access.provenContiguousElements() *
+                               (access.elementBits / 8);
+            if (sb > 0 && sb < 512)
+              streamsOk = false;
+          }
+        }
+      }
+    } else {
+      straightLine = false;
+    }
+    // Physical: AutoBlockify caps resident programs at one wave (<=56
+    // physical cores).  Launch: the grid the kernel launched with (hint).
+    const int64_t physicalProgramCount = plan.runtimePhysicalProgramCount;
+    const int64_t launchProgramCount = fallbackPrograms > 0
+                                           ? fallbackPrograms
+                                           : physicalProgramCount;
+    const int64_t launchWaves = (launchProgramCount + 55) / 56;
+    if (straightLine && streamsOk && memStages >= 2) {
+      // Waves follow the LAUNCH program count (the hint), not the
+      // clamped slot count: vector_add hint=97 -> 2 waves.
+      const int64_t waves = launchWaves;
+      if (waves >= 2 && waves <= 3) {
+        constexpr double kMultiStreamHide = 640.0;
+        const double simdBoundary2 =
+            scores.allSimd - report.stageModel.allSimd.totalCycles;
+        scores.allSimd -= std::min(std::max(0.0, simdBoundary2),
+                                   kMultiStreamHide);
+      }
+    }
+  }
+
+
+  const double simtBoundary =
+      scores.allSimtOnly - report.stageModel.allSimt.totalCycles;
+  if (simdBoundary > 0.0) {
+    const double share = hideShareForPlan(report.stageModel.allSimd,
+                                          fallbackPrograms);
+    scores.allSimd -= std::min(simdBoundary, simdBoundary * share);
+  }
+  if (simtBoundary > 0.0) {
+    const double share = hideShareForPlan(report.stageModel.allSimt,
+                                          fallbackPrograms);
+    scores.allSimtOnly -= std::min(simtBoundary, simtBoundary * share);
+  }
   return scores;
 }
 
@@ -4793,6 +5457,14 @@ llvm::json::Object SimdSimtCostReport::toJSON() const {
   result["source_logical_program_count_hint"] = sourceLogicalProgramCountHint;
   result["candidate_costs"] = candidateCosts.toJSON();
   result["candidate_elapsed_costs"] = candidateElapsedCosts.toJSON();
+  {
+    llvm::json::Object byFactor;
+    byFactor["all_simd_f1"] = candidateElapsedCosts.allSimd;
+    for (const auto &factorEntry : allSimtElapsedByFactor)
+      byFactor["all_simt_only_f" + std::to_string(factorEntry.first)] =
+          factorEntry.second;
+    result["candidate_elapsed_costs_by_factor"] = std::move(byFactor);
+  }
   result["selected_route_elapsed_prediction"] = selectedRouteElapsed.toJSON();
   result["decision_kind"] = stringifySimdSimtCandidate(decision);
   llvm::json::Array selectableCandidates;
@@ -4964,6 +5636,50 @@ estimateSimdSimtCandidatesImpl(const SimdSimtFeatureSummary &features,
         "Stage Route Model found no materializable candidate");
   report.candidateElapsedCosts =
       completeCandidateCosts(report, profile, report.kernelArgumentCount);
+  // Per-factor diagnostic elapsed (same units as candidate_elapsed_costs):
+  // each legal pure-SIMT factor plan priced with the same fixed-boundary
+  // terms the selected candidate receives.
+  {
+    const bool factorRouteHasGlobalLoad = hasGlobalLoad(report.stageModel);
+    // Kernels whose stages include a runtime loop (AutoBlockify persistent
+    // loop) do not change total work with the superblock factor: measured
+    // F2/F4 time equals F1 (guard campaign).  The straight-line factor-plan
+    // scaling only describes factor aggregation on straight-line kernels.
+    bool hasLoopStage = false;
+    for (const auto &stageCost : report.stageModel.stages)
+      if (stageCost.iterationCount > 1)
+        hasLoopStage = true;
+    double f1Elapsed = 0.0;
+    auto planElapsed = [&](const StageRoutePlan &plan) {
+      return plan.totalCycles +
+             routeFixedSystemCycles(profile, kAllSimtOnly, plan,
+                                    report.kernelArgumentCount,
+                                    factorRouteHasGlobalLoad);
+    };
+    for (const auto &factorEntry : report.stageModel.allSimtFactorPlans) {
+      double elapsed = planElapsed(factorEntry.second);
+      if (factorEntry.first == 1)
+        f1Elapsed = elapsed;
+      report.allSimtElapsedByFactor[factorEntry.first] = elapsed;
+    }
+    if (hasLoopStage && f1Elapsed > 0.0) {
+      // Total work is factor-invariant; time follows the wave count
+      // ceil(programs/f/56) - measured guard scaling (grid-224 F2 = 0.53x
+      // F1, F4 = 0.31x).  Within one wave the factor is a no-op.
+      const int64_t programs = std::max<int64_t>(
+          1, report.sourceLogicalProgramCountHint > 0
+                 ? report.sourceLogicalProgramCountHint
+                 : report.logicalProgramCountHint);
+      const double waves1 = double((programs + 55) / 56);
+      for (auto &factorEntry : report.allSimtElapsedByFactor)
+        if (factorEntry.first > 1) {
+          const double wavesF =
+              double((programs / factorEntry.first + 55) / 56);
+          factorEntry.second = f1Elapsed *
+              std::max(1.0 / waves1, wavesF / waves1);
+        }
+    }
+  }
   report.decision =
       chooseBest(report.candidateElapsedCosts, report.allSimdCandidateLegal,
                  report.allSimtOnlyCandidateLegal, report.mixedCandidateLegal);
