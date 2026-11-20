@@ -1,0 +1,32 @@
+module attributes {hacc.target = #hacc.target<"Ascend950PR_9579">} {
+  tt.func public @indirect_index_div_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg4: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg5: !tt.ptr<i64> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %cst = arith.constant dense<2> : tensor<8xi64>
+    %0 = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32>
+    %1 = tt.splat %arg2 : !tt.ptr<i64> -> tensor<8x!tt.ptr<i64>>
+    %2 = tt.addptr %1, %0 : tensor<8x!tt.ptr<i64>>, tensor<8xi32>
+    %3 = tt.load %2 : tensor<8x!tt.ptr<i64>>
+    %4 = tt.splat %arg4 : !tt.ptr<i64> -> tensor<8x!tt.ptr<i64>>
+    %5 = tt.addptr %4, %0 : tensor<8x!tt.ptr<i64>>, tensor<8xi32>
+    %6 = tt.load %5 : tensor<8x!tt.ptr<i64>>
+    %7 = tt.splat %arg5 : !tt.ptr<i64> -> tensor<8x!tt.ptr<i64>>
+    %8 = tt.addptr %7, %0 : tensor<8x!tt.ptr<i64>>, tensor<8xi32>
+    %9 = tt.load %8 : tensor<8x!tt.ptr<i64>>
+    %10 = arith.sitofp %9 : tensor<8xi64> to tensor<8xf32>
+    %11 = arith.sitofp %6 : tensor<8xi64> to tensor<8xf32>
+    %12 = arith.divf %10, %11 : tensor<8xf32>
+    %13 = arith.fptosi %12 : tensor<8xf32> to tensor<8xi64>
+    %14 = arith.muli %13, %cst : tensor<8xi64>
+    %15 = arith.addi %3, %14 : tensor<8xi64>
+    %16 = tt.splat %arg3 : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
+    %17 = tt.addptr %16, %0 : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
+    %18 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
+    %19 = tt.addptr %18, %15 : tensor<8x!tt.ptr<f32>>, tensor<8xi64>
+    %20 = tt.load %19 : tensor<8x!tt.ptr<f32>>
+    %21 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
+    %22 = tt.addptr %21, %0 : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
+    %23 = tt.load %22 : tensor<8x!tt.ptr<f32>>
+    %24 = arith.addf %20, %23 : tensor<8xf32>
+    tt.store %17, %24 : tensor<8x!tt.ptr<f32>>
+    tt.return
+  }
+}

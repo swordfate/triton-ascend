@@ -1,0 +1,25 @@
+module attributes {hacc.target = #hacc.target<"Ascend950PR_9579">} {
+  tt.func public @conditional_scalar_load_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %cst = arith.constant dense<0.000000e+00> : tensor<32xf32>
+    %cst_0 = arith.constant dense<32> : tensor<32xi32>
+    %cst_1 = arith.constant dense<2> : tensor<32xi32>
+    %c0_i32 = arith.constant 0 : i32
+    %0 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
+    %1 = tt.get_program_id x : i32
+    %2 = arith.cmpi eq, %1, %c0_i32 : i32
+    %3 = scf.if %2 -> (tensor<32xi32>) {
+      scf.yield %0 : tensor<32xi32>
+    } else {
+      %10 = arith.muli %0, %cst_1 : tensor<32xi32>
+      scf.yield %10 : tensor<32xi32>
+    }
+    %4 = arith.cmpi slt, %3, %cst_0 : tensor<32xi32>
+    %5 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<32x!tt.ptr<f32>>
+    %6 = tt.addptr %5, %3 : tensor<32x!tt.ptr<f32>>, tensor<32xi32>
+    %7 = tt.load %6, %4, %cst : tensor<32x!tt.ptr<f32>>
+    %8 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<32x!tt.ptr<f32>>
+    %9 = tt.addptr %8, %0 : tensor<32x!tt.ptr<f32>>, tensor<32xi32>
+    tt.store %9, %7 : tensor<32x!tt.ptr<f32>>
+    tt.return
+  }
+}

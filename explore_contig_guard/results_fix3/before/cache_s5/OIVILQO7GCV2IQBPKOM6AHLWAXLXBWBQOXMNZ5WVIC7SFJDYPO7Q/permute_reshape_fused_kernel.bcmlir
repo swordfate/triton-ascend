@@ -1,0 +1,48 @@
+module attributes {hacc.target = #hacc.target<"Ascend950PR_9579">, ssbuffer.insertionOptimization, ta.ttir_layout_merge.applied} {
+  func.func @permute_reshape_fused_kernel(%arg0: memref<?xi8>, %arg1: memref<?xi8>, %arg2: memref<?xf32> {tt.divisibility = 16 : i32, tt.tensor_kind = 0 : i32}, %arg3: memref<?xf32> {tt.divisibility = 16 : i32, tt.tensor_kind = 0 : i32}, %arg4: memref<?xf32> {tt.divisibility = 16 : i32, tt.tensor_kind = 0 : i32}, %arg5: memref<?xf32> {tt.divisibility = 16 : i32, tt.tensor_kind = 1 : i32}, %arg6: i32, %arg7: i32, %arg8: i32, %arg9: i32, %arg10: i32, %arg11: i32) attributes {SyncBlockLockArgIdx = 0 : i64, WorkspaceArgIdx = 1 : i64, global_kernel = "local", mix_mode = "aiv", parallel_mode = "simd"} {
+    %c96 = arith.constant 96 : index
+    %c8 = arith.constant 8 : index
+    %c128_i32 = arith.constant 128 : i32
+    %c64_i32 = arith.constant 64 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %c32768_i32 = arith.constant 32768 : i32
+    %c0_i32 = arith.constant 0 : i32
+    %c2_i32 = arith.constant 2 : i32
+    %c1_i32 = arith.constant 1 : i32
+    %c12_i32 = arith.constant 12 : i32
+    %0 = arith.muli %arg9, %c128_i32 : i32
+    scf.for %arg12 = %c0_i32 to %c2_i32 step %c1_i32  : i32 {
+      %1 = arith.muli %arg12, %c64_i32 : i32
+      %2 = arith.addi %0, %1 : i32
+      scf.for %arg13 = %c0_i32 to %c12_i32 step %c1_i32  : i32 {
+        %3 = arith.muli %arg13, %c32768_i32 : i32
+        %4 = arith.index_cast %3 : i32 to index
+        %5 = arith.index_cast %2 : i32 to index
+        %6 = arith.muli %5, %c8 : index
+        %7 = arith.addi %4, %6 : index
+        %reinterpret_cast = memref.reinterpret_cast %arg2 to offset: [%7], sizes: [64, 8], strides: [8, 1] : memref<?xf32> to memref<64x8xf32, strided<[8, 1], offset: ?>>
+        %alloc = memref.alloc() : memref<64x8xf32>
+        memref.copy %reinterpret_cast, %alloc : memref<64x8xf32, strided<[8, 1], offset: ?>> to memref<64x8xf32>
+        %8 = bufferization.to_tensor %alloc restrict writable : memref<64x8xf32>
+        %reinterpret_cast_0 = memref.reinterpret_cast %arg3 to offset: [%7], sizes: [64, 8], strides: [8, 1] : memref<?xf32> to memref<64x8xf32, strided<[8, 1], offset: ?>>
+        %alloc_1 = memref.alloc() : memref<64x8xf32>
+        memref.copy %reinterpret_cast_0, %alloc_1 : memref<64x8xf32, strided<[8, 1], offset: ?>> to memref<64x8xf32>
+        %9 = bufferization.to_tensor %alloc_1 restrict writable : memref<64x8xf32>
+        %10 = arith.muli %arg13, %c8_i32 : i32
+        %11 = arith.index_cast %10 : i32 to index
+        %12 = arith.muli %5, %c96 : index
+        %13 = arith.addi %11, %12 : index
+        %reinterpret_cast_2 = memref.reinterpret_cast %arg4 to offset: [%13], sizes: [64, 8], strides: [96, 1] : memref<?xf32> to memref<64x8xf32, strided<[96, 1], offset: ?>>
+        %alloc_3 = memref.alloc() : memref<64x8xf32>
+        memref.copy %reinterpret_cast_2, %alloc_3 : memref<64x8xf32, strided<[96, 1], offset: ?>> to memref<64x8xf32>
+        %14 = bufferization.to_tensor %alloc_3 restrict writable : memref<64x8xf32>
+        %reinterpret_cast_4 = memref.reinterpret_cast %arg5 to offset: [%13], sizes: [64, 8], strides: [96, 1] : memref<?xf32> to memref<64x8xf32, strided<[96, 1], offset: ?>>
+        %15 = arith.addf %8, %9 : tensor<64x8xf32>
+        %16 = arith.addf %15, %14 : tensor<64x8xf32>
+        bufferization.materialize_in_destination %16 in writable %reinterpret_cast_4 : (tensor<64x8xf32>, memref<64x8xf32, strided<[96, 1], offset: ?>>) -> ()
+      }
+    }
+    return
+  }
+}
+

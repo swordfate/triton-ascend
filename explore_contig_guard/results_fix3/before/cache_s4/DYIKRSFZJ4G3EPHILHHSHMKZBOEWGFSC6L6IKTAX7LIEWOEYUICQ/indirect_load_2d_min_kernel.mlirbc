@@ -1,0 +1,29 @@
+module attributes {hacc.target = #hacc.target<"Ascend950PR_9579">} {
+  tt.func public @indirect_load_2d_min_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg3: i32 {ascend.costmodel.runtime_value = 16 : i64, tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %cst = arith.constant dense<8> : tensor<4x1xi32>
+    %0 = tt.make_range {end = 4 : i32, start = 0 : i32} : tensor<4xi32>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<4xi32> -> tensor<4x1xi32>
+    %2 = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32>
+    %3 = tt.expand_dims %2 {axis = 0 : i32} : tensor<8xi32> -> tensor<1x8xi32>
+    %4 = arith.muli %1, %cst : tensor<4x1xi32>
+    %5 = tt.splat %arg1 : !tt.ptr<i64> -> tensor<4x1x!tt.ptr<i64>>
+    %6 = tt.addptr %5, %4 : tensor<4x1x!tt.ptr<i64>>, tensor<4x1xi32>
+    %7 = tt.broadcast %6 : tensor<4x1x!tt.ptr<i64>> -> tensor<4x8x!tt.ptr<i64>>
+    %8 = tt.broadcast %3 : tensor<1x8xi32> -> tensor<4x8xi32>
+    %9 = tt.addptr %7, %8 : tensor<4x8x!tt.ptr<i64>>, tensor<4x8xi32>
+    %10 = tt.load %9 : tensor<4x8x!tt.ptr<i64>>
+    %11 = tt.splat %arg2 : !tt.ptr<f32> -> tensor<4x1x!tt.ptr<f32>>
+    %12 = tt.addptr %11, %4 : tensor<4x1x!tt.ptr<f32>>, tensor<4x1xi32>
+    %13 = tt.broadcast %12 : tensor<4x1x!tt.ptr<f32>> -> tensor<4x8x!tt.ptr<f32>>
+    %14 = tt.addptr %13, %8 : tensor<4x8x!tt.ptr<f32>>, tensor<4x8xi32>
+    %15 = tt.splat %arg3 : i32 -> tensor<4x1xi32>
+    %16 = arith.muli %1, %15 : tensor<4x1xi32>
+    %17 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<4x1x!tt.ptr<f32>>
+    %18 = tt.addptr %17, %16 : tensor<4x1x!tt.ptr<f32>>, tensor<4x1xi32>
+    %19 = tt.broadcast %18 : tensor<4x1x!tt.ptr<f32>> -> tensor<4x8x!tt.ptr<f32>>
+    %20 = tt.addptr %19, %10 : tensor<4x8x!tt.ptr<f32>>, tensor<4x8xi64>
+    %21 = tt.load %20 : tensor<4x8x!tt.ptr<f32>>
+    tt.store %14, %21 : tensor<4x8x!tt.ptr<f32>>
+    tt.return
+  }
+}

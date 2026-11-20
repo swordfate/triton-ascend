@@ -1,0 +1,40 @@
+module attributes {hacc.target = #hacc.target<"Ascend950PR_9579">} {
+  tt.func public @discrete_mask_4way_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %cst = arith.constant dense<0.000000e+00> : tensor<8x8xf16>
+    %cst_0 = arith.constant dense<1.000000e+00> : tensor<8x8xf16>
+    %cst_1 = arith.constant dense<8> : tensor<1x8xi32>
+    %cst_2 = arith.constant dense<8> : tensor<8x1xi32>
+    %cst_3 = arith.constant dense<2> : tensor<8xi32>
+    %cst_4 = arith.constant dense<6> : tensor<1x8xi32>
+    %cst_5 = arith.constant dense<6> : tensor<8x1xi32>
+    %0 = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32>
+    %1 = tt.expand_dims %0 {axis = 1 : i32} : tensor<8xi32> -> tensor<8x1xi32>
+    %2 = arith.cmpi slt, %1, %cst_5 : tensor<8x1xi32>
+    %3 = tt.expand_dims %0 {axis = 0 : i32} : tensor<8xi32> -> tensor<1x8xi32>
+    %4 = arith.cmpi slt, %3, %cst_4 : tensor<1x8xi32>
+    %5 = tt.broadcast %2 : tensor<8x1xi1> -> tensor<8x8xi1>
+    %6 = tt.broadcast %4 : tensor<1x8xi1> -> tensor<8x8xi1>
+    %7 = arith.andi %5, %6 : tensor<8x8xi1>
+    %8 = arith.muli %0, %cst_3 : tensor<8xi32>
+    %9 = tt.expand_dims %8 {axis = 1 : i32} : tensor<8xi32> -> tensor<8x1xi32>
+    %10 = arith.cmpi slt, %9, %cst_2 : tensor<8x1xi32>
+    %11 = tt.broadcast %10 : tensor<8x1xi1> -> tensor<8x8xi1>
+    %12 = arith.andi %7, %11 : tensor<8x8xi1>
+    %13 = tt.expand_dims %8 {axis = 0 : i32} : tensor<8xi32> -> tensor<1x8xi32>
+    %14 = arith.cmpi slt, %13, %cst_1 : tensor<1x8xi32>
+    %15 = tt.broadcast %14 : tensor<1x8xi1> -> tensor<8x8xi1>
+    %16 = arith.andi %12, %15 : tensor<8x8xi1>
+    %17 = arith.muli %1, %cst_2 : tensor<8x1xi32>
+    %18 = tt.broadcast %17 : tensor<8x1xi32> -> tensor<8x8xi32>
+    %19 = tt.broadcast %3 : tensor<1x8xi32> -> tensor<8x8xi32>
+    %20 = arith.addi %18, %19 : tensor<8x8xi32>
+    %21 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<8x8x!tt.ptr<f16>>
+    %22 = tt.addptr %21, %20 : tensor<8x8x!tt.ptr<f16>>, tensor<8x8xi32>
+    %23 = tt.load %22, %16, %cst : tensor<8x8x!tt.ptr<f16>>
+    %24 = tt.splat %arg1 : !tt.ptr<f16> -> tensor<8x8x!tt.ptr<f16>>
+    %25 = tt.addptr %24, %20 : tensor<8x8x!tt.ptr<f16>>, tensor<8x8xi32>
+    %26 = arith.addf %23, %cst_0 : tensor<8x8xf16>
+    tt.store %25, %26, %16 : tensor<8x8x!tt.ptr<f16>>
+    tt.return
+  }
+}

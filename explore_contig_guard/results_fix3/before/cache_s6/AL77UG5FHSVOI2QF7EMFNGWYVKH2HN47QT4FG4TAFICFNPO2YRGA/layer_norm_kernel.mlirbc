@@ -1,0 +1,59 @@
+module attributes {hacc.target = #hacc.target<"Ascend950PR_9579">} {
+  tt.func public @layer_norm_kernel(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg4: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg5: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg6: i32 {tt.divisibility = 16 : i32}, %arg7: i32 {tt.divisibility = 16 : i32}, %arg8: f32) attributes {noinline = false} {
+    %cst = arith.constant dense<0.000000e+00> : tensor<128xf16>
+    %cst_0 = arith.constant 1.000000e+00 : f32
+    %cst_1 = arith.constant dense<0.000000e+00> : tensor<128xf32>
+    %0 = tt.get_program_id x : i32
+    %1 = arith.muli %0, %arg6 : i32
+    %2 = tt.addptr %arg0, %1 : !tt.ptr<f16>, i32
+    %3 = tt.addptr %arg1, %1 : !tt.ptr<f16>, i32
+    %4 = tt.make_range {end = 128 : i32, start = 0 : i32} : tensor<128xi32>
+    %5 = tt.splat %arg7 : i32 -> tensor<128xi32>
+    %6 = arith.cmpi slt, %4, %5 : tensor<128xi32>
+    %7 = tt.splat %2 : !tt.ptr<f16> -> tensor<128x!tt.ptr<f16>>
+    %8 = tt.addptr %7, %4 : tensor<128x!tt.ptr<f16>>, tensor<128xi32>
+    %9 = tt.load %8, %6, %cst : tensor<128x!tt.ptr<f16>>
+    %10 = arith.extf %9 : tensor<128xf16> to tensor<128xf32>
+    %11 = "tt.reduce"(%10) <{axis = 0 : i32}> ({
+    ^bb0(%arg9: f32, %arg10: f32):
+      %40 = arith.addf %arg9, %arg10 : f32
+      tt.reduce.return %40 : f32
+    }) : (tensor<128xf32>) -> f32
+    %12 = arith.sitofp %arg7 : i32 to f32
+    %13 = arith.divf %11, %12 : f32
+    %14 = tt.splat %13 : f32 -> tensor<128xf32>
+    %15 = arith.subf %10, %14 : tensor<128xf32>
+    %16 = arith.select %6, %15, %cst_1 : tensor<128xi1>, tensor<128xf32>
+    %17 = arith.mulf %16, %16 : tensor<128xf32>
+    %18 = "tt.reduce"(%17) <{axis = 0 : i32}> ({
+    ^bb0(%arg9: f32, %arg10: f32):
+      %40 = arith.addf %arg9, %arg10 : f32
+      tt.reduce.return %40 : f32
+    }) : (tensor<128xf32>) -> f32
+    %19 = arith.divf %18, %12 : f32
+    %20 = arith.addf %19, %arg8 : f32
+    %21 = math.sqrt %20 : f32
+    %22 = arith.divf %cst_0, %21 : f32
+    %23 = tt.addptr %arg4, %0 : !tt.ptr<f32>, i32
+    tt.store %23, %13 : !tt.ptr<f32>
+    %24 = tt.addptr %arg5, %0 : !tt.ptr<f32>, i32
+    tt.store %24, %22 : !tt.ptr<f32>
+    %25 = tt.splat %arg2 : !tt.ptr<f16> -> tensor<128x!tt.ptr<f16>>
+    %26 = tt.addptr %25, %4 : tensor<128x!tt.ptr<f16>>, tensor<128xi32>
+    %27 = tt.load %26, %6, %cst : tensor<128x!tt.ptr<f16>>
+    %28 = tt.splat %arg3 : !tt.ptr<f16> -> tensor<128x!tt.ptr<f16>>
+    %29 = tt.addptr %28, %4 : tensor<128x!tt.ptr<f16>>, tensor<128xi32>
+    %30 = tt.load %29, %6, %cst : tensor<128x!tt.ptr<f16>>
+    %31 = tt.splat %3 : !tt.ptr<f16> -> tensor<128x!tt.ptr<f16>>
+    %32 = tt.addptr %31, %4 : tensor<128x!tt.ptr<f16>>, tensor<128xi32>
+    %33 = tt.splat %22 : f32 -> tensor<128xf32>
+    %34 = arith.mulf %16, %33 : tensor<128xf32>
+    %35 = arith.extf %27 : tensor<128xf16> to tensor<128xf32>
+    %36 = arith.mulf %34, %35 : tensor<128xf32>
+    %37 = arith.extf %30 : tensor<128xf16> to tensor<128xf32>
+    %38 = arith.addf %36, %37 : tensor<128xf32>
+    %39 = arith.truncf %38 : tensor<128xf32> to tensor<128xf16>
+    tt.store %32, %39, %6 : tensor<128x!tt.ptr<f16>>
+    tt.return
+  }
+}

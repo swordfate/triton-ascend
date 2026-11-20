@@ -1,0 +1,39 @@
+module attributes {hacc.target = #hacc.target<"Ascend950PR_9579">} {
+  tt.func public @argmax_2d_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %cst = arith.constant dense<0xFF800000> : tensor<37x125xf32>
+    %cst_0 = arith.constant dense<125> : tensor<37x1xi32>
+    %cst_1 = arith.constant dense<125> : tensor<1x125xi32>
+    %cst_2 = arith.constant dense<37> : tensor<37x1xi32>
+    %0 = tt.make_range {end = 37 : i32, start = 0 : i32} : tensor<37xi32>
+    %1 = tt.make_range {end = 125 : i32, start = 0 : i32} : tensor<125xi32>
+    %2 = tt.expand_dims %0 {axis = 1 : i32} : tensor<37xi32> -> tensor<37x1xi32>
+    %3 = arith.cmpi slt, %2, %cst_2 : tensor<37x1xi32>
+    %4 = tt.expand_dims %1 {axis = 0 : i32} : tensor<125xi32> -> tensor<1x125xi32>
+    %5 = arith.cmpi slt, %4, %cst_1 : tensor<1x125xi32>
+    %6 = tt.broadcast %3 : tensor<37x1xi1> -> tensor<37x125xi1>
+    %7 = tt.broadcast %5 : tensor<1x125xi1> -> tensor<37x125xi1>
+    %8 = arith.andi %6, %7 : tensor<37x125xi1>
+    %9 = arith.muli %2, %cst_0 : tensor<37x1xi32>
+    %10 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<37x1x!tt.ptr<f32>>
+    %11 = tt.addptr %10, %9 : tensor<37x1x!tt.ptr<f32>>, tensor<37x1xi32>
+    %12 = tt.broadcast %11 : tensor<37x1x!tt.ptr<f32>> -> tensor<37x125x!tt.ptr<f32>>
+    %13 = tt.broadcast %4 : tensor<1x125xi32> -> tensor<37x125xi32>
+    %14 = tt.addptr %12, %13 : tensor<37x125x!tt.ptr<f32>>, tensor<37x125xi32>
+    %15 = tt.load %14, %8, %cst : tensor<37x125x!tt.ptr<f32>>
+    %16:2 = "tt.reduce"(%15, %13) <{axis = 1 : i32}> ({
+    ^bb0(%arg2: f32, %arg3: i32, %arg4: f32, %arg5: i32):
+      %19 = arith.cmpf oeq, %arg2, %arg4 : f32
+      %20 = arith.cmpi slt, %arg3, %arg5 : i32
+      %21 = arith.andi %19, %20 : i1
+      %22 = arith.cmpf ogt, %arg2, %arg4 : f32
+      %23 = arith.ori %22, %21 : i1
+      %24 = arith.select %23, %arg2, %arg4 : f32
+      %25 = arith.select %23, %arg3, %arg5 : i32
+      tt.reduce.return %24, %25 : f32, i32
+    }) : (tensor<37x125xf32>, tensor<37x125xi32>) -> (tensor<37xf32>, tensor<37xi32>)
+    %17 = tt.splat %arg1 : !tt.ptr<i32> -> tensor<37x!tt.ptr<i32>>
+    %18 = tt.addptr %17, %0 : tensor<37x!tt.ptr<i32>>, tensor<37xi32>
+    tt.store %18, %16#1 : tensor<37x!tt.ptr<i32>>
+    tt.return
+  }
+}

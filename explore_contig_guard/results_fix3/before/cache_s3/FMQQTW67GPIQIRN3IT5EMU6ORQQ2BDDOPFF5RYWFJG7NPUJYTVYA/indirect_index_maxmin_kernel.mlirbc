@@ -1,0 +1,23 @@
+module attributes {hacc.target = #hacc.target<"Ascend950PR_9579">} {
+  tt.func public @indirect_index_maxmin_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<i64> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<f32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %cst = arith.constant dense<64> : tensor<8xi64>
+    %cst_0 = arith.constant dense<3> : tensor<8xi64>
+    %0 = tt.make_range {end = 8 : i32, start = 0 : i32} : tensor<8xi32>
+    %1 = tt.splat %arg2 : !tt.ptr<i64> -> tensor<8x!tt.ptr<i64>>
+    %2 = tt.addptr %1, %0 : tensor<8x!tt.ptr<i64>>, tensor<8xi32>
+    %3 = tt.load %2 : tensor<8x!tt.ptr<i64>>
+    %4 = arith.maxsi %3, %cst_0 : tensor<8xi64>
+    %5 = arith.minsi %4, %cst : tensor<8xi64>
+    %6 = tt.splat %arg3 : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
+    %7 = tt.addptr %6, %0 : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
+    %8 = tt.splat %arg0 : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
+    %9 = tt.addptr %8, %5 : tensor<8x!tt.ptr<f32>>, tensor<8xi64>
+    %10 = tt.load %9 : tensor<8x!tt.ptr<f32>>
+    %11 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<8x!tt.ptr<f32>>
+    %12 = tt.addptr %11, %0 : tensor<8x!tt.ptr<f32>>, tensor<8xi32>
+    %13 = tt.load %12 : tensor<8x!tt.ptr<f32>>
+    %14 = arith.addf %10, %13 : tensor<8xf32>
+    tt.store %7, %14 : tensor<8x!tt.ptr<f32>>
+    tt.return
+  }
+}

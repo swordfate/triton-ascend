@@ -1,0 +1,23 @@
+module attributes {hacc.target = #hacc.target<"Ascend950PR_9579">} {
+  tt.func public @atomic_address_kernel(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg3: i32 {ascend.costmodel.runtime_value = 256 : i64, tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %cst = arith.constant dense<0> : tensor<256xi32>
+    %c256_i32 = arith.constant 256 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = tt.make_range {end = 256 : i32, start = 0 : i32} : tensor<256xi32>
+    %2 = arith.muli %0, %c256_i32 : i32
+    %3 = tt.splat %2 : i32 -> tensor<256xi32>
+    %4 = arith.addi %3, %1 : tensor<256xi32>
+    %5 = tt.splat %arg3 : i32 -> tensor<256xi32>
+    %6 = arith.cmpi slt, %4, %5 : tensor<256xi32>
+    %7 = tt.splat %arg0 : !tt.ptr<i32> -> tensor<256x!tt.ptr<i32>>
+    %8 = tt.addptr %7, %4 : tensor<256x!tt.ptr<i32>>, tensor<256xi32>
+    %9 = tt.load %8, %6, %cst : tensor<256x!tt.ptr<i32>>
+    %10 = tt.splat %arg1 : !tt.ptr<i32> -> tensor<256x!tt.ptr<i32>>
+    %11 = tt.addptr %10, %4 : tensor<256x!tt.ptr<i32>>, tensor<256xi32>
+    %12 = tt.load %11, %6, %cst : tensor<256x!tt.ptr<i32>>
+    %13 = tt.splat %arg2 : !tt.ptr<i32> -> tensor<256x!tt.ptr<i32>>
+    %14 = tt.addptr %13, %12 : tensor<256x!tt.ptr<i32>>, tensor<256xi32>
+    %15 = tt.atomic_rmw add, acq_rel, gpu, %14, %9, %6 : (tensor<256x!tt.ptr<i32>>, tensor<256xi32>, tensor<256xi1>) -> tensor<256xi32>
+    tt.return
+  }
+}

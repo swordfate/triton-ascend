@@ -1,0 +1,83 @@
+module attributes {hacc.target = #hacc.target<"Ascend950PR_9579">} {
+  tt.func public @fbgemm_rowwise_quant_kernel(%arg0: !tt.ptr<f8E4M3FN> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg4: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg5: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg6: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg7: i32, %arg8: !tt.ptr<i32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %cst = arith.constant dense<4.480000e+02> : tensor<2x1024xf32>
+    %cst_0 = arith.constant dense<-4.480000e+02> : tensor<2x1024xf32>
+    %cst_1 = arith.constant dense<1.000000e+00> : tensor<2xf32>
+    %cst_2 = arith.constant dense<4.480000e+02> : tensor<2xf32>
+    %cst_3 = arith.constant dense<9.99999996E-13> : tensor<2xf32>
+    %cst_4 = arith.constant dense<0.000000e+00> : tensor<2xf32>
+    %cst_5 = arith.constant dense<1024> : tensor<2xi64>
+    %cst_6 = arith.constant dense<0.000000e+00> : tensor<2x1024xf16>
+    %cst_7 = arith.constant dense<0.000000e+00> : tensor<2xf16>
+    %cst_8 = arith.constant dense<0> : tensor<2xi32>
+    %c2_i32 = arith.constant 2 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = tt.load %arg8 evictionPolicy = evict_last : !tt.ptr<i32>
+    %2 = arith.muli %0, %c2_i32 : i32
+    %3 = tt.make_range {end = 2 : i32, start = 0 : i32} : tensor<2xi32>
+    %4 = tt.splat %2 : i32 -> tensor<2xi32>
+    %5 = arith.addi %4, %3 : tensor<2xi32>
+    %6 = tt.splat %1 : i32 -> tensor<2xi32>
+    %7 = arith.cmpi slt, %5, %6 : tensor<2xi32>
+    %8 = tt.splat %arg3 : !tt.ptr<i32> -> tensor<2x!tt.ptr<i32>>
+    %9 = tt.addptr %8, %5 : tensor<2x!tt.ptr<i32>>, tensor<2xi32>
+    %10 = tt.load %9, %7, %cst_8 : tensor<2x!tt.ptr<i32>>
+    %11 = tt.splat %arg4 : !tt.ptr<i32> -> tensor<2x!tt.ptr<i32>>
+    %12 = tt.addptr %11, %5 : tensor<2x!tt.ptr<i32>>, tensor<2xi32>
+    %13 = tt.load %12, %7, %cst_8 : tensor<2x!tt.ptr<i32>>
+    %14 = tt.splat %arg7 : i32 -> tensor<2xi32>
+    %15 = arith.muli %10, %14 : tensor<2xi32>
+    %16 = tt.splat %arg5 : !tt.ptr<f16> -> tensor<2x!tt.ptr<f16>>
+    %17 = tt.addptr %16, %15 : tensor<2x!tt.ptr<f16>>, tensor<2xi32>
+    %18 = tt.addptr %17, %13 : tensor<2x!tt.ptr<f16>>, tensor<2xi32>
+    %19 = tt.load %18, %7, %cst_7 : tensor<2x!tt.ptr<f16>>
+    %20 = arith.extf %19 : tensor<2xf16> to tensor<2xf32>
+    %21 = tt.make_range {end = 1024 : i32, start = 0 : i32} : tensor<1024xi32>
+    %22 = tt.expand_dims %21 {axis = 0 : i32} : tensor<1024xi32> -> tensor<1x1024xi32>
+    %23 = tt.broadcast %22 : tensor<1x1024xi32> -> tensor<2x1024xi32>
+    %24 = arith.extsi %10 : tensor<2xi32> to tensor<2xi64>
+    %25 = arith.muli %24, %cst_5 : tensor<2xi64>
+    %26 = tt.splat %arg2 : !tt.ptr<f16> -> tensor<2x!tt.ptr<f16>>
+    %27 = tt.addptr %26, %25 : tensor<2x!tt.ptr<f16>>, tensor<2xi64>
+    %28 = tt.expand_dims %27 {axis = 1 : i32} : tensor<2x!tt.ptr<f16>> -> tensor<2x1x!tt.ptr<f16>>
+    %29 = tt.broadcast %28 : tensor<2x1x!tt.ptr<f16>> -> tensor<2x1024x!tt.ptr<f16>>
+    %30 = tt.addptr %29, %23 : tensor<2x1024x!tt.ptr<f16>>, tensor<2x1024xi32>
+    %31 = tt.expand_dims %7 {axis = 1 : i32} : tensor<2xi1> -> tensor<2x1xi1>
+    %32 = tt.broadcast %31 : tensor<2x1xi1> -> tensor<2x1024xi1>
+    %33 = tt.load %30, %32, %cst_6 evictionPolicy = evict_last : tensor<2x1024x!tt.ptr<f16>>
+    %34 = arith.extf %33 : tensor<2x1024xf16> to tensor<2x1024xf32>
+    %35 = tt.expand_dims %20 {axis = 1 : i32} : tensor<2xf32> -> tensor<2x1xf32>
+    %36 = tt.broadcast %35 : tensor<2x1xf32> -> tensor<2x1024xf32>
+    %37 = arith.mulf %34, %36 : tensor<2x1024xf32>
+    %38 = math.absf %37 : tensor<2x1024xf32>
+    %39 = "tt.reduce"(%38) <{axis = 1 : i32}> ({
+    ^bb0(%arg9: f32, %arg10: f32):
+      %61 = arith.maxnumf %arg9, %arg10 : f32
+      tt.reduce.return %61 : f32
+    }) : (tensor<2x1024xf32>) -> tensor<2xf32>
+    %40 = arith.maxnumf %39, %cst_4 : tensor<2xf32>
+    %41 = arith.maxnumf %40, %cst_3 : tensor<2xf32>
+    %42 = arith.divf %cst_2, %41 : tensor<2xf32>
+    %43 = tt.splat %arg1 : !tt.ptr<f32> -> tensor<2x!tt.ptr<f32>>
+    %44 = tt.addptr %43, %5 : tensor<2x!tt.ptr<f32>>, tensor<2xi32>
+    %45 = arith.divf %cst_1, %42 : tensor<2xf32>
+    tt.store %44, %45, %7 : tensor<2x!tt.ptr<f32>>
+    %46 = arith.extsi %5 : tensor<2xi32> to tensor<2xi64>
+    %47 = arith.muli %46, %cst_5 : tensor<2xi64>
+    %48 = tt.splat %arg0 : !tt.ptr<f8E4M3FN> -> tensor<2x!tt.ptr<f8E4M3FN>>
+    %49 = tt.addptr %48, %47 : tensor<2x!tt.ptr<f8E4M3FN>>, tensor<2xi64>
+    %50 = tt.expand_dims %49 {axis = 1 : i32} : tensor<2x!tt.ptr<f8E4M3FN>> -> tensor<2x1x!tt.ptr<f8E4M3FN>>
+    %51 = tt.broadcast %50 : tensor<2x1x!tt.ptr<f8E4M3FN>> -> tensor<2x1024x!tt.ptr<f8E4M3FN>>
+    %52 = tt.addptr %51, %23 : tensor<2x1024x!tt.ptr<f8E4M3FN>>, tensor<2x1024xi32>
+    %53 = tt.load %30, %32, %cst_6 evictionPolicy = evict_first : tensor<2x1024x!tt.ptr<f16>>
+    %54 = arith.extf %53 : tensor<2x1024xf16> to tensor<2x1024xf32>
+    %55 = arith.mulf %54, %36 : tensor<2x1024xf32>
+    %56 = tt.expand_dims %42 {axis = 1 : i32} : tensor<2xf32> -> tensor<2x1xf32>
+    %57 = tt.broadcast %56 : tensor<2x1xf32> -> tensor<2x1024xf32>
+    %58 = arith.mulf %55, %57 : tensor<2x1024xf32>
+    %59 = tt.clampf %58, %cst_0, %cst, propagateNan = none : tensor<2x1024xf32>
+    %60 = tt.fp_to_fp %59, rounding = rtne : tensor<2x1024xf32> -> tensor<2x1024xf8E4M3FN>
+    tt.store %52, %60, %32 cacheModifier = cg : tensor<2x1024x!tt.ptr<f8E4M3FN>>
+    tt.return
+  }
+}

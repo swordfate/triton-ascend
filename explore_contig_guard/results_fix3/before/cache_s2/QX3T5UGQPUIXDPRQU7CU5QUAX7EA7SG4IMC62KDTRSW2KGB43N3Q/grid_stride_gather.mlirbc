@@ -1,0 +1,36 @@
+module attributes {hacc.target = #hacc.target<"Ascend950PR_9579">} {
+  tt.func public @grid_stride_gather(%arg0: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg2: !tt.ptr<f16> {tt.divisibility = 16 : i32}, %arg3: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %cst = arith.constant dense<16> : tensor<16x1xi32>
+    %cst_0 = arith.constant dense<256> : tensor<16x1xi32>
+    %c16_i32 = arith.constant 16 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = tt.get_num_programs x : i32
+    %2 = tt.make_range {end = 16 : i32, start = 0 : i32} : tensor<16xi32>
+    %3 = tt.splat %arg1 : !tt.ptr<i32> -> tensor<16x!tt.ptr<i32>>
+    %4 = tt.addptr %3, %2 : tensor<16x!tt.ptr<i32>>, tensor<16xi32>
+    %5 = tt.load %4 : tensor<16x!tt.ptr<i32>>
+    %6 = tt.splat %arg0 : !tt.ptr<f16> -> tensor<16x1x!tt.ptr<f16>>
+    %7 = tt.expand_dims %5 {axis = 0 : i32} : tensor<16xi32> -> tensor<1x16xi32>
+    %8 = tt.broadcast %7 : tensor<1x16xi32> -> tensor<16x16xi32>
+    %9 = tt.splat %arg2 : !tt.ptr<f16> -> tensor<16x1x!tt.ptr<f16>>
+    %10 = tt.expand_dims %2 {axis = 0 : i32} : tensor<16xi32> -> tensor<1x16xi32>
+    %11 = tt.broadcast %10 : tensor<1x16xi32> -> tensor<16x16xi32>
+    scf.for %arg4 = %0 to %arg3 step %1  : i32 {
+      %12 = arith.muli %arg4, %c16_i32 : i32
+      %13 = tt.splat %12 : i32 -> tensor<16xi32>
+      %14 = arith.addi %13, %2 : tensor<16xi32>
+      %15 = tt.expand_dims %14 {axis = 1 : i32} : tensor<16xi32> -> tensor<16x1xi32>
+      %16 = arith.muli %15, %cst_0 : tensor<16x1xi32>
+      %17 = tt.addptr %6, %16 : tensor<16x1x!tt.ptr<f16>>, tensor<16x1xi32>
+      %18 = tt.broadcast %17 : tensor<16x1x!tt.ptr<f16>> -> tensor<16x16x!tt.ptr<f16>>
+      %19 = tt.addptr %18, %8 : tensor<16x16x!tt.ptr<f16>>, tensor<16x16xi32>
+      %20 = tt.load %19 : tensor<16x16x!tt.ptr<f16>>
+      %21 = arith.muli %15, %cst : tensor<16x1xi32>
+      %22 = tt.addptr %9, %21 : tensor<16x1x!tt.ptr<f16>>, tensor<16x1xi32>
+      %23 = tt.broadcast %22 : tensor<16x1x!tt.ptr<f16>> -> tensor<16x16x!tt.ptr<f16>>
+      %24 = tt.addptr %23, %11 : tensor<16x16x!tt.ptr<f16>>, tensor<16x16xi32>
+      tt.store %24, %20 : tensor<16x16x!tt.ptr<f16>>
+    }
+    tt.return
+  }
+}

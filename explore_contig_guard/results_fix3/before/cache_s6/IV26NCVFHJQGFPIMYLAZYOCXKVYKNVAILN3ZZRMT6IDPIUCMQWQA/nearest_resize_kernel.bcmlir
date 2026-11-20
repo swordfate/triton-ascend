@@ -1,0 +1,46 @@
+module attributes {hacc.target = #hacc.target<"Ascend950PR_9579">} {
+  tt.func public @nearest_resize_kernel(%arg0: !tt.ptr<i32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<i32> {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %cst = arith.constant dense<6.300000e+01> : tensor<32xf32>
+    %cst_0 = arith.constant dense<0.000000e+00> : tensor<32xf32>
+    %cst_1 = arith.constant dense<32> : tensor<32xi32>
+    %c64_i32 = arith.constant 64 : i32
+    %c4096_i32 = arith.constant 4096 : i32
+    %cst_2 = arith.constant dense<2.000000e+00> : tensor<32xf32>
+    %cst_3 = arith.constant 2.000000e+00 : f32
+    %c1024_i32 = arith.constant 1024 : i32
+    %c32_i32 = arith.constant 32 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = tt.get_program_id y : i32
+    %2 = tt.get_program_id z : i32
+    %3 = arith.muli %2, %c32_i32 : i32
+    %4 = tt.make_range {end = 32 : i32, start = 0 : i32} : tensor<32xi32>
+    %5 = tt.splat %3 : i32 -> tensor<32xi32>
+    %6 = arith.addi %5, %4 : tensor<32xi32>
+    %7 = arith.muli %0, %c1024_i32 : i32
+    %8 = arith.muli %1, %c32_i32 : i32
+    %9 = arith.addi %7, %8 : i32
+    %10 = tt.splat %9 : i32 -> tensor<32xi32>
+    %11 = arith.addi %10, %6 : tensor<32xi32>
+    %12 = arith.sitofp %6 : tensor<32xi32> to tensor<32xf32>
+    %13 = arith.mulf %12, %cst_2 : tensor<32xf32>
+    %14 = math.floor %13 : tensor<32xf32>
+    %15 = arith.sitofp %1 : i32 to f32
+    %16 = arith.mulf %15, %cst_3 : f32
+    %17 = arith.muli %0, %c4096_i32 : i32
+    %18 = arith.fptosi %16 : f32 to i32
+    %19 = arith.muli %18, %c64_i32 : i32
+    %20 = arith.addi %17, %19 : i32
+    %21 = tt.clampf %14, %cst_0, %cst, propagateNan = none : tensor<32xf32>
+    %22 = arith.fptosi %21 : tensor<32xf32> to tensor<32xi32>
+    %23 = tt.splat %20 : i32 -> tensor<32xi32>
+    %24 = arith.addi %23, %22 : tensor<32xi32>
+    %25 = tt.splat %arg0 : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>>
+    %26 = tt.addptr %25, %24 : tensor<32x!tt.ptr<i32>>, tensor<32xi32>
+    %27 = tt.load %26 : tensor<32x!tt.ptr<i32>>
+    %28 = arith.cmpi slt, %6, %cst_1 : tensor<32xi32>
+    %29 = tt.splat %arg1 : !tt.ptr<i32> -> tensor<32x!tt.ptr<i32>>
+    %30 = tt.addptr %29, %11 : tensor<32x!tt.ptr<i32>>, tensor<32xi32>
+    tt.store %30, %27, %28 : tensor<32x!tt.ptr<i32>>
+    tt.return
+  }
+}

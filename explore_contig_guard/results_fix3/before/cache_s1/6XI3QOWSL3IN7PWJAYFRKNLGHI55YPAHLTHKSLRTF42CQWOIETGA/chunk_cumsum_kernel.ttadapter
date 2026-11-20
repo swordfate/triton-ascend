@@ -1,0 +1,27 @@
+module attributes {hacc.target = #hacc.target<"Ascend950PR_9579">} {
+  tt.func public @chunk_cumsum_kernel(%arg0: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg1: !tt.ptr<f32> {tt.divisibility = 16 : i32}, %arg2: i32 {tt.divisibility = 16 : i32}) attributes {noinline = false} {
+    %c0_i32 = arith.constant 0 : i32
+    %c1_i64 = arith.constant 1 : i64
+    %c8_i64 = arith.constant 8 : i64
+    %c128_i32 = arith.constant 128 : i32
+    %c8_i32 = arith.constant 8 : i32
+    %0 = tt.get_program_id x : i32
+    %1 = tt.get_program_id y : i32
+    %2 = arith.muli %1, %arg2 : i32
+    %3 = arith.muli %2, %c8_i32 : i32
+    %4 = tt.addptr %arg0, %3 : !tt.ptr<f32>, i32
+    %5 = arith.muli %0, %c128_i32 : i32
+    %6 = arith.extsi %arg2 : i32 to i64
+    %7 = tt.make_tensor_ptr %4, [%6, %c8_i64], [%c8_i64, %c1_i64], [%5, %c0_i32] {order = array<i32: 1, 0>} : <tensor<128x8xf32>>
+    %8 = tt.addptr %arg1, %3 : !tt.ptr<f32>, i32
+    %9 = tt.make_tensor_ptr %8, [%6, %c8_i64], [%c8_i64, %c1_i64], [%5, %c0_i32] {order = array<i32: 1, 0>} : <tensor<128x8xf32>>
+    %10 = tt.load %7 {boundaryCheck = array<i32: 0, 1>, padding = 1 : i32} : !tt.ptr<tensor<128x8xf32>>
+    %11 = "tt.scan"(%10) <{axis = 0 : i32, reverse = false}> ({
+    ^bb0(%arg3: f32, %arg4: f32):
+      %12 = arith.addf %arg3, %arg4 : f32
+      tt.scan.return %12 : f32
+    }) : (tensor<128x8xf32>) -> tensor<128x8xf32>
+    tt.store %9, %11 {boundaryCheck = array<i32: 0, 1>} : !tt.ptr<tensor<128x8xf32>>
+    tt.return
+  }
+}
